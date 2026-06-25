@@ -90,6 +90,12 @@ class InMemorySubscriptionRepository:
     async def get_by_id(self, subscription_id: uuid.UUID) -> Subscription | None:
         return self.items.get(subscription_id)
 
+    async def get_latest_by_user(self, user_id: uuid.UUID) -> Subscription | None:
+        owned = [s for s in self.items.values() if s.user_id == user_id]
+        if not owned:
+            return None
+        return max(owned, key=lambda s: s.created_at)
+
     async def update(self, subscription: Subscription) -> Subscription:
         self.items[subscription.id] = subscription
         return subscription

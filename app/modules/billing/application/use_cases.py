@@ -430,6 +430,20 @@ class GetPrizeFund:
         return PrizeFundView(fund=fund, balance_kopecks=available)
 
 
+class GetMySubscription:
+    """Чтение текущей (последней) подписки пользователя."""
+
+    def __init__(self, *, subscriptions: SubscriptionRepository) -> None:
+        self._subscriptions = subscriptions
+
+    async def execute(self, *, user_id: uuid.UUID) -> Subscription:
+        """Вернуть последнюю подписку пользователя или доменную ошибку 404."""
+        subscription = await self._subscriptions.get_latest_by_user(user_id)
+        if subscription is None:
+            raise SubscriptionNotFoundError("У пользователя нет подписки")
+        return subscription
+
+
 # ── Выплаты призов (PRIZE, maker-checker) ─────────────────────────────────
 
 

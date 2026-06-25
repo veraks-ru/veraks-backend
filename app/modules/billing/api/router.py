@@ -14,10 +14,12 @@ from fastapi import APIRouter, Depends, status
 
 from app.modules.billing.api.dependencies import (
     ActorDep,
+    PlanPricesDep,
     get_announce_prize_fund,
     get_approve_payout,
     get_cancel_subscription,
     get_create_payout,
+    get_my_subscription,
     get_prize_fund,
     get_record_sponsor_deposit,
     get_record_subscription_payment,
@@ -29,6 +31,8 @@ from app.modules.billing.api.schemas import (
     PaymentResponse,
     PaymentWebhookRequest,
     PayoutResponse,
+    PlanResponse,
+    PlansResponse,
     PrizeFundResponse,
     RecordDepositRequest,
     StartSubscriptionRequest,
@@ -40,6 +44,7 @@ from app.modules.billing.application.use_cases import (
     ApprovePayout,
     CancelSubscription,
     CreatePayout,
+    GetMySubscription,
     GetPrizeFund,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
@@ -47,6 +52,24 @@ from app.modules.billing.application.use_cases import (
 )
 
 router = APIRouter(tags=["billing"])
+
+
+# ── Тарифы ────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/billing/plans",
+    response_model=PlansResponse,
+    summary="Тарифы подписки",
+)
+async def list_plans(plan_prices: PlanPricesDep) -> PlansResponse:
+    """Вернуть доступные тарифы и их цены (копейки) из конфигурации."""
+    return PlansResponse(
+        plans=[
+            PlanResponse(plan=plan, price_kopecks=price)
+            for plan, price in plan_prices.items()
+        ]
+    )
 
 
 # ── Подписки (операционная касса) ─────────────────────────────────────────
@@ -71,6 +94,20 @@ async def start_subscription(
         subscription=SubscriptionResponse.from_domain(subscription),
         confirmation_url=confirmation_url,
     )
+
+
+@router.get(
+    "/billing/subscriptions/me",
+    response_model=SubscriptionResponse,
+    summary="Своя подписка",
+)
+async def read_my_subscription(
+    actor: ActorDep,
+    uc: Annotated[GetMySubscription, Depends(get_my_subscription)],
+) -> SubscriptionResponse:
+    """Вернуть текущую (последнюю) подписку пользователя; 404, если нет."""
+    subscription = await uc.execute(user_id=actor.user_id)
+    return SubscriptionResponse.from_domain(subscription)
 
 
 @router.post(

@@ -54,6 +54,10 @@ class SubscriptionRepository(Protocol):
         """Подписка по идентификатору или ``None``."""
         ...
 
+    async def get_latest_by_user(self, user_id: uuid.UUID) -> Subscription | None:
+        """Последняя (по ``created_at``) подписка пользователя или ``None``."""
+        ...
+
     async def update(self, subscription: Subscription) -> Subscription:
         """Синхронизировать изменяемые поля (статус, период, отмена)."""
         ...

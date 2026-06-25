@@ -107,6 +107,16 @@ class SqlAlchemySubscriptionRepository:
         orm = await self._session.get(SubscriptionORM, subscription_id)
         return orm.to_domain() if orm else None
 
+    async def get_latest_by_user(self, user_id: uuid.UUID) -> Subscription | None:
+        stmt = (
+            select(SubscriptionORM)
+            .where(SubscriptionORM.user_id == user_id)
+            .order_by(SubscriptionORM.created_at.desc())
+            .limit(1)
+        )
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
+        return orm.to_domain() if orm else None
+
     async def update(self, subscription: Subscription) -> Subscription:
         orm = await self._session.get(SubscriptionORM, subscription.id)
         if orm is None:  # pragma: no cover — вызывается только для существующих

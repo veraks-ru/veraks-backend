@@ -22,6 +22,22 @@ from app.modules.billing.domain.entities import (
 )
 
 
+# ── Тарифы ────────────────────────────────────────────────────────────────
+
+
+class PlanResponse(BaseModel):
+    """Тариф подписки и его цена (копейки)."""
+
+    plan: SubscriptionPlan
+    price_kopecks: int
+
+
+class PlansResponse(BaseModel):
+    """Список доступных тарифов подписки."""
+
+    plans: list[PlanResponse]
+
+
 # ── Подписки ──────────────────────────────────────────────────────────────
 
 

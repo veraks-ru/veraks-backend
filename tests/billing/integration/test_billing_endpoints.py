@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.modules.billing.api.dependencies import (
     get_audit_trail,
+    get_checkout_gateway,
     get_clock,
     get_ledger_repository,
     get_payment_repository,
@@ -38,6 +39,7 @@ from app.modules.identity.domain.entities import User, UserRole
 from tests.billing.conftest import FIXED_NOW
 from tests.billing.fakes import (
     FakeAuditTrail,
+    FakeCheckoutGateway,
     FakeClock,
     InMemoryLedgerRepository,
     InMemoryPaymentRepository,
@@ -95,6 +97,7 @@ def ctx():
     app.dependency_overrides[get_prize_fund_repository] = lambda: funds
     app.dependency_overrides[get_payout_repository] = lambda: payouts
     app.dependency_overrides[get_audit_trail] = lambda: audit
+    app.dependency_overrides[get_checkout_gateway] = lambda: FakeCheckoutGateway()
     app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
 
     def _current_user() -> User:
@@ -110,6 +113,44 @@ def ctx():
         yield Ctx(client=client, ledger=ledger, funds=funds, holder=holder)
     finally:
         client.close()
+
+
+def test_list_plans_returns_priced_tariffs(ctx: Ctx) -> None:
+    """``GET /billing/plans`` отдаёт тарифы с ценами в копейках (публично)."""
+    resp = ctx.client.get("/billing/plans")
+    assert resp.status_code == 200, resp.text
+    by_plan = {p["plan"]: p["price_kopecks"] for p in resp.json()["plans"]}
+    assert by_plan["monthly"] == 49_000
+    assert by_plan["annual"] == 490_000
+
+
+def test_my_subscription_returns_latest(ctx: Ctx) -> None:
+    """``GET /billing/subscriptions/me`` возвращает свою подписку после оформления."""
+    user = _user(UserRole.USER)
+    ctx.holder["user"] = user
+
+    start = ctx.client.post(
+        "/billing/subscriptions", json={"plan": "monthly", "provider": "yookassa"}
+    )
+    assert start.status_code == 201, start.text
+
+    mine = ctx.client.get("/billing/subscriptions/me")
+    assert mine.status_code == 200, mine.text
+    assert mine.json()["plan"] == "monthly"
+    assert mine.json()["user_id"] == str(user.id)
+
+
+def test_my_subscription_404_when_absent(ctx: Ctx) -> None:
+    """Без подписки — 404 (доменная ошибка маппится централизованно)."""
+    ctx.holder["user"] = _user(UserRole.USER)
+    resp = ctx.client.get("/billing/subscriptions/me")
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+def test_my_subscription_requires_auth(ctx: Ctx) -> None:
+    """Чтение своей подписки требует аутентификации."""
+    resp = ctx.client.get("/billing/subscriptions/me")
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 def test_payment_webhook_posts_operations(ctx: Ctx) -> None:

@@ -32,6 +32,7 @@ from app.modules.billing.application.use_cases import (
     ApprovePayout,
     CancelSubscription,
     CreatePayout,
+    GetMySubscription,
     GetPrizeFund,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
@@ -169,6 +170,11 @@ def get_cancel_subscription(
 ) -> CancelSubscription:
     """Use-case отмены подписки."""
     return CancelSubscription(subscriptions=subscriptions, audit=audit, clock=clock)
+
+
+def get_my_subscription(subscriptions: SubscriptionRepoDep) -> GetMySubscription:
+    """Use-case чтения текущей подписки пользователя."""
+    return GetMySubscription(subscriptions=subscriptions)
 
 
 def get_record_subscription_payment(
