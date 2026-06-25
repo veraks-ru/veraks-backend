@@ -41,6 +41,11 @@ class Rating:
     ``formulas.season_rating_from_contributions``). ``mean_brier`` —
     средний Brier (меньше = лучше), ``calibration_error`` — ECE.
     ``rank`` проставляется при перестроении лидерборда области.
+
+    ``qualified`` имеет смысл только для сезонной области: ``True``/``False`` —
+    прошёл ли пользователь пороги квалификации к призам сезона; ``None`` —
+    для global/category (квалификация к ним неприменима) и для сезона, чьи
+    правила ещё недоступны при пересчёте.
     """
 
     user_id: uuid.UUID
@@ -51,6 +56,7 @@ class Rating:
     calibration_error: Decimal
     n_resolved: int
     rank: int = 0
+    qualified: bool | None = None
     updated_at: datetime = field(default_factory=_utcnow)
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 

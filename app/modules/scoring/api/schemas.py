@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.modules.scoring.domain.calibration import CalibrationReport
 from app.modules.scoring.domain.entities import Rating, ScopeType
+from app.modules.seasons.domain.value_objects import QualificationResult
 
 
 class RatingResponse(BaseModel):
@@ -29,6 +30,8 @@ class RatingResponse(BaseModel):
     calibration_error: Decimal
     n_resolved: int
     rank: int
+    # Только для сезонной области; ``None`` для global/category.
+    qualified: bool | None = None
 
     @classmethod
     def from_domain(cls, rating: Rating) -> RatingResponse:
@@ -42,6 +45,7 @@ class RatingResponse(BaseModel):
             calibration_error=rating.calibration_error,
             n_resolved=rating.n_resolved,
             rank=rating.rank,
+            qualified=rating.qualified,
         )
 
 
@@ -99,6 +103,37 @@ class CalibrationResponse(BaseModel):
         )
 
 
+class QualificationResponse(BaseModel):
+    """Разбор квалификации пользователя в сезоне (почему да/нет)."""
+
+    qualified: bool
+    volume_ok: bool
+    diversity_ok: bool
+    coverage_ok: bool
+    n_resolved: int
+    category_count: int
+    total_weight: float
+    n_min: int
+    c_min: int
+    w_min: float
+
+    @classmethod
+    def from_domain(cls, result: QualificationResult) -> QualificationResponse:
+        """Маппинг доменного результата квалификации в ответ."""
+        return cls(
+            qualified=result.qualified,
+            volume_ok=result.volume_ok,
+            diversity_ok=result.diversity_ok,
+            coverage_ok=result.coverage_ok,
+            n_resolved=result.n_resolved,
+            category_count=result.category_count,
+            total_weight=result.total_weight,
+            n_min=result.n_min,
+            c_min=result.c_min,
+            w_min=result.w_min,
+        )
+
+
 class ScoreEventResponse(BaseModel):
     """Результат запуска скоринга события."""
 
@@ -110,3 +145,15 @@ class RecomputeRatingsResponse(BaseModel):
     """Результат полного пересчёта рейтингов."""
 
     upserted: int
+
+
+class FinalizeSeasonResponse(BaseModel):
+    """Результат финализации сезона (ручной admin-триггер).
+
+    ``finalized=False`` — идемпотентный no-op (сезон уже был завершён).
+    """
+
+    season_id: uuid.UUID
+    finalized: bool
+    qualified_count: int
+    total_participants: int

@@ -21,12 +21,18 @@ from app.modules.scoring.adapters.scoring_gateway import (
     SqlAlchemyEventScoringGateway,
     SqlAlchemyPredictionScoreWriter,
 )
+from app.modules.scoring.adapters.season_config_gateway import (
+    SqlAlchemySeasonConfigGateway,
+)
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
+    GetSeasonLeaderboard,
+    GetSeasonQualification,
     GetUserCalibration,
     RecomputeRatings,
     ScoreEvent,
 )
+from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.domain.policies import ensure_can_recompute, ensure_can_score
 from app.modules.scoring.ports.clock import Clock
 from app.modules.scoring.ports.gateways import (
@@ -34,6 +40,12 @@ from app.modules.scoring.ports.gateways import (
     PredictionScoreWriter,
 )
 from app.modules.scoring.ports.repositories import RatingRepository
+from app.modules.scoring.ports.season_config import SeasonConfigGateway
+from app.modules.seasons.adapters.dispute_guard import AlwaysAllowsDisputeGuard
+from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
+from app.modules.seasons.domain.policies import ensure_can_transition
+from app.modules.seasons.ports.gateways import DisputeGuard
+from app.modules.seasons.ports.repositories import SeasonRepository
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -70,9 +82,33 @@ def get_rating_repository(session: SessionDep) -> RatingRepository:
     return SqlAlchemyRatingRepository(session)
 
 
+def get_season_config_gateway(session: SessionDep) -> SeasonConfigGateway:
+    """Шлюз к конфигурации сезонов (читает таблицу ``seasons`` напрямую).
+
+    TODO(scoring-integration): прямое чтение таблицы соседнего домена в
+    монолите; заменить сетевым контрактом при выделении seasons в сервис.
+    """
+    return SqlAlchemySeasonConfigGateway(session)
+
+
+def get_season_repository(session: SessionDep) -> SeasonRepository:
+    """Репозиторий сезонов (для финализации — нужна блокировка ``FOR UPDATE``)."""
+    return SqlAlchemySeasonRepository(session)
+
+
+def get_dispute_guard() -> DisputeGuard:
+    """Проверка открытых споров (заглушка fail-loud; TODO(resolutions))."""
+    return AlwaysAllowsDisputeGuard()
+
+
 GatewayDep = Annotated[EventScoringGateway, Depends(get_event_scoring_gateway)]
 ScoreWriterDep = Annotated[PredictionScoreWriter, Depends(get_prediction_score_writer)]
 RatingRepoDep = Annotated[RatingRepository, Depends(get_rating_repository)]
+SeasonConfigDep = Annotated[
+    SeasonConfigGateway, Depends(get_season_config_gateway)
+]
+SeasonRepoDep = Annotated[SeasonRepository, Depends(get_season_repository)]
+DisputeGuardDep = Annotated[DisputeGuard, Depends(get_dispute_guard)]
 
 
 # ── RBAC ──────────────────────────────────────────────────────────────────
@@ -90,6 +126,12 @@ def require_recompute_role(current_user: CurrentUser) -> UserRole:
     return current_user.role
 
 
+def require_season_transition_role(current_user: CurrentUser) -> UserRole:
+    """Гард: роль вправе финализировать сезон (только админ; разделение ролей)."""
+    ensure_can_transition(current_user.role)
+    return current_user.role
+
+
 # ── Use-cases ─────────────────────────────────────────────────────────────
 
 
@@ -101,10 +143,15 @@ def get_score_event(
 
 
 def get_recompute_ratings(
-    gateway: GatewayDep, ratings: RatingRepoDep, clock: ClockDep
+    gateway: GatewayDep,
+    ratings: RatingRepoDep,
+    clock: ClockDep,
+    season_config: SeasonConfigDep,
 ) -> RecomputeRatings:
     """Use-case полного пересчёта рейтингов."""
-    return RecomputeRatings(gateway=gateway, ratings=ratings, clock=clock)
+    return RecomputeRatings(
+        gateway=gateway, ratings=ratings, clock=clock, season_config=season_config
+    )
 
 
 def get_leaderboard_uc(ratings: RatingRepoDep) -> GetLeaderboard:
@@ -112,6 +159,45 @@ def get_leaderboard_uc(ratings: RatingRepoDep) -> GetLeaderboard:
     return GetLeaderboard(ratings=ratings)
 
 
+def get_season_leaderboard_uc(
+    ratings: RatingRepoDep, season_config: SeasonConfigDep
+) -> GetSeasonLeaderboard:
+    """Use-case сезонного лидерборда по slug (с фильтром квалификации)."""
+    return GetSeasonLeaderboard(ratings=ratings, season_config=season_config)
+
+
+def get_season_qualification_uc(
+    gateway: GatewayDep, season_config: SeasonConfigDep
+) -> GetSeasonQualification:
+    """Use-case разбора квалификации пользователя в сезоне."""
+    return GetSeasonQualification(gateway=gateway, season_config=season_config)
+
+
 def get_user_calibration_uc(gateway: GatewayDep) -> GetUserCalibration:
     """Use-case калибровки профиля."""
     return GetUserCalibration(gateway=gateway)
+
+
+def get_finalize_season(
+    season_repo: SeasonRepoDep,
+    dispute_guard: DisputeGuardDep,
+    gateway: GatewayDep,
+    ratings: RatingRepoDep,
+    clock: ClockDep,
+    season_config: SeasonConfigDep,
+) -> FinalizeSeason:
+    """Координатор финализации сезона (пересчёт + неизменяемый снапшот призёров).
+
+    Делит сессию (а значит, транзакцию) со всеми портами запроса — пересчёт,
+    запись финализации и перевод статуса коммитятся разом (атомарность, §6.2).
+    """
+    recompute = RecomputeRatings(
+        gateway=gateway, ratings=ratings, clock=clock, season_config=season_config
+    )
+    return FinalizeSeason(
+        seasons=season_repo,
+        dispute_guard=dispute_guard,
+        recompute=recompute,
+        ratings=ratings,
+        clock=clock,
+    )

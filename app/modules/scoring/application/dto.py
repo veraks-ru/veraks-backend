@@ -12,6 +12,9 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app.modules.seasons.domain.entities import SeasonStatus
+from app.modules.seasons.domain.value_objects import LeagueConfig
+
 
 @dataclass(frozen=True, slots=True)
 class EventScoringStatus:
@@ -44,3 +47,28 @@ class PredictionScore:
 
     user_id: uuid.UUID
     brier: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizeResult:
+    """Итог финализации сезона (для воркера/админ-эндпоинта).
+
+    ``finalized=False`` — идемпотентный no-op (сезон уже был завершён).
+    """
+
+    finalized: bool
+    qualified_count: int
+    total_participants: int
+
+
+@dataclass(frozen=True, slots=True)
+class SeasonConfigView:
+    """Проекция сезона из домена seasons для нужд квалификации в scoring.
+
+    Несёт статус (чтобы отличить «сезон ещё не активирован — нормально» от
+    «активен, но конфиг недоступен — ошибка инварианта», см. дизайн §4) и
+    замороженный ``LeagueConfig`` (``None`` до активации).
+    """
+
+    status: SeasonStatus
+    config: LeagueConfig | None

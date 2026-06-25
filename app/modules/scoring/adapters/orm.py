@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, Index, Integer, Numeric
+from sqlalchemy import Boolean, Enum as SAEnum, ForeignKey, Index, Integer, Numeric
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -48,6 +48,8 @@ class RatingORM(Base):
     calibration_error: Mapped[Decimal] = mapped_column(Numeric(6, 5), nullable=False)
     n_resolved: Mapped[int] = mapped_column(Integer, nullable=False)
     rank: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Только для сезонной области; NULL для global/category (см. ``Rating``).
+    qualified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
@@ -71,6 +73,7 @@ class RatingORM(Base):
             calibration_error=self.calibration_error,
             n_resolved=self.n_resolved,
             rank=self.rank,
+            qualified=self.qualified,
             updated_at=self.updated_at,
         )
 
@@ -87,5 +90,6 @@ class RatingORM(Base):
             calibration_error=rating.calibration_error,
             n_resolved=rating.n_resolved,
             rank=rating.rank,
+            qualified=rating.qualified,
             updated_at=rating.updated_at,
         )

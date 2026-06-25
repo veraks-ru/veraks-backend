@@ -35,6 +35,7 @@ from tests.scoring.fakes import (
     FakeClock,
     FakeEventScoringGateway,
     FakePredictionScoreWriter,
+    FakeSeasonConfigGateway,
     InMemoryRatingRepository,
 )
 
@@ -149,7 +150,12 @@ async def test_recompute_ratings_ranks_by_crowd_advantage() -> None:
     )
     gateway = FakeEventScoringGateway(resolved=[event])
     repo = InMemoryRatingRepository()
-    uc = RecomputeRatings(gateway=gateway, ratings=repo, clock=FakeClock(FIXED_NOW))
+    uc = RecomputeRatings(
+        gateway=gateway,
+        ratings=repo,
+        clock=FakeClock(FIXED_NOW),
+        season_config=FakeSeasonConfigGateway(),
+    )
 
     await uc.execute()
 
@@ -173,7 +179,12 @@ async def test_recompute_ratings_skips_low_predictor_events() -> None:
     event, _ = make_event(outcome=1, probabilities=[0.9, 0.7])  # 2 < 5
     gateway = FakeEventScoringGateway(resolved=[event])
     repo = InMemoryRatingRepository()
-    uc = RecomputeRatings(gateway=gateway, ratings=repo, clock=FakeClock(FIXED_NOW))
+    uc = RecomputeRatings(
+        gateway=gateway,
+        ratings=repo,
+        clock=FakeClock(FIXED_NOW),
+        season_config=FakeSeasonConfigGateway(),
+    )
 
     await uc.execute()
 
@@ -191,7 +202,12 @@ async def test_recompute_ratings_builds_season_scope() -> None:
     )
     gateway = FakeEventScoringGateway(resolved=[event])
     repo = InMemoryRatingRepository()
-    uc = RecomputeRatings(gateway=gateway, ratings=repo, clock=FakeClock(FIXED_NOW))
+    uc = RecomputeRatings(
+        gateway=gateway,
+        ratings=repo,
+        clock=FakeClock(FIXED_NOW),
+        season_config=FakeSeasonConfigGateway(),
+    )
 
     await uc.execute()
 
@@ -215,7 +231,10 @@ async def test_get_leaderboard_returns_ranked_scope() -> None:
     gateway = FakeEventScoringGateway(resolved=[event])
     repo = InMemoryRatingRepository()
     await RecomputeRatings(
-        gateway=gateway, ratings=repo, clock=FakeClock(FIXED_NOW)
+        gateway=gateway,
+        ratings=repo,
+        clock=FakeClock(FIXED_NOW),
+        season_config=FakeSeasonConfigGateway(),
     ).execute()
 
     uc = GetLeaderboard(ratings=repo)

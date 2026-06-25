@@ -14,22 +14,31 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.modules.scoring.api.dependencies import (
+    get_finalize_season,
     get_leaderboard_uc,
     get_recompute_ratings,
     get_score_event,
+    get_season_leaderboard_uc,
+    get_season_qualification_uc,
     get_user_calibration_uc,
     require_recompute_role,
     require_scoring_role,
+    require_season_transition_role,
 )
 from app.modules.scoring.api.schemas import (
     CalibrationResponse,
+    FinalizeSeasonResponse,
     LeaderboardResponse,
+    QualificationResponse,
     RatingResponse,
     RecomputeRatingsResponse,
     ScoreEventResponse,
 )
+from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
+    GetSeasonLeaderboard,
+    GetSeasonQualification,
     GetUserCalibration,
     RecomputeRatings,
     ScoreEvent,
@@ -93,23 +102,20 @@ async def category_leaderboard(
 
 
 @router.get(
-    "/leaderboards/seasons/{season_id}",
+    "/leaderboards/seasons/{slug}",
     response_model=LeaderboardResponse,
     summary="Сезонная лига",
 )
 async def season_leaderboard(
-    season_id: uuid.UUID,
-    uc: Annotated[GetLeaderboard, Depends(get_leaderboard_uc)],
+    slug: str,
+    uc: Annotated[GetSeasonLeaderboard, Depends(get_season_leaderboard_uc)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    qualified_only: Annotated[bool, Query()] = False,
 ) -> LeaderboardResponse:
-    """Топ в сезоне.
-
-    TODO(seasons-integration): принимать ``slug`` и резолвить в id через домен
-    seasons (сейчас — прямой ``season_id``).
-    """
-    ratings = await uc.execute(
-        scope_type=ScopeType.SEASON, scope_id=season_id, limit=limit, offset=offset
+    """Топ в сезоне по slug; ``qualified_only`` — только квалифицированные к призам."""
+    season_id, ratings = await uc.execute(
+        slug=slug, limit=limit, offset=offset, qualified_only=qualified_only
     )
     return LeaderboardResponse(
         scope_type=ScopeType.SEASON,
@@ -137,6 +143,21 @@ async def user_calibration(
     """
     report = await uc.execute(user_id=user_id)
     return CalibrationResponse.from_report(user_id, report)
+
+
+@router.get(
+    "/users/{user_id}/seasons/{slug}/qualification",
+    response_model=QualificationResponse,
+    summary="Квалификация пользователя в сезоне (почему да/нет)",
+)
+async def user_season_qualification(
+    user_id: uuid.UUID,
+    slug: str,
+    uc: Annotated[GetSeasonQualification, Depends(get_season_qualification_uc)],
+) -> QualificationResponse:
+    """Разбор порогов квалификации к призам сезона (объём/разнообразие/охват)."""
+    result = await uc.execute(user_id=user_id, slug=slug)
+    return QualificationResponse.from_domain(result)
 
 
 # ── Операционные триггеры (RBAC; в проде — фоновый воркер) ───────────────────
@@ -178,3 +199,31 @@ async def recompute_ratings(
     """
     upserted = await uc.execute(season_id=season_id)
     return RecomputeRatingsResponse(upserted=upserted)
+
+
+@router.post(
+    "/admin/seasons/{season_id}/finalize",
+    response_model=FinalizeSeasonResponse,
+    summary="Финализировать сезон (admin, maker-checker роль)",
+)
+async def finalize_season(
+    season_id: uuid.UUID,
+    uc: Annotated[FinalizeSeason, Depends(get_finalize_season)],
+    _role: Annotated[object, Depends(require_season_transition_role)],
+) -> FinalizeSeasonResponse:
+    """Ручной admin-триггер ``active → finished`` с пересчётом и снапшотом призёров.
+
+    Идемпотентно (повтор по завершённому сезону — no-op) и блокируется при
+    открытых спорах. Рядом с автоматическим ``season_roll`` в воркере — ручной
+    override (дизайн §6.5).
+
+    TODO(scoring-infra): в проде также дёргается воркером ``season_roll`` по
+    истечении ``ends_at`` (когда включён ``seasons_auto_finalize``).
+    """
+    result = await uc.execute(season_id=season_id)
+    return FinalizeSeasonResponse(
+        season_id=season_id,
+        finalized=result.finalized,
+        qualified_count=result.qualified_count,
+        total_participants=result.total_participants,
+    )

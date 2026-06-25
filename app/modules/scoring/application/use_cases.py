@@ -17,15 +17,19 @@
 
 from __future__ import annotations
 
+import logging
+import math
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 
-from app.modules.scoring.application.dto import PredictionScore
+from app.modules.scoring.application.dto import PredictionScore, SeasonConfigView
 from app.modules.scoring.domain.calibration import CalibrationReport, calibrate
 from app.modules.scoring.domain.constants import MIN_PREDICTORS
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.errors import (
     EventNotResolvedError,
+    RatingNotFoundError,
     ScoringTargetEventNotFoundError,
 )
 from app.modules.scoring.domain.formulas import (
@@ -41,6 +45,13 @@ from app.modules.scoring.ports.gateways import (
     PredictionScoreWriter,
 )
 from app.modules.scoring.ports.repositories import RatingRepository
+from app.modules.scoring.ports.season_config import SeasonConfigGateway
+from app.modules.seasons.domain.entities import SeasonStatus
+from app.modules.seasons.domain.errors import SeasonNotFoundError
+from app.modules.seasons.domain.qualification import evaluate_qualification
+from app.modules.seasons.domain.value_objects import QualificationResult
+
+logger = logging.getLogger(__name__)
 
 
 class ScoreEvent:
@@ -99,20 +110,32 @@ class ScoreEvent:
 
 @dataclass(slots=True)
 class _ScopeAccumulator:
-    """Накопитель метрик пользователя в одной области за пересчёт."""
+    """Накопитель метрик пользователя в одной области за пересчёт.
+
+    ``categories`` нужен только сезонной области — по нему считается число
+    категорий с достаточным числом прогнозов (порог разнообразия квалификации).
+    """
 
     weights: list[float] = field(default_factory=list)
     advantages: list[float] = field(default_factory=list)
     briers: list[float] = field(default_factory=list)
     entries: list[tuple[float, int]] = field(default_factory=list)
+    categories: list[uuid.UUID] = field(default_factory=list)
 
     def add(
-        self, weight: float, advantage: float, brier_score: float, prob: float, outcome: int
+        self,
+        weight: float,
+        advantage: float,
+        brier_score: float,
+        prob: float,
+        outcome: int,
+        category_id: uuid.UUID,
     ) -> None:
         self.weights.append(weight)
         self.advantages.append(advantage)
         self.briers.append(brier_score)
         self.entries.append((prob, outcome))
+        self.categories.append(category_id)
 
     @property
     def n(self) -> int:
@@ -120,6 +143,15 @@ class _ScopeAccumulator:
 
     def mean_brier(self) -> float:
         return sum(self.briers) / len(self.briers)
+
+    def category_count(self, m_per_category: int) -> int:
+        """Число категорий, где у пользователя ≥ ``m_per_category`` прогнозов."""
+        counts = Counter(self.categories)
+        return sum(1 for k in counts.values() if k >= m_per_category)
+
+    def total_weight(self) -> float:
+        """Суммарный вес сложности (охват) — для порога ``W_MIN``."""
+        return math.fsum(self.weights)
 
 
 class RecomputeRatings:
@@ -143,10 +175,12 @@ class RecomputeRatings:
         gateway: EventScoringGateway,
         ratings: RatingRepository,
         clock: Clock,
+        season_config: SeasonConfigGateway,
     ) -> None:
         self._gateway = gateway
         self._ratings = ratings
         self._clock = clock
+        self._season_config = season_config
 
     async def execute(self, *, season_id: uuid.UUID | None = None) -> int:
         """Полный пересчёт рейтингов; возвращает число сохранённых строк."""
@@ -160,9 +194,15 @@ class RecomputeRatings:
                 continue
             self._accumulate_event(event, acc)
 
+        season_views = await self._load_season_configs(acc)
         now = self._clock.now()
         by_scope: dict[tuple[ScopeType, uuid.UUID | None], list[Rating]] = {}
         for (scope_type, scope_id, user_id), data in acc.items():
+            qualified = (
+                self._evaluate_qualified(scope_id, season_views.get(scope_id), data)
+                if scope_type is ScopeType.SEASON and scope_id is not None
+                else None
+            )
             rating = Rating(
                 user_id=user_id,
                 scope_type=scope_type,
@@ -173,6 +213,7 @@ class RecomputeRatings:
                 ),
                 calibration_error=quantize_score(calibrate(data.entries).ece),
                 n_resolved=data.n,
+                qualified=qualified,
                 updated_at=now,
             )
             by_scope.setdefault((scope_type, scope_id), []).append(rating)
@@ -212,8 +253,71 @@ class RecomputeRatings:
                     (scope_type, scope_id, vote.user_id), _ScopeAccumulator()
                 )
                 bucket.add(
-                    weight, advantage, brier_score, vote.probability, event.outcome
+                    weight,
+                    advantage,
+                    brier_score,
+                    vote.probability,
+                    event.outcome,
+                    event.category_id,
                 )
+
+    async def _load_season_configs(
+        self,
+        acc: dict[tuple[ScopeType, uuid.UUID | None, uuid.UUID], _ScopeAccumulator],
+    ) -> dict[uuid.UUID, SeasonConfigView | None]:
+        """Подгружает конфиги всех сезонов, встретившихся в пересчёте (по одному разу)."""
+        season_ids = {
+            scope_id
+            for (scope_type, scope_id, _user) in acc
+            if scope_type is ScopeType.SEASON and scope_id is not None
+        }
+        views: dict[uuid.UUID, SeasonConfigView | None] = {}
+        for sid in season_ids:
+            views[sid] = await self._season_config.get_config(sid)
+        return views
+
+    @staticmethod
+    def _evaluate_qualified(
+        season_id: uuid.UUID | None,
+        view: SeasonConfigView | None,
+        data: _ScopeAccumulator,
+    ) -> bool | None:
+        """Считает флаг квалификации для сезонной области (или ``None``).
+
+        Различает два случая недоступного конфига (дизайн §4): сезон ещё не
+        активирован — нормальный пропуск; активный/завершённый без конфига —
+        нарушение инварианта (громкий error-лог, не тихий пропуск).
+        """
+        if view is None:
+            logger.info(
+                "Season %s not found while recomputing — qualification skipped",
+                season_id,
+            )
+            return None
+        if view.config is None:
+            if view.status is SeasonStatus.UPCOMING:
+                logger.info(
+                    "Season %s is upcoming (no frozen config yet) — "
+                    "qualification skipped",
+                    season_id,
+                )
+            else:
+                logger.error(
+                    "INVARIANT BREACH: season %s is %s but has no frozen "
+                    "LeagueConfig — qualification cannot be computed; season "
+                    "ratings stop reflecting eligibility until fixed",
+                    season_id,
+                    view.status.value,
+                )
+            return None
+        cfg = view.config
+        result = evaluate_qualification(
+            n_resolved=data.n,
+            category_count=data.category_count(cfg.m_per_category),
+            total_weight=data.total_weight(),
+            cfg=cfg,
+        )
+        return result.qualified
 
 
 class GetLeaderboard:
@@ -229,10 +333,104 @@ class GetLeaderboard:
         scope_id: uuid.UUID | None,
         limit: int = 50,
         offset: int = 0,
+        qualified_only: bool = False,
     ) -> list[Rating]:
-        """Топ области по предрасчитанному рангу."""
+        """Топ области по предрасчитанному рангу (опц. только квалифицированные)."""
         return await self._ratings.leaderboard(
-            scope_type, scope_id, limit=limit, offset=offset
+            scope_type,
+            scope_id,
+            limit=limit,
+            offset=offset,
+            qualified_only=qualified_only,
+        )
+
+
+class GetSeasonLeaderboard:
+    """Сезонный лидерборд по slug: резолвит сезон и читает готовые рейтинги.
+
+    Резолв slug→id — через ``SeasonConfigGateway`` (направление ``scoring →
+    seasons``). ``qualified_only`` оставляет только квалифицированных к призам.
+    """
+
+    def __init__(
+        self, *, ratings: RatingRepository, season_config: SeasonConfigGateway
+    ) -> None:
+        self._ratings = ratings
+        self._season_config = season_config
+
+    async def execute(
+        self,
+        *,
+        slug: str,
+        limit: int = 50,
+        offset: int = 0,
+        qualified_only: bool = False,
+    ) -> tuple[uuid.UUID, list[Rating]]:
+        """Возвращает ``(season_id, рейтинги)``; поднимает, если сезон не найден."""
+        season_id = await self._season_config.resolve_slug(slug)
+        if season_id is None:
+            raise SeasonNotFoundError(f"Сезон не найден: {slug}")
+        ratings = await self._ratings.leaderboard(
+            ScopeType.SEASON,
+            season_id,
+            limit=limit,
+            offset=offset,
+            qualified_only=qualified_only,
+        )
+        return season_id, ratings
+
+
+class GetSeasonQualification:
+    """Разбор квалификации пользователя в сезоне (для UX профиля «почему не»).
+
+    Считает на лету по разрешённым событиям сезона (это редкое профильное
+    чтение). Требует активированного сезона с замороженным ``LeagueConfig``;
+    иначе — :class:`RatingNotFoundError` (правил ещё нет / сезон не активирован).
+    """
+
+    def __init__(
+        self,
+        *,
+        gateway: EventScoringGateway,
+        season_config: SeasonConfigGateway,
+    ) -> None:
+        self._gateway = gateway
+        self._season_config = season_config
+
+    async def execute(
+        self, *, user_id: uuid.UUID, slug: str
+    ) -> QualificationResult:
+        season_id = await self._season_config.resolve_slug(slug)
+        if season_id is None:
+            raise SeasonNotFoundError(f"Сезон не найден: {slug}")
+        view = await self._season_config.get_config(season_id)
+        if view is None or view.config is None:
+            raise RatingNotFoundError(
+                "У сезона нет опубликованных правил (не активирован) — "
+                "квалификация недоступна"
+            )
+        cfg = view.config
+
+        events = await self._gateway.list_resolved_events(season_id=season_id)
+        weights: list[float] = []
+        categories: list[uuid.UUID] = []
+        for event in events:
+            if event.predictor_count < MIN_PREDICTORS:
+                continue
+            if not any(vote.user_id == user_id for vote in event.votes):
+                continue
+            weights.append(event_weight(event.probabilities(), event.outcome))
+            categories.append(event.category_id)
+
+        counts = Counter(categories)
+        category_count = sum(
+            1 for k in counts.values() if k >= cfg.m_per_category
+        )
+        return evaluate_qualification(
+            n_resolved=len(weights),
+            category_count=category_count,
+            total_weight=math.fsum(weights),
+            cfg=cfg,
         )
 
 

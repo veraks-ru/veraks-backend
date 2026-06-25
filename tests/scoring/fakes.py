@@ -12,7 +12,11 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from app.modules.scoring.application.dto import EventScoringStatus, PredictionScore
+from app.modules.scoring.application.dto import (
+    EventScoringStatus,
+    PredictionScore,
+    SeasonConfigView,
+)
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.value_objects import ResolvedEvent
 
@@ -67,6 +71,25 @@ class FakeEventScoringGateway:
         return list(self._user_entries.get(user_id, []))
 
 
+class FakeSeasonConfigGateway:
+    """Шлюз к конфигурации сезонов: резолв slug и снапшот ``LeagueConfig``."""
+
+    def __init__(
+        self,
+        *,
+        by_slug: dict[str, uuid.UUID] | None = None,
+        configs: dict[uuid.UUID, SeasonConfigView] | None = None,
+    ) -> None:
+        self._by_slug = by_slug or {}
+        self._configs = configs or {}
+
+    async def resolve_slug(self, slug: str) -> uuid.UUID | None:
+        return self._by_slug.get(slug)
+
+    async def get_config(self, season_id: uuid.UUID) -> SeasonConfigView | None:
+        return self._configs.get(season_id)
+
+
 class FakePredictionScoreWriter:
     """Собирает проставленные Brier-оценки по событиям (без БД)."""
 
@@ -103,12 +126,15 @@ class InMemoryRatingRepository:
         *,
         limit: int = 50,
         offset: int = 0,
+        qualified_only: bool = False,
     ) -> list[Rating]:
         rows = [
             r
             for r in self._by_key.values()
             if r.scope_type == scope_type and r.scope_id == scope_id
         ]
+        if qualified_only:
+            rows = [r for r in rows if r.qualified is True]
         rows.sort(key=lambda r: r.rank)
         return rows[offset : offset + limit]
 

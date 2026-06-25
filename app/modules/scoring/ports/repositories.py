@@ -29,8 +29,9 @@ class RatingRepository(Protocol):
         *,
         limit: int = 50,
         offset: int = 0,
+        qualified_only: bool = False,
     ) -> list[Rating]:
-        """Топ области по предрасчитанному ``rank`` (по возрастанию)."""
+        """Топ области по предрасчитанному ``rank``; опц. только квалифицированные."""
         ...
 
     async def get_for_user(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -37,6 +38,24 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI-зависимость: сессия на запрос с транзакцией commit/rollback."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@asynccontextmanager
+async def session_scope() -> AsyncIterator[AsyncSession]:
+    """Сессия для фоновых задач (вне request-scope) с транзакцией commit/rollback.
+
+    Одна задача воркера = одна транзакция: всё, что записано (например,
+    финальный пересчёт + неизменяемая запись финализации), коммитится разом
+    или откатывается при ошибке (атомарность, дизайн §6.2).
+    """
     factory = get_sessionmaker()
     async with factory() as session:
         try:

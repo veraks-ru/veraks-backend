@@ -38,6 +38,7 @@ class SqlAlchemyRatingRepository:
             existing.calibration_error = rating.calibration_error
             existing.n_resolved = rating.n_resolved
             existing.rank = rating.rank
+            existing.qualified = rating.qualified
             existing.updated_at = rating.updated_at
         await self._session.flush()
         return len(ratings)
@@ -49,8 +50,13 @@ class SqlAlchemyRatingRepository:
         *,
         limit: int = 50,
         offset: int = 0,
+        qualified_only: bool = False,
     ) -> list[Rating]:
-        """Топ области по предрасчитанному рангу (по возрастанию)."""
+        """Топ области по предрасчитанному рангу (по возрастанию).
+
+        ``qualified_only`` оставляет только квалифицированных участников —
+        фильтр на уровне запроса, чтобы пагинация была корректной.
+        """
         stmt = (
             select(RatingORM)
             .where(
@@ -61,6 +67,8 @@ class SqlAlchemyRatingRepository:
             .limit(limit)
             .offset(offset)
         )
+        if qualified_only:
+            stmt = stmt.where(RatingORM.qualified.is_(True))
         rows = (await self._session.execute(stmt)).scalars().all()
         return [row.to_domain() for row in rows]
 

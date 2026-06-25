@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str = "redis://localhost:6379/0"
 
+    # Авто-финализация сезонов в таймерном ``season_roll``. По умолчанию ВЫКЛ:
+    # пока проверка открытых споров — заглушка (TODO(resolutions)), нельзя
+    # автоматически закрывать сезон поверх возможных споров (дизайн §6.4/§6.5).
+    # Включать только после замены заглушки реальной проверкой.
+    seasons_auto_finalize: bool = False
+
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     esia: EsiaSettings = Field(default_factory=EsiaSettings)
 

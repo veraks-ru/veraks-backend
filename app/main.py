@@ -37,6 +37,16 @@ from app.modules.scoring.domain.errors import (
     ScoringPermissionError,
     ScoringTargetEventNotFoundError,
 )
+from app.modules.seasons.api.router import router as seasons_router
+from app.modules.seasons.domain.errors import (
+    InvalidSeasonDataError,
+    InvalidSeasonTransitionError,
+    SeasonError,
+    SeasonFinalizationBlockedError,
+    SeasonNotFoundError,
+    SeasonPermissionError,
+    SeasonSlugTakenError,
+)
 from app.modules.identity.api.router import router as identity_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
@@ -79,6 +89,13 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     RatingNotFoundError: status.HTTP_404_NOT_FOUND,
     EventNotResolvedError: status.HTTP_409_CONFLICT,
     ScoringPermissionError: status.HTTP_403_FORBIDDEN,
+    # seasons
+    SeasonNotFoundError: status.HTTP_404_NOT_FOUND,
+    SeasonSlugTakenError: status.HTTP_409_CONFLICT,
+    InvalidSeasonTransitionError: status.HTTP_409_CONFLICT,
+    SeasonFinalizationBlockedError: status.HTTP_409_CONFLICT,
+    SeasonPermissionError: status.HTTP_403_FORBIDDEN,
+    InvalidSeasonDataError: status.HTTP_400_BAD_REQUEST,
 }
 
 
@@ -134,10 +151,21 @@ def create_app() -> FastAPI:
             content={"detail": str(exc), "error": type(exc).__name__},
         )
 
+    @app.exception_handler(SeasonError)
+    async def _season_error_handler(
+        _request: Request, exc: SeasonError
+    ) -> JSONResponse:
+        """Единый маппинг доменных ошибок seasons в JSON-ответ."""
+        return JSONResponse(
+            status_code=_resolve_status(exc),
+            content={"detail": str(exc), "error": type(exc).__name__},
+        )
+
     app.include_router(identity_router)
     app.include_router(events_router)
     app.include_router(predictions_router)
     app.include_router(scoring_router)
+    app.include_router(seasons_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
