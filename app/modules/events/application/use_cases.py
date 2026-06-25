@@ -33,6 +33,26 @@ from app.modules.events.ports.repositories import (
     EventFilter,
     EventRepository,
 )
+from app.modules.identity.domain.entities import UserRole
+from app.shared.audit.domain.entities import AuditActorType
+from app.shared.audit.ports.audit_trail import AuditTrail
+
+_ACTOR_TYPE_BY_ROLE: dict[UserRole, AuditActorType] = {
+    UserRole.USER: AuditActorType.USER,
+    UserRole.EDITOR: AuditActorType.EDITOR,
+    UserRole.ARBITER: AuditActorType.ARBITER,
+    UserRole.ADMIN: AuditActorType.ADMIN,
+}
+
+
+def _actor_type(role: UserRole) -> AuditActorType:
+    """Маппит RBAC-роль в тип актора аудита."""
+    return _ACTOR_TYPE_BY_ROLE.get(role, AuditActorType.USER)
+
+
+def _status_value(event: Event) -> str:
+    """Строковое значение статуса события для снимков аудита."""
+    return event.status.value
 
 
 def _window_from_patch(patch: EventPatchInput) -> EventWindow | None:
@@ -61,11 +81,17 @@ class CreateEvent:
     """Создание черновика события редакцией."""
 
     def __init__(
-        self, *, events: EventRepository, categories: CategoryRepository, clock: Clock
+        self,
+        *,
+        events: EventRepository,
+        categories: CategoryRepository,
+        clock: Clock,
+        audit: AuditTrail,
     ) -> None:
         self._events = events
         self._categories = categories
         self._clock = clock
+        self._audit = audit
 
     async def execute(self, *, actor: Actor, data: NewEventInput) -> Event:
         """Проверяет права и категорию, валидирует окно и сохраняет черновик."""
@@ -89,18 +115,37 @@ class CreateEvent:
             season_id=data.season_id,
             now=self._clock.now(),
         )
-        return await self._events.add(event)
+        saved = await self._events.add(event)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action="event.created",
+            entity_type="event",
+            entity_id=saved.id,
+            after={
+                "title": saved.title,
+                "status": _status_value(saved),
+                "category_id": str(saved.category_id),
+            },
+        )
+        return saved
 
 
 class UpdateEvent:
     """Частичное редактирование события (до закрытия приёма)."""
 
     def __init__(
-        self, *, events: EventRepository, categories: CategoryRepository, clock: Clock
+        self,
+        *,
+        events: EventRepository,
+        categories: CategoryRepository,
+        clock: Clock,
+        audit: AuditTrail,
     ) -> None:
         self._events = events
         self._categories = categories
         self._clock = clock
+        self._audit = audit
 
     async def execute(
         self, *, actor: Actor, event_id: uuid.UUID, patch: EventPatchInput
@@ -124,7 +169,20 @@ class UpdateEvent:
             now=self._clock.now(),
         )
         if changed:
-            return await self._events.update(event)
+            saved = await self._events.update(event)
+            await self._audit.record(
+                actor_id=actor.user_id,
+                actor_type=_actor_type(actor.role),
+                action="event.updated",
+                entity_type="event",
+                entity_id=saved.id,
+                after={
+                    "title": saved.title,
+                    "category_id": str(saved.category_id),
+                    "status": _status_value(saved),
+                },
+            )
+            return saved
         return event
 
     async def _load(self, event_id: uuid.UUID) -> Event:
@@ -134,49 +192,69 @@ class UpdateEvent:
         return event
 
 
-class PublishEvent:
+class _TransitionUseCase:
+    """База для переходов статуса с аудитом ``before → after``.
+
+    Подклассы задают ``_action`` и применяют переход доменным методом в
+    ``_apply``. Запись в неизменяемый журнал — общая (диф статуса).
+    """
+
+    _action: str
+
+    def __init__(
+        self, *, events: EventRepository, clock: Clock, audit: AuditTrail
+    ) -> None:
+        self._events = events
+        self._clock = clock
+        self._audit = audit
+
+    def _apply(self, event: Event) -> None:  # pragma: no cover - переопределяется
+        raise NotImplementedError
+
+    async def execute(self, *, actor: Actor, event_id: uuid.UUID) -> Event:
+        """Проверяет права, применяет переход и пишет запись аудита."""
+        ensure_can_manage_events(actor.role)
+        event = await _require_event(self._events, event_id)
+        before_status = _status_value(event)
+        self._apply(event)
+        saved = await self._events.update(event)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action=self._action,
+            entity_type="event",
+            entity_id=saved.id,
+            before={"status": before_status},
+            after={"status": _status_value(saved)},
+        )
+        return saved
+
+
+class PublishEvent(_TransitionUseCase):
     """Переход ``draft → open`` (открытие приёма прогнозов)."""
 
-    def __init__(self, *, events: EventRepository, clock: Clock) -> None:
-        self._events = events
-        self._clock = clock
+    _action = "event.published"
 
-    async def execute(self, *, actor: Actor, event_id: uuid.UUID) -> Event:
-        """Публикует черновик после проверки прав и актуальности окна."""
-        ensure_can_manage_events(actor.role)
-        event = await _require_event(self._events, event_id)
+    def _apply(self, event: Event) -> None:
         event.publish(now=self._clock.now())
-        return await self._events.update(event)
 
 
-class CloseEvent:
+class CloseEvent(_TransitionUseCase):
     """Переход ``open → closed`` (блокировка приёма прогнозов)."""
 
-    def __init__(self, *, events: EventRepository, clock: Clock) -> None:
-        self._events = events
-        self._clock = clock
+    _action = "event.closed"
 
-    async def execute(self, *, actor: Actor, event_id: uuid.UUID) -> Event:
-        """Закрывает приём прогнозов вручную (editor/admin)."""
-        ensure_can_manage_events(actor.role)
-        event = await _require_event(self._events, event_id)
+    def _apply(self, event: Event) -> None:
         event.close(now=self._clock.now())
-        return await self._events.update(event)
 
 
-class CancelEvent:
+class CancelEvent(_TransitionUseCase):
     """Переход в ``cancelled`` (отмена события редакцией)."""
 
-    def __init__(self, *, events: EventRepository, clock: Clock) -> None:
-        self._events = events
-        self._clock = clock
+    _action = "event.cancelled"
 
-    async def execute(self, *, actor: Actor, event_id: uuid.UUID) -> Event:
-        """Отменяет событие (из draft/open/closed)."""
-        ensure_can_manage_events(actor.role)
-        event = await _require_event(self._events, event_id)
+    def _apply(self, event: Event) -> None:
         event.cancel(now=self._clock.now())
-        return await self._events.update(event)
 
 
 class GetEvent:

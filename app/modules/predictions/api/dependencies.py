@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.modules.events.adapters.repository import SqlAlchemyEventRepository
-from app.modules.predictions.adapters.audit import LoggingAuditRecorder
+from app.modules.predictions.adapters.audit_trail import AuditTrailRecorder
 from app.modules.predictions.adapters.clock import SystemClock
 from app.modules.predictions.adapters.event_gateway import EventRepositoryGateway
 from app.modules.predictions.adapters.repository import (
@@ -29,6 +29,7 @@ from app.modules.predictions.ports.audit import AuditRecorder
 from app.modules.predictions.ports.clock import Clock
 from app.modules.predictions.ports.events import EventGateway
 from app.modules.predictions.ports.repositories import PredictionRepository
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -55,9 +56,9 @@ def get_clock() -> Clock:
     return SystemClock()
 
 
-def get_audit_recorder() -> AuditRecorder:
-    """Приёмник истории прогнозов (TODO: реальный audit_log)."""
-    return LoggingAuditRecorder()
+def get_audit_recorder(session: SessionDep) -> AuditRecorder:
+    """Приёмник истории прогнозов — общий append-only журнал с хеш-цепочкой."""
+    return AuditTrailRecorder(SqlAlchemyAuditTrail(session))
 
 
 PredictionRepoDep = Annotated[

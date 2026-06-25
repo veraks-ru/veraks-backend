@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.modules.events.adapters.clock import SystemClock
 from app.modules.events.api.dependencies import (
+    get_audit_trail,
     get_category_repository,
     get_clock,
     get_event_repository,
@@ -29,6 +30,7 @@ from app.modules.identity.api.dependencies import get_current_user
 from app.modules.identity.domain.entities import User, UserRole
 from tests.events.conftest import FIXED_NOW
 from tests.events.fakes import (
+    FakeAuditTrail,
     FakeClock,
     InMemoryCategoryRepository,
     InMemoryEventRepository,
@@ -65,6 +67,7 @@ def make_client(category: Category):
         app.dependency_overrides[get_event_repository] = lambda: event_repo
         app.dependency_overrides[get_category_repository] = lambda: category_repo
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
+        app.dependency_overrides[get_audit_trail] = lambda: FakeAuditTrail()
         if role is not None:
             user = _fake_user(role)
             app.dependency_overrides[get_current_user] = lambda: user

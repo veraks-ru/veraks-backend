@@ -32,6 +32,7 @@ from app.modules.events.domain.errors import (
 )
 from tests.events.conftest import FIXED_NOW
 from tests.events.fakes import (
+    FakeAuditTrail,
     FakeClock,
     InMemoryCategoryRepository,
     InMemoryEventRepository,
@@ -41,6 +42,11 @@ from tests.events.fakes import (
 @pytest.fixture
 def events() -> InMemoryEventRepository:
     return InMemoryEventRepository()
+
+
+@pytest.fixture
+def audit() -> FakeAuditTrail:
+    return FakeAuditTrail()
 
 
 @pytest.fixture
@@ -71,35 +77,38 @@ def _new_event_input(category_id: uuid.UUID, **over) -> NewEventInput:
 
 
 async def test_create_event_as_editor(
-    events, categories, clock, editor_actor, category
+    events, categories, clock, audit, editor_actor, category
 ) -> None:
-    uc = CreateEvent(events=events, categories=categories, clock=clock)
+    uc = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     event = await uc.execute(actor=editor_actor, data=_new_event_input(category.id))
     assert event.status is EventStatus.DRAFT
     assert event.created_by == editor_actor.user_id
     assert await events.get_by_id(event.id) is not None
+    # Создание зафиксировано в неизменяемом аудите.
+    assert audit.actions() == ["event.created"]
+    assert audit.records[0]["entity_id"] == event.id
 
 
 async def test_create_event_forbidden_for_plain_user(
-    events, categories, clock, user_actor, category
+    events, categories, clock, audit, user_actor, category
 ) -> None:
-    uc = CreateEvent(events=events, categories=categories, clock=clock)
+    uc = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     with pytest.raises(EventPermissionError):
         await uc.execute(actor=user_actor, data=_new_event_input(category.id))
 
 
 async def test_create_event_unknown_category(
-    events, categories, clock, editor_actor
+    events, categories, clock, audit, editor_actor
 ) -> None:
-    uc = CreateEvent(events=events, categories=categories, clock=clock)
+    uc = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     with pytest.raises(CategoryNotFoundError):
         await uc.execute(actor=editor_actor, data=_new_event_input(uuid.uuid4()))
 
 
 async def test_create_event_invalid_window(
-    events, categories, clock, editor_actor, category
+    events, categories, clock, audit, editor_actor, category
 ) -> None:
-    uc = CreateEvent(events=events, categories=categories, clock=clock)
+    uc = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     bad = _new_event_input(
         category.id,
         opens_at=FIXED_NOW + timedelta(days=30),
@@ -110,12 +119,12 @@ async def test_create_event_invalid_window(
 
 
 async def test_update_event_full_window_replacement(
-    events, categories, clock, editor_actor, category
+    events, categories, clock, audit, editor_actor, category
 ) -> None:
-    create = CreateEvent(events=events, categories=categories, clock=clock)
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
 
-    update = UpdateEvent(events=events, categories=categories, clock=clock)
+    update = UpdateEvent(events=events, categories=categories, clock=clock, audit=audit)
     patch = EventPatchInput(
         opens_at=FIXED_NOW + timedelta(days=2),
         closes_at=FIXED_NOW + timedelta(days=20),
@@ -126,12 +135,12 @@ async def test_update_event_full_window_replacement(
 
 
 async def test_update_event_partial_window_rejected(
-    events, categories, clock, editor_actor, category
+    events, categories, clock, audit, editor_actor, category
 ) -> None:
-    create = CreateEvent(events=events, categories=categories, clock=clock)
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
 
-    update = UpdateEvent(events=events, categories=categories, clock=clock)
+    update = UpdateEvent(events=events, categories=categories, clock=clock, audit=audit)
     with pytest.raises(InvalidEventWindowError):
         await update.execute(
             actor=editor_actor,
@@ -141,27 +150,31 @@ async def test_update_event_partial_window_rejected(
 
 
 async def test_publish_close_cancel_flow(
-    events, categories, clock, editor_actor, category
+    events, categories, clock, audit, editor_actor, category
 ) -> None:
-    create = CreateEvent(events=events, categories=categories, clock=clock)
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
 
-    publish = PublishEvent(events=events, clock=clock)
+    publish = PublishEvent(events=events, clock=clock, audit=audit)
     opened = await publish.execute(actor=editor_actor, event_id=event.id)
     assert opened.status is EventStatus.OPEN
 
-    close = CloseEvent(events=events, clock=clock)
+    close = CloseEvent(events=events, clock=clock, audit=audit)
     closed = await close.execute(actor=editor_actor, event_id=event.id)
     assert closed.status is EventStatus.CLOSED
+    # Каждый переход статуса оставил запись с дифом before→after.
+    assert audit.actions() == ["event.created", "event.published", "event.closed"]
+    assert audit.records[-1]["before"] == {"status": "open"}
+    assert audit.records[-1]["after"] == {"status": "closed"}
 
 
 async def test_cancel_requires_editor(
-    events, categories, clock, editor_actor, user_actor, category
+    events, categories, clock, audit, editor_actor, user_actor, category
 ) -> None:
-    create = CreateEvent(events=events, categories=categories, clock=clock)
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
 
-    cancel = CancelEvent(events=events, clock=clock)
+    cancel = CancelEvent(events=events, clock=clock, audit=audit)
     with pytest.raises(EventPermissionError):
         await cancel.execute(actor=user_actor, event_id=event.id)
 

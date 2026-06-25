@@ -8,11 +8,14 @@ Postgres и без реальных часов.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Any
 
 from app.modules.events.domain.entities import Category, Event
 from app.modules.events.domain.errors import CategorySlugTakenError
 from app.modules.events.ports.repositories import EventFilter
+from app.shared.audit.domain.entities import AuditActorType, AuditEntry
 
 
 class FakeClock:
@@ -113,3 +116,47 @@ class InMemoryCategoryRepository:
 
     async def list_all(self) -> list[Category]:
         return sorted(self._by_id.values(), key=lambda c: c.slug)
+
+
+class FakeAuditTrail:
+    """Запоминает записи аудита (без реальной хеш-цепочки)."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    async def record(
+        self,
+        *,
+        actor_id: uuid.UUID | None,
+        actor_type: AuditActorType,
+        action: str,
+        entity_type: str,
+        entity_id: uuid.UUID | None,
+        before: Mapping[str, Any] | None = None,
+        after: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> AuditEntry:
+        self.records.append(
+            {
+                "actor_id": actor_id,
+                "actor_type": actor_type,
+                "action": action,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "before": before,
+                "after": after,
+            }
+        )
+        return AuditEntry(
+            occurred_at=datetime(2026, 1, 1),  # noqa: DTZ001 — фейк, время не важно
+            actor_id=actor_id,
+            actor_type=actor_type,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            hash="fake",
+        )
+
+    def actions(self) -> list[str]:
+        """Список зафиксированных action'ов (для ассертов)."""
+        return [r["action"] for r in self.records]

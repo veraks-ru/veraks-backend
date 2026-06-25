@@ -34,6 +34,8 @@ from app.modules.events.application.use_cases import (
 from app.modules.events.ports.clock import Clock
 from app.modules.events.ports.repositories import CategoryRepository, EventRepository
 from app.modules.identity.api.dependencies import CurrentUser
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
+from app.shared.audit.ports.audit_trail import AuditTrail
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -56,9 +58,15 @@ def get_clock() -> Clock:
     return SystemClock()
 
 
+def get_audit_trail(session: SessionDep) -> AuditTrail:
+    """Общий append-only журнал с хеш-цепочкой."""
+    return SqlAlchemyAuditTrail(session)
+
+
 EventRepoDep = Annotated[EventRepository, Depends(get_event_repository)]
 CategoryRepoDep = Annotated[CategoryRepository, Depends(get_category_repository)]
 ClockDep = Annotated[Clock, Depends(get_clock)]
+AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
 
 
 # ── Актор (RBAC) ──────────────────────────────────────────────────────────
@@ -79,29 +87,33 @@ ActorDep = Annotated[Actor, Depends(get_actor)]
 # ── Use-cases ─────────────────────────────────────────────────────────────
 
 
-def get_create_event(events: EventRepoDep, categories: CategoryRepoDep, clock: ClockDep) -> CreateEvent:
+def get_create_event(
+    events: EventRepoDep, categories: CategoryRepoDep, clock: ClockDep, audit: AuditDep
+) -> CreateEvent:
     """Use-case создания события."""
-    return CreateEvent(events=events, categories=categories, clock=clock)
+    return CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
 
 
-def get_update_event(events: EventRepoDep, categories: CategoryRepoDep, clock: ClockDep) -> UpdateEvent:
+def get_update_event(
+    events: EventRepoDep, categories: CategoryRepoDep, clock: ClockDep, audit: AuditDep
+) -> UpdateEvent:
     """Use-case редактирования события."""
-    return UpdateEvent(events=events, categories=categories, clock=clock)
+    return UpdateEvent(events=events, categories=categories, clock=clock, audit=audit)
 
 
-def get_publish_event(events: EventRepoDep, clock: ClockDep) -> PublishEvent:
+def get_publish_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> PublishEvent:
     """Use-case публикации события."""
-    return PublishEvent(events=events, clock=clock)
+    return PublishEvent(events=events, clock=clock, audit=audit)
 
 
-def get_close_event(events: EventRepoDep, clock: ClockDep) -> CloseEvent:
+def get_close_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> CloseEvent:
     """Use-case закрытия приёма прогнозов."""
-    return CloseEvent(events=events, clock=clock)
+    return CloseEvent(events=events, clock=clock, audit=audit)
 
 
-def get_cancel_event(events: EventRepoDep, clock: ClockDep) -> CancelEvent:
+def get_cancel_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> CancelEvent:
     """Use-case отмены события."""
-    return CancelEvent(events=events, clock=clock)
+    return CancelEvent(events=events, clock=clock, audit=audit)
 
 
 def get_get_event(events: EventRepoDep) -> GetEvent:
