@@ -68,10 +68,19 @@
   методами `to_dict`/`from_dict` с валидацией (монотонность сетки,
   положительность порогов).
 - `lifecycle.py` — чистые правила переходов:
-  `upcoming → active` (снапшотит `LeagueConfig` из дефолтов scoring на момент
+  `upcoming → active` (снапшотит переданный `LeagueConfig` на момент
   активации), `active → finished`. Любой иной переход →
   `InvalidSeasonTransitionError`. Повторный переход в текущий статус —
   идемпотентный no-op (см. §6).
+  **Источник дефолтов конфига (ацикличность).** `LeagueConfig` для активации
+  **передаётся в** `TransitionSeason.execute(...)` как входной параметр —
+  снапшот формирует вызывающий admin-слой, который знает оба домена (например,
+  composition root, импортирующий дефолты из `scoring.domain.constants`).
+  Домен и use-case'ы seasons **не импортируют scoring** ни прямо, ни
+  транзитивно — иначе ломается направление `scoring → seasons`. В seasons
+  допустим лишь внутренний дефолт `LeagueConfig` (нейтральная сетка
+  `0.1/0.3/0.5/0.7/0.9` и пороги по умолчанию) как fallback, не зависящий от
+  scoring.
 - `qualification.py` — чистая
   `evaluate_qualification(n_resolved, category_count, total_weight, cfg) ->
   QualificationResult`. `QualificationResult` (`frozen`) несёт `qualified: bool`
@@ -88,7 +97,10 @@
 ### ports/
 - `repositories.py` — `SeasonRepository` (`Protocol`):
   `add`, `get_by_id`, `get_by_slug`, `list(status=None)`, `update`,
-  `append_finalization(record)` (запись в append-only таблицу финализаций).
+  `append_finalization(record, entries)` (родитель + строки-на-участника в
+  append-only таблицы, одной транзакцией).
+- `gateways.py` — `DisputeGuard` (`Protocol`):
+  `has_open_disputes(season_id) -> bool` (см. §6.4, заглушка fail-loud).
 - `clock.py` — `Clock` (как в scoring).
 
 ### application/
@@ -101,7 +113,9 @@
 ### adapters/
 - `orm.py` — `SeasonORM` (+ `to_domain`/`from_domain`); `slug` — `citext`,
   `UNIQUE(slug)`; `league_config` — `jsonb` (NULL до активации);
-  `SeasonFinalizationORM` — append-only таблица финализаций.
+  `SeasonFinalizationORM` + `SeasonFinalizationEntryORM` — append-only таблицы
+  финализаций (родитель + строка-на-участника, §6.3).
+- `dispute_guard.py` — `AlwaysAllowsDisputeGuard` (заглушка fail-loud, §6.4).
 - `season_repository.py` — `SqlAlchemySeasonRepository`.
 - `clock.py` — `SystemClock`.
 
@@ -130,8 +144,18 @@
   `SeasonConfigGateway` и вызывает чистую `evaluate_qualification(...)` из
   `seasons.domain`, проставляя `qualified` в строку сезонного рейтинга.
   Global/category-scope не меняются (`qualified=None`). Полностью идемпотентен.
-  Если конфиг сезона недоступен (сезон ещё не активирован) — сезонный scope
-  пропускается с логом, не падая.
+
+  **Два разных случая «конфиг недоступен» (не путать).** Решение о квалификации
+  зависит от статуса сезона, который `SeasonConfigGateway` отдаёт вместе с
+  конфигом:
+  - сезон отсутствует или в статусе `upcoming` (ещё не активирован, конфига
+    нет по определению) — **нормальный** пропуск сезонного scope с info-логом;
+  - сезон в статусе `active`, но конфиг загрузить не удалось — это **баг
+    инварианта**, а не норма: активный сезон, не умеющий считать квалификацию,
+    молча перестаёт обновлять рейтинги до жалобы пользователя. Поэтому —
+    **error-лог + алерт**, не тихий пропуск (стыкуется с автоматической
+    проверкой инвариантов из анти-фрод части). Конкретная реакция: поднять
+    доменную ошибку/залогировать на уровне error и не «проглотить».
 - **Сезонный лидерборд**: `GET /leaderboards/seasons/{slug}` резолвит slug→id
   через `SeasonConfigGateway` и получает query-параметр `qualified_only: bool`
   (по умолчанию `false`).
@@ -178,29 +202,46 @@ ARQ выбран, чтобы «сделать правильно», поэтом
 
 ### 6.3 Неизменяемая запись при финализации
 Переход `active → finished` (с финальным пересчётом) — момент определения
-победителей и призов. Он пишет неизменяемую запись в append-only таблицу
-`season_finalizations`:
-- какой `LeagueConfig` применён (полный снапшот jsonb),
-- когда (`finalized_at`, источник времени — сервер),
-- финальный снапшот рейтингов сезона (ранжированные `qualified`-участники с
-  метриками) в jsonb.
+победителей и призов. Он пишет неизменяемую запись.
 
-Таблица append-only по тому же принципу, что `resolutions`/`audit_log`: у роли
-приложения нет `UPDATE`/`DELETE`. Это нужно, чтобы защитить результат перед
-оспаривающим участником. Интеграция с глобальным `audit_log` (hash-цепочка) —
-`TODO(audit)` (домен аудита ещё не построен); до него `season_finalizations`
-самодостаточна.
+**Форма хранения снапшота (решено: строка-на-участника, не один jsonb-блоб).**
+Полный ранжированный снапшот всех квалифицированных участников в одной jsonb-
+ячейке тяжелеет при десятках тысяч участников. Поэтому финализация пишет в
+**две** append-only таблицы:
+- `season_finalizations` (родитель, одна строка на финализацию): `id`,
+  `season_id`, `finalized_at` (источник времени — сервер),
+  `league_config` (применённый снапшот, jsonb — он мал и фиксирован),
+  `qualified_count`, `total_participants`;
+- `season_finalization_entries` (одна строка на квалифицированного участника):
+  `finalization_id` FK, `user_id`, `rank`, `skill_score`, `mean_brier`,
+  `calibration_error`, `n_resolved`. Индекс `(finalization_id, rank)`.
+
+Обе таблицы append-only по тому же принципу, что `resolutions`/`audit_log`: у
+роли приложения нет `UPDATE`/`DELETE`. Это защищает результат перед
+оспаривающим участником и не упирается в размер одной ячейки. Запись
+родителя и всех entries — в той же транзакции, что финальный пересчёт и флаг
+`finished` (§6.2). Интеграция с глобальным `audit_log` (hash-цепочка) —
+`TODO(audit)`; до него таблицы самодостаточны.
 
 ### 6.4 Запрет финализации при открытых спорах
 Сезон не финализируется, пока есть открытые споры по его событиям (финализация
 на нефинальных исходах = расчёт призов по исходам, которые ещё могут
 измениться). Домен resolutions/disputes ещё не существует, поэтому проверка
-оформляется как порт `DisputeGuard.has_open_disputes(season_id) -> bool` с
-заглушкой-адаптером, всегда возвращающей `False`, и помечается
-`TODO(resolutions)`. `season_roll` и ручная финализация **уже сейчас**
-спроектированы вокруг этой проверки: при `True` поднимается
-`SeasonFinalizationBlockedError`, финализация не выполняется. Так доработка не
-потребует переписывания.
+оформляется как порт `DisputeGuard.has_open_disputes(season_id) -> bool`.
+`season_roll` и ручная финализация **уже сейчас** спроектированы вокруг неё:
+при `True` поднимается `SeasonFinalizationBlockedError`, финализация не
+выполняется.
+
+**Заглушка fail-loud, не fail-silent.** Заглушка, молча возвращающая `False`,
+означает, что спроектированная защита от споров фактически выключена — и
+невидимо. Поэтому адаптер-заглушка называется явно — `AlwaysAllowsDisputeGuard`
+— и **пишет warning-лог при каждом вызове** («dispute guard is a no-op stub —
+real resolutions check not wired»). В `TODO(resolutions)` явно зафиксировано:
+**автоматическую таймерную финализацию (`season_roll`) запрещено включать в
+проде с реальными призовыми деньгами, пока эта заглушка не заменена реальной
+проверкой споров.** Иначе через три месяца кто-то включит авто-финализацию,
+забыв, что guard — no-op, и сезон закроется поверх открытых споров. Защита
+обязана падать громко.
 
 ### 6.5 Ручной admin-override переходов
 Ручные admin-триггеры для **activate и finalize** сохраняются рядом с
@@ -234,8 +275,10 @@ ARQ выбран, чтобы «сделать правильно», поэтом
 ### Миграции
 - **`0005_create_seasons`** — *только* домен seasons: enum `season_status`,
   таблица `seasons` (`slug` citext UNIQUE, `league_config` jsonb NULL,
-  индексы по статусу), append-only таблица `season_finalizations`. **Не**
-  трогает `events`.
+  индексы по статусу), append-only таблицы `season_finalizations` и
+  `season_finalization_entries` (индекс `(finalization_id, rank)`). **Не**
+  трогает `events`. (Append-only грант для роли приложения — отдельным
+  инфра-шагом/`TODO`, как у `resolutions`/`ledger`.)
 - **`0006_add_ratings_qualified`** — `ALTER TABLE ratings ADD COLUMN qualified
   boolean NULL`.
 - **`0007_link_events_season_fk`** (отдельная, позже) — добавляет отложенный
@@ -251,7 +294,9 @@ ARQ выбран, чтобы «сделать правильно», поэтом
   `TODO(prize)`.
 - Триггер `resolutions → score_event` (постановка задачи при финализации
   разрешения) — `TODO(scoring-infra)`.
-- Реальная проверка открытых споров — `TODO(resolutions)` (порт уже заложен).
+- Реальная проверка открытых споров — `TODO(resolutions)` (порт заложен,
+  заглушка `AlwaysAllowsDisputeGuard` fail-loud; авто-финализацию запрещено
+  включать в проде до замены заглушки — см. §6.4).
 - Интеграция финализации с глобальным `audit_log` (hash-цепочка) —
   `TODO(audit)`.
 - Горячие топы в Redis sorted set — `TODO`.
