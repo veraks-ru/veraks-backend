@@ -1,0 +1,209 @@
+"""Интеграционные тесты HTTP-эндпоинтов billing.
+
+Поднимают реальное приложение, но I/O-порты и аутентификацию подменяют
+фейками через ``dependency_overrides``. Один набор фейков переживает все
+запросы; активный пользователь переключается мутабельным холдером.
+
+БД-инварианты (триггеры раздельности касс/баланса/append-only, UNIQUE) —
+отдельно e2e против Postgres.
+
+TODO(billing-infra): e2e против реального Postgres (testcontainers) для
+триггеров ``enforce_ledger_separation``/``enforce_transaction_balanced`` и
+append-only.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+
+import pytest
+from fastapi import HTTPException, status
+from fastapi.testclient import TestClient
+
+from app.main import create_app
+from app.modules.billing.api.dependencies import (
+    get_audit_trail,
+    get_clock,
+    get_ledger_repository,
+    get_payment_repository,
+    get_payout_repository,
+    get_prize_fund_repository,
+    get_subscription_repository,
+)
+from app.modules.billing.domain import chart
+from app.modules.billing.domain.ledger import LedgerAccount, LedgerType
+from app.modules.identity.api.dependencies import get_current_user
+from app.modules.identity.domain.entities import User, UserRole
+from tests.billing.conftest import FIXED_NOW
+from tests.billing.fakes import (
+    FakeAuditTrail,
+    FakeClock,
+    InMemoryLedgerRepository,
+    InMemoryPaymentRepository,
+    InMemoryPayoutRepository,
+    InMemoryPrizeFundRepository,
+    InMemorySubscriptionRepository,
+)
+
+_SEED = [
+    (LedgerType.OPERATIONS, chart.OPS_CASH_YOOKASSA),
+    (LedgerType.OPERATIONS, chart.OPS_REVENUE_SUBSCRIPTIONS),
+    (LedgerType.PRIZE, chart.PRIZE_CASH_SPONSOR),
+    (LedgerType.PRIZE, chart.PRIZE_PAYABLE_WINNERS),
+    (LedgerType.PRIZE, chart.PRIZE_TAX_WITHHELD),
+]
+
+
+def _user(role: UserRole) -> User:
+    return User(
+        esia_oid=f"oid-{uuid.uuid4()}",
+        snils_hash=f"hash-{uuid.uuid4()}",
+        username=f"user-{uuid.uuid4().hex[:8]}",
+        display_name="Тест",
+        real_name_enc=None,
+        role=role,
+    )
+
+
+@dataclass
+class Ctx:
+    client: TestClient
+    ledger: InMemoryLedgerRepository
+    funds: InMemoryPrizeFundRepository
+    holder: dict
+
+
+@pytest.fixture
+def ctx():
+    ledger = InMemoryLedgerRepository()
+    for ltype, code in _SEED:
+        ledger.seed_account(
+            LedgerAccount(ledger_type=ltype, account_code=code, title=code)
+        )
+    subscriptions = InMemorySubscriptionRepository()
+    payments = InMemoryPaymentRepository()
+    funds = InMemoryPrizeFundRepository()
+    payouts = InMemoryPayoutRepository()
+    audit = FakeAuditTrail()
+    holder: dict = {"user": None}
+
+    app = create_app()
+    app.dependency_overrides[get_ledger_repository] = lambda: ledger
+    app.dependency_overrides[get_subscription_repository] = lambda: subscriptions
+    app.dependency_overrides[get_payment_repository] = lambda: payments
+    app.dependency_overrides[get_prize_fund_repository] = lambda: funds
+    app.dependency_overrides[get_payout_repository] = lambda: payouts
+    app.dependency_overrides[get_audit_trail] = lambda: audit
+    app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
+
+    def _current_user() -> User:
+        user = holder["user"]
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        return user
+
+    app.dependency_overrides[get_current_user] = _current_user
+
+    client = TestClient(app)
+    try:
+        yield Ctx(client=client, ledger=ledger, funds=funds, holder=holder)
+    finally:
+        client.close()
+
+
+def test_payment_webhook_posts_operations(ctx: Ctx) -> None:
+    """Вебхук приёма платежа не требует авторизации и проводит в OPERATIONS."""
+    resp = ctx.client.post(
+        "/webhooks/payments/yookassa",
+        json={
+            "provider": "yookassa",
+            "provider_payment_id": "pay-int-1",
+            "amount_kopecks": 49_000,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "succeeded"
+    assert body["ledger_transaction_id"] is not None
+    cash = ctx.ledger.transactions[0]
+    assert cash.ledger_type is LedgerType.OPERATIONS
+
+
+def test_payment_webhook_idempotent(ctx: Ctx) -> None:
+    payload = {
+        "provider": "yookassa",
+        "provider_payment_id": "pay-int-dup",
+        "amount_kopecks": 49_000,
+    }
+    first = ctx.client.post("/webhooks/payments/yookassa", json=payload).json()
+    second = ctx.client.post("/webhooks/payments/yookassa", json=payload).json()
+    assert first["id"] == second["id"]
+    assert len(ctx.ledger.transactions) == 1
+
+
+def test_prize_payout_maker_checker_flow(ctx: Ctx) -> None:
+    maker = _user(UserRole.ADMIN)
+    checker = _user(UserRole.ADMIN)
+
+    # admin заводит фонд
+    ctx.holder["user"] = maker
+    fund_resp = ctx.client.post(
+        "/admin/prize-funds",
+        json={"sponsor_name": "Acme", "committed_kopecks": 1_000_000},
+    )
+    assert fund_resp.status_code == 201, fund_resp.text
+    fund_id = fund_resp.json()["id"]
+
+    # депозит спонсора
+    dep = ctx.client.post(
+        f"/admin/prize-funds/{fund_id}/deposit", json={"amount_kopecks": 1_000_000}
+    )
+    assert dep.status_code == 200, dep.text
+
+    # maker создаёт выплату
+    created = ctx.client.post(
+        "/admin/payouts",
+        json={
+            "user_id": str(uuid.uuid4()),
+            "prize_fund_id": fund_id,
+            "amount_kopecks": 8_700,
+            "tax_withheld_kopecks": 1_300,
+        },
+    )
+    assert created.status_code == 201, created.text
+    payout_id = created.json()["id"]
+    assert created.json()["status"] == "pending"
+
+    # maker не может подтвердить свою выплату (maker-checker → 403)
+    self_approve = ctx.client.post(f"/admin/payouts/{payout_id}/approve")
+    assert self_approve.status_code == status.HTTP_403_FORBIDDEN
+
+    # checker (другой admin) подтверждает
+    ctx.holder["user"] = checker
+    approved = ctx.client.post(f"/admin/payouts/{payout_id}/approve")
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "approved"
+
+    # публичный фонд показывает уменьшившееся сальдо
+    public = ctx.client.get(f"/prize-funds/{fund_id}")
+    assert public.status_code == 200
+    assert public.json()["balance_kopecks"] == 1_000_000 - 10_000
+
+
+def test_admin_endpoint_requires_auth(ctx: Ctx) -> None:
+    ctx.holder["user"] = None
+    resp = ctx.client.post(
+        "/admin/prize-funds",
+        json={"sponsor_name": "Acme", "committed_kopecks": 1},
+    )
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_non_admin_cannot_create_fund(ctx: Ctx) -> None:
+    ctx.holder["user"] = _user(UserRole.USER)
+    resp = ctx.client.post(
+        "/admin/prize-funds",
+        json={"sponsor_name": "Acme", "committed_kopecks": 1},
+    )
+    assert resp.status_code == status.HTTP_403_FORBIDDEN

@@ -66,6 +66,19 @@ class ResolutionsSettings(BaseSettings):
         return timedelta(hours=self.dispute_window_hours)
 
 
+class BillingSettings(BaseSettings):
+    """Параметры платежей и двух касс.
+
+    Цены тарифов — в копейках (никаких float). Composition root billing читает
+    эти настройки и собирает из них карту «тариф → цена».
+    """
+
+    model_config = SettingsConfigDict(env_prefix="BILLING_", extra="ignore")
+
+    monthly_price_kopecks: int = Field(default=49_000, ge=1)
+    annual_price_kopecks: int = Field(default=490_000, ge=1)
+
+
 class Settings(BaseSettings):
     """Корневые настройки приложения."""
 
@@ -88,6 +101,7 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     esia: EsiaSettings = Field(default_factory=EsiaSettings)
     resolutions: ResolutionsSettings = Field(default_factory=ResolutionsSettings)
+    billing: BillingSettings = Field(default_factory=BillingSettings)
 
 
 @lru_cache

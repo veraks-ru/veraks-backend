@@ -1,0 +1,229 @@
+"""Composition root модуля billing (FastAPI DI).
+
+Единственное место, где порты связываются с конкретными адаптерами и
+собираются use-cases. В тестах достаточно переопределить провайдеры портов.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Annotated
+
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import SettingsDep
+from app.db.session import get_session
+from app.modules.billing.adapters.clock import SystemClock
+from app.modules.billing.adapters.gateways import (
+    YookassaPayoutGateway,
+    YookassaSubscriptionCheckoutGateway,
+)
+from app.modules.billing.adapters.repositories import (
+    SqlAlchemyLedgerRepository,
+    SqlAlchemyPaymentRepository,
+    SqlAlchemyPayoutRepository,
+    SqlAlchemyPrizeFundRepository,
+    SqlAlchemySubscriptionRepository,
+)
+from app.modules.billing.application.dto import Actor
+from app.modules.billing.application.use_cases import (
+    AnnouncePrizeFund,
+    ApprovePayout,
+    CancelSubscription,
+    CreatePayout,
+    GetPrizeFund,
+    RecordSponsorDeposit,
+    RecordSubscriptionPayment,
+    StartSubscription,
+)
+from app.modules.billing.domain.entities import SubscriptionPlan
+from app.modules.billing.ports.clock import Clock
+from app.modules.billing.ports.gateways import (
+    PayoutGateway,
+    SubscriptionCheckoutGateway,
+)
+from app.modules.billing.ports.repositories import (
+    LedgerRepository,
+    PaymentRepository,
+    PayoutRepository,
+    PrizeFundRepository,
+    SubscriptionRepository,
+)
+from app.modules.identity.api.dependencies import CurrentUser
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
+from app.shared.audit.ports.audit_trail import AuditTrail
+
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+
+# ── Порты → адаптеры ──────────────────────────────────────────────────────
+
+
+def get_clock() -> Clock:
+    """Серверные часы (в тестах подменяются фиксированным временем)."""
+    return SystemClock()
+
+
+def get_ledger_repository(session: SessionDep) -> LedgerRepository:
+    """Репозиторий журнала проводок."""
+    return SqlAlchemyLedgerRepository(session)
+
+
+def get_subscription_repository(session: SessionDep) -> SubscriptionRepository:
+    """Репозиторий подписок."""
+    return SqlAlchemySubscriptionRepository(session)
+
+
+def get_payment_repository(session: SessionDep) -> PaymentRepository:
+    """Репозиторий платежей."""
+    return SqlAlchemyPaymentRepository(session)
+
+
+def get_prize_fund_repository(session: SessionDep) -> PrizeFundRepository:
+    """Репозиторий призовых фондов."""
+    return SqlAlchemyPrizeFundRepository(session)
+
+
+def get_payout_repository(session: SessionDep) -> PayoutRepository:
+    """Репозиторий выплат."""
+    return SqlAlchemyPayoutRepository(session)
+
+
+def get_checkout_gateway() -> SubscriptionCheckoutGateway:
+    """Шлюз оплаты подписок (TODO(billing-infra): реальная интеграция)."""
+    return YookassaSubscriptionCheckoutGateway()
+
+
+def get_payout_gateway() -> PayoutGateway:
+    """Шлюз выплат физлицам (TODO(billing-infra): реальная интеграция)."""
+    return YookassaPayoutGateway()
+
+
+def get_audit_trail(session: SessionDep) -> AuditTrail:
+    """Неизменяемый аудит-журнал (общая инфраструктура)."""
+    return SqlAlchemyAuditTrail(session)
+
+
+ClockDep = Annotated[Clock, Depends(get_clock)]
+LedgerRepoDep = Annotated[LedgerRepository, Depends(get_ledger_repository)]
+SubscriptionRepoDep = Annotated[
+    SubscriptionRepository, Depends(get_subscription_repository)
+]
+PaymentRepoDep = Annotated[PaymentRepository, Depends(get_payment_repository)]
+PrizeFundRepoDep = Annotated[PrizeFundRepository, Depends(get_prize_fund_repository)]
+PayoutRepoDep = Annotated[PayoutRepository, Depends(get_payout_repository)]
+CheckoutGatewayDep = Annotated[
+    SubscriptionCheckoutGateway, Depends(get_checkout_gateway)
+]
+AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
+
+
+# ── Конфигурация ──────────────────────────────────────────────────────────
+
+
+def get_plan_prices(settings: SettingsDep) -> Mapping[SubscriptionPlan, int]:
+    """Карта «тариф → цена в копейках» из настроек."""
+    return {
+        SubscriptionPlan.MONTHLY: settings.billing.monthly_price_kopecks,
+        SubscriptionPlan.ANNUAL: settings.billing.annual_price_kopecks,
+    }
+
+
+PlanPricesDep = Annotated[Mapping[SubscriptionPlan, int], Depends(get_plan_prices)]
+
+
+# ── Актор (RBAC/SoD) ──────────────────────────────────────────────────────
+
+
+def get_actor(current_user: CurrentUser) -> Actor:
+    """Актор операции из аутентифицированного пользователя identity."""
+    return Actor(user_id=current_user.id, role=current_user.role)
+
+
+ActorDep = Annotated[Actor, Depends(get_actor)]
+
+
+# ── Use-cases ─────────────────────────────────────────────────────────────
+
+
+def get_start_subscription(
+    subscriptions: SubscriptionRepoDep,
+    checkout: CheckoutGatewayDep,
+    audit: AuditDep,
+    clock: ClockDep,
+    plan_prices: PlanPricesDep,
+) -> StartSubscription:
+    """Use-case оформления подписки."""
+    return StartSubscription(
+        subscriptions=subscriptions,
+        checkout=checkout,
+        audit=audit,
+        clock=clock,
+        plan_prices=plan_prices,
+    )
+
+
+def get_cancel_subscription(
+    subscriptions: SubscriptionRepoDep, audit: AuditDep, clock: ClockDep
+) -> CancelSubscription:
+    """Use-case отмены подписки."""
+    return CancelSubscription(subscriptions=subscriptions, audit=audit, clock=clock)
+
+
+def get_record_subscription_payment(
+    payments: PaymentRepoDep,
+    subscriptions: SubscriptionRepoDep,
+    ledger: LedgerRepoDep,
+    audit: AuditDep,
+    clock: ClockDep,
+) -> RecordSubscriptionPayment:
+    """Use-case приёма платежа по подписке (вебхук → OPERATIONS)."""
+    return RecordSubscriptionPayment(
+        payments=payments,
+        subscriptions=subscriptions,
+        ledger=ledger,
+        audit=audit,
+        clock=clock,
+    )
+
+
+def get_announce_prize_fund(
+    funds: PrizeFundRepoDep, ledger: LedgerRepoDep, audit: AuditDep, clock: ClockDep
+) -> AnnouncePrizeFund:
+    """Use-case заведения призового фонда."""
+    return AnnouncePrizeFund(funds=funds, ledger=ledger, audit=audit, clock=clock)
+
+
+def get_record_sponsor_deposit(
+    funds: PrizeFundRepoDep, ledger: LedgerRepoDep, audit: AuditDep, clock: ClockDep
+) -> RecordSponsorDeposit:
+    """Use-case регистрации поступления спонсора (→ PRIZE)."""
+    return RecordSponsorDeposit(funds=funds, ledger=ledger, audit=audit, clock=clock)
+
+
+def get_prize_fund(
+    funds: PrizeFundRepoDep, ledger: LedgerRepoDep
+) -> GetPrizeFund:
+    """Use-case чтения фонда (прозрачность)."""
+    return GetPrizeFund(funds=funds, ledger=ledger)
+
+
+def get_create_payout(
+    payouts: PayoutRepoDep, funds: PrizeFundRepoDep, audit: AuditDep, clock: ClockDep
+) -> CreatePayout:
+    """Use-case инициирования выплаты (maker)."""
+    return CreatePayout(payouts=payouts, funds=funds, audit=audit, clock=clock)
+
+
+def get_approve_payout(
+    payouts: PayoutRepoDep,
+    funds: PrizeFundRepoDep,
+    ledger: LedgerRepoDep,
+    audit: AuditDep,
+    clock: ClockDep,
+) -> ApprovePayout:
+    """Use-case подтверждения выплаты (checker, → PRIZE)."""
+    return ApprovePayout(
+        payouts=payouts, funds=funds, ledger=ledger, audit=audit, clock=clock
+    )

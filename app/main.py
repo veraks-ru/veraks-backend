@@ -61,6 +61,22 @@ from app.modules.resolutions.domain.errors import (
     ResolutionTargetEventNotFoundError,
     SelfDisputeDecisionError,
 )
+from app.modules.billing.api.router import router as billing_router
+from app.modules.billing.domain.errors import (
+    BillingError,
+    BillingPermissionError,
+    CrossLedgerEntryError,
+    InsufficientPrizeFundError,
+    InvalidAmountError,
+    LedgerAccountNotFoundError,
+    PayoutAlreadyDecidedError,
+    PayoutNotFoundError,
+    PrizeFundNotFoundError,
+    SelfApprovalError,
+    SubscriptionNotFoundError,
+    SubscriptionPermissionError,
+    UnbalancedTransactionError,
+)
 from app.modules.identity.api.router import router as identity_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
@@ -121,6 +137,20 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     DisputeWindowClosedError: status.HTTP_409_CONFLICT,
     DisputeAlreadyDecidedError: status.HTTP_409_CONFLICT,
     InvalidResolutionDataError: status.HTTP_400_BAD_REQUEST,
+    # billing
+    SubscriptionNotFoundError: status.HTTP_404_NOT_FOUND,
+    PrizeFundNotFoundError: status.HTTP_404_NOT_FOUND,
+    PayoutNotFoundError: status.HTTP_404_NOT_FOUND,
+    LedgerAccountNotFoundError: status.HTTP_404_NOT_FOUND,
+    BillingPermissionError: status.HTTP_403_FORBIDDEN,
+    SubscriptionPermissionError: status.HTTP_403_FORBIDDEN,
+    SelfApprovalError: status.HTTP_403_FORBIDDEN,
+    PayoutAlreadyDecidedError: status.HTTP_409_CONFLICT,
+    InsufficientPrizeFundError: status.HTTP_409_CONFLICT,
+    InvalidAmountError: status.HTTP_400_BAD_REQUEST,
+    # Нарушения инвариантов журнала — внутренняя ошибка (не должны достигать API).
+    UnbalancedTransactionError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    CrossLedgerEntryError: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
 
 
@@ -196,12 +226,23 @@ def create_app() -> FastAPI:
             content={"detail": str(exc), "error": type(exc).__name__},
         )
 
+    @app.exception_handler(BillingError)
+    async def _billing_error_handler(
+        _request: Request, exc: BillingError
+    ) -> JSONResponse:
+        """Единый маппинг доменных ошибок billing в JSON-ответ."""
+        return JSONResponse(
+            status_code=_resolve_status(exc),
+            content={"detail": str(exc), "error": type(exc).__name__},
+        )
+
     app.include_router(identity_router)
     app.include_router(events_router)
     app.include_router(predictions_router)
     app.include_router(scoring_router)
     app.include_router(seasons_router)
     app.include_router(resolutions_router)
+    app.include_router(billing_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
