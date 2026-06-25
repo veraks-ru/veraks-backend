@@ -1,0 +1,51 @@
+"""Pydantic-схемы запросов/ответов для эндпоинтов identity.
+
+Это контракт HTTP-слоя; он отделён от доменных сущностей и DTO, чтобы
+изменения формата API не протекали внутрь домена.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.modules.identity.domain.entities import User, UserRole, UserStatus
+
+
+class CallbackRequest(BaseModel):
+    """Параметры callback'а ЕСИА (query-string)."""
+
+    code: str = Field(min_length=1, description="Authorization code от ЕСИА")
+    state: str = Field(min_length=1, description="Анти-CSRF state из шага login")
+
+
+class AccessTokenResponse(BaseModel):
+    """Тело ответа с access-токеном (refresh уходит в httpOnly cookie)."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class MeResponse(BaseModel):
+    """Публичная проекция текущего пользователя (без ПДн)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    username: str
+    display_name: str
+    role: UserRole
+    status: UserStatus
+
+    @classmethod
+    def from_domain(cls, user: User) -> MeResponse:
+        """Маппинг доменной сущности в ответ (ФИО намеренно не отдаём)."""
+        return cls(
+            id=user.id,
+            username=user.username,
+            display_name=user.display_name,
+            role=user.role,
+            status=user.status,
+        )
