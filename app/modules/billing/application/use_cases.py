@@ -470,7 +470,7 @@ class GetSeasonPrizeFund:
             )
             for fund in funds
         ]
-        payouts = await self._payouts.list(season_id=season_id)
+        payouts = await self._payouts.list_all(season_id=season_id)
         return SeasonPrizeFundView(season_slug=slug, funds=views, payouts=payouts)
 
 
@@ -499,7 +499,18 @@ class ListPayouts:
     ) -> list[Payout]:
         """Список выплат, новые сверху. Только для admin."""
         ensure_can_manage_prize_funds(actor.role)
-        return await self._payouts.list(season_id=season_id)
+        return await self._payouts.list_all(season_id=season_id)
+
+
+class ListMyPayouts:
+    """Свои выплаты (для личного профиля)."""
+
+    def __init__(self, *, payouts: PayoutRepository) -> None:
+        self._payouts = payouts
+
+    async def execute(self, *, user_id: uuid.UUID) -> list[Payout]:
+        """Выплаты текущего пользователя, новые сверху."""
+        return await self._payouts.list_by_user(user_id)
 
 
 # ── Выплаты призов (PRIZE, maker-checker) ─────────────────────────────────

@@ -19,6 +19,7 @@ from app.modules.billing.api.dependencies import (
     get_approve_payout,
     get_cancel_subscription,
     get_create_payout,
+    get_list_my_payouts,
     get_list_payouts,
     get_my_subscription,
     get_prize_fund,
@@ -50,6 +51,7 @@ from app.modules.billing.application.use_cases import (
     GetMySubscription,
     GetPrizeFund,
     GetSeasonPrizeFund,
+    ListMyPayouts,
     ListPayouts,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
@@ -99,6 +101,20 @@ async def start_subscription(
         subscription=SubscriptionResponse.from_domain(subscription),
         confirmation_url=confirmation_url,
     )
+
+
+@router.get(
+    "/users/me/payouts",
+    response_model=list[PayoutResponse],
+    summary="Свои выплаты",
+)
+async def read_my_payouts(
+    actor: ActorDep,
+    uc: Annotated[ListMyPayouts, Depends(get_list_my_payouts)],
+) -> list[PayoutResponse]:
+    """Вернуть выплаты текущего пользователя (новые сверху)."""
+    payouts = await uc.execute(user_id=actor.user_id)
+    return [PayoutResponse.from_domain(p) for p in payouts]
 
 
 @router.get(

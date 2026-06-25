@@ -117,10 +117,14 @@ class PayoutRepository(Protocol):
         """Выплата по ключу идемпотентности вебхука или ``None``."""
         ...
 
-    async def list(
+    async def list_all(
         self, *, season_id: uuid.UUID | None = None
     ) -> list[Payout]:
         """Выплаты (опц. фильтр по сезону), новые сверху. Для админ-обзора."""
+        ...
+
+    async def list_by_user(self, user_id: uuid.UUID) -> list[Payout]:
+        """Выплаты пользователя, новые сверху (для своего профиля)."""
         ...
 
     async def update(self, payout: Payout) -> Payout:

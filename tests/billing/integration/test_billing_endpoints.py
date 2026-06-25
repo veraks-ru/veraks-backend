@@ -239,6 +239,43 @@ def test_prize_payout_maker_checker_flow(ctx: Ctx) -> None:
     assert public.json()["balance_kopecks"] == 1_000_000 - 10_000
 
 
+def test_my_payouts_returns_own(ctx: Ctx) -> None:
+    """GET /users/me/payouts — пользователь видит начисленные ему выплаты."""
+    winner = _user(UserRole.USER)
+    admin = _user(UserRole.ADMIN)
+
+    ctx.holder["user"] = admin
+    fund_id = ctx.client.post(
+        "/admin/prize-funds",
+        json={"sponsor_name": "Acme", "committed_kopecks": 1_000_000},
+    ).json()["id"]
+    ctx.client.post(
+        f"/admin/prize-funds/{fund_id}/deposit", json={"amount_kopecks": 1_000_000}
+    )
+    ctx.client.post(
+        "/admin/payouts",
+        json={
+            "user_id": str(winner.id),
+            "prize_fund_id": fund_id,
+            "amount_kopecks": 7_000,
+        },
+    )
+
+    ctx.holder["user"] = winner
+    mine = ctx.client.get("/users/me/payouts")
+    assert mine.status_code == 200, mine.text
+    assert len(mine.json()) == 1
+    assert mine.json()[0]["user_id"] == str(winner.id)
+
+    # Другой пользователь своих выплат не имеет.
+    ctx.holder["user"] = _user(UserRole.USER)
+    assert ctx.client.get("/users/me/payouts").json() == []
+
+
+def test_my_payouts_requires_auth(ctx: Ctx) -> None:
+    assert ctx.client.get("/users/me/payouts").status_code == status.HTTP_401_UNAUTHORIZED
+
+
 def test_list_payouts_admin_only(ctx: Ctx) -> None:
     """GET /admin/payouts: admin видит список; обычный пользователь — 403."""
     maker = _user(UserRole.ADMIN)

@@ -21,7 +21,10 @@ Discipline: TDD for behavior changes. Keep `pytest` / `mypy app` / `ruff check a
 ## Phase 2 — Missing read endpoints  (IN PROGRESS — A4 done)
 - [~] A1 Users/Profiles — IN PROGRESS:
   - [x] A1.1 identity-only: `get_by_username` (port/adapter/fake), `GetPublicProfile` (active-only, 404 hidden suspended), `UpdateMyProfile`, `User.edit_profile` (settles E5: display_name is user-owned, NOT clobbered on relogin; real_name_enc stays ЕСИА source-of-truth). New `/users` router (`GET /users/{username}` public, `PATCH /users/me`), `PublicProfileResponse`/`UpdateProfileRequest` schemas, mounted in main. 7 unit + 4 integration tests. 357 green.
-  - [ ] A1.2 cross-domain enrichment: `GET /users/{username}/predictions` + `/calibration` + `GET /users/me/predictions` + `/users/me/payouts` (gateways → predictions/scoring/billing).
+  - [~] A1.2 cross-domain enrichment (served from OWNING domain's router under `/users/...` paths to avoid module cycles):
+    - [x] `GET /users/me/payouts` — served by billing router (`PayoutRepository.list_by_user`, `ListMyPayouts` use-case). Renamed admin `list`→`list_all` (shadowed builtin). 2 tests. 359 green.
+    - [ ] `GET /users/{username}/predictions` + `GET /users/me/predictions` — predictions router (needs username→id resolution via identity gateway + `list_by_user` query).
+    - [ ] `GET /users/{username}/calibration` — scoring router (compute calibration from user's resolved predictions).
 - [x] A2 crowd-signal `GET /events/{id}/predictions/summary` — `GetEventPredictionSummary` use-case (distribution per grade + consensus `c_e`), hidden until close (`PredictionSummaryHiddenError`→409, anti-anchoring §5). Public endpoint. 6 tests. 343 green.
 - [x] A4 `GET /billing/plans` + `GET /billing/subscriptions/me` (added `get_latest_by_user` to port+adapter+fake, `GetMySubscription` use-case, `PlanResponse`/`PlansResponse` schemas, 4 integration tests). 337 tests green.
 - [x] A6 `GET /admin/payouts` (list, admin, season filter) + `GET /seasons/{slug}/prize-fund` (public transparency: funds+balances+payouts; new `SeasonDirectory` billing→seasons gateway `SqlAlchemySeasonDirectory`, `PrizeFundRepository.list_by_season`, `GetSeasonPrizeFund` use-case, billing `SeasonNotFoundError`→404). 346 green.

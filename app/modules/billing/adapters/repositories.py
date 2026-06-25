@@ -214,10 +214,19 @@ class SqlAlchemyPayoutRepository:
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
-    async def list(self, *, season_id: uuid.UUID | None = None) -> list[Payout]:
+    async def list_all(self, *, season_id: uuid.UUID | None = None) -> list[Payout]:
         stmt = select(PayoutORM).order_by(PayoutORM.created_at.desc())
         if season_id is not None:
             stmt = stmt.where(PayoutORM.season_id == season_id)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [orm.to_domain() for orm in rows]
+
+    async def list_by_user(self, user_id: uuid.UUID) -> list[Payout]:
+        stmt = (
+            select(PayoutORM)
+            .where(PayoutORM.user_id == user_id)
+            .order_by(PayoutORM.created_at.desc())
+        )
         rows = (await self._session.execute(stmt)).scalars().all()
         return [orm.to_domain() for orm in rows]
 
