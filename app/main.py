@@ -21,6 +21,14 @@ from app.modules.events.domain.errors import (
     InvalidEventTransitionError,
     InvalidEventWindowError,
 )
+from app.modules.predictions.api.router import router as predictions_router
+from app.modules.predictions.domain.errors import (
+    PredictionError,
+    PredictionLockedError,
+    PredictionNotFoundError,
+    PredictionsClosedError,
+    PredictionTargetEventNotFoundError,
+)
 from app.modules.identity.api.router import router as identity_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
@@ -53,6 +61,11 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     EventEditNotAllowedError: status.HTTP_409_CONFLICT,
     InvalidEventWindowError: status.HTTP_400_BAD_REQUEST,
     InvalidEventDataError: status.HTTP_400_BAD_REQUEST,
+    # predictions
+    PredictionTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
+    PredictionNotFoundError: status.HTTP_404_NOT_FOUND,
+    PredictionsClosedError: status.HTTP_409_CONFLICT,
+    PredictionLockedError: status.HTTP_409_CONFLICT,
 }
 
 
@@ -88,8 +101,19 @@ def create_app() -> FastAPI:
             content={"detail": str(exc), "error": type(exc).__name__},
         )
 
+    @app.exception_handler(PredictionError)
+    async def _prediction_error_handler(
+        _request: Request, exc: PredictionError
+    ) -> JSONResponse:
+        """Единый маппинг доменных ошибок predictions в JSON-ответ."""
+        return JSONResponse(
+            status_code=_resolve_status(exc),
+            content={"detail": str(exc), "error": type(exc).__name__},
+        )
+
     app.include_router(identity_router)
     app.include_router(events_router)
+    app.include_router(predictions_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
