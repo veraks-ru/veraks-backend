@@ -29,6 +29,14 @@ from app.modules.predictions.domain.errors import (
     PredictionsClosedError,
     PredictionTargetEventNotFoundError,
 )
+from app.modules.scoring.api.router import router as scoring_router
+from app.modules.scoring.domain.errors import (
+    EventNotResolvedError,
+    RatingNotFoundError,
+    ScoringError,
+    ScoringPermissionError,
+    ScoringTargetEventNotFoundError,
+)
 from app.modules.identity.api.router import router as identity_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
@@ -66,6 +74,11 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     PredictionNotFoundError: status.HTTP_404_NOT_FOUND,
     PredictionsClosedError: status.HTTP_409_CONFLICT,
     PredictionLockedError: status.HTTP_409_CONFLICT,
+    # scoring
+    ScoringTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
+    RatingNotFoundError: status.HTTP_404_NOT_FOUND,
+    EventNotResolvedError: status.HTTP_409_CONFLICT,
+    ScoringPermissionError: status.HTTP_403_FORBIDDEN,
 }
 
 
@@ -111,9 +124,20 @@ def create_app() -> FastAPI:
             content={"detail": str(exc), "error": type(exc).__name__},
         )
 
+    @app.exception_handler(ScoringError)
+    async def _scoring_error_handler(
+        _request: Request, exc: ScoringError
+    ) -> JSONResponse:
+        """Единый маппинг доменных ошибок scoring в JSON-ответ."""
+        return JSONResponse(
+            status_code=_resolve_status(exc),
+            content={"detail": str(exc), "error": type(exc).__name__},
+        )
+
     app.include_router(identity_router)
     app.include_router(events_router)
     app.include_router(predictions_router)
+    app.include_router(scoring_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
