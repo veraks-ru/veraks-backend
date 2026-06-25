@@ -38,6 +38,12 @@ class InMemoryUserRepository:
                 return self._clone(user)
         return None
 
+    async def get_by_username(self, username: str) -> User | None:
+        for user in self._by_id.values():
+            if user.username.lower() == username.lower():
+                return self._clone(user)
+        return None
+
     async def username_exists(self, username: str) -> bool:
         return any(u.username.lower() == username.lower() for u in self._by_id.values())
 

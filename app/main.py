@@ -80,6 +80,7 @@ from app.modules.billing.domain.errors import (
     UnbalancedTransactionError,
 )
 from app.modules.identity.api.router import router as identity_router
+from app.modules.identity.api.users_router import router as users_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
@@ -241,6 +242,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(identity_router)
+    app.include_router(users_router)
     app.include_router(events_router)
     app.include_router(predictions_router)
     app.include_router(scoring_router)

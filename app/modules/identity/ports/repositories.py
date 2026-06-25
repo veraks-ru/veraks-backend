@@ -28,6 +28,10 @@ class UserRepository(Protocol):
         """Аккаунт по стабильному идентификатору ЕСИА."""
         ...
 
+    async def get_by_username(self, username: str) -> User | None:
+        """Аккаунт по публичному хэндлу (citext, регистронезависимо) или ``None``."""
+        ...
+
     async def username_exists(self, username: str) -> bool:
         """Проверка занятости публичного хэндла."""
         ...

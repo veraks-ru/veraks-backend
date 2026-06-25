@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,3 +50,27 @@ class MeResponse(BaseModel):
             role=user.role,
             status=user.status,
         )
+
+
+class PublicProfileResponse(BaseModel):
+    """Публичный профиль по хэндлу (псевдоним; ПДн/ФИО не отдаются)."""
+
+    username: str
+    display_name: str
+    member_since: datetime
+
+    @classmethod
+    def from_domain(cls, user: User) -> PublicProfileResponse:
+        return cls(
+            username=user.username,
+            display_name=user.display_name,
+            member_since=user.created_at,
+        )
+
+
+class UpdateProfileRequest(BaseModel):
+    """Изменение собственного профиля. Поля опциональны (partial update)."""
+
+    display_name: str | None = Field(
+        default=None, min_length=1, max_length=100, description="Отображаемое имя"
+    )

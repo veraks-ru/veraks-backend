@@ -39,6 +39,12 @@ class SqlAlchemyUserRepository:
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
+    async def get_by_username(self, username: str) -> User | None:
+        """Аккаунт по публичному хэндлу (citext — регистронезависимо)."""
+        stmt = select(UserORM).where(UserORM.username == username)
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
+        return orm.to_domain() if orm else None
+
     async def username_exists(self, username: str) -> bool:
         """Занятость хэндла (citext — регистронезависимо)."""
         stmt = select(func.count()).select_from(UserORM).where(

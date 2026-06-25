@@ -18,15 +18,18 @@ from app.modules.identity.adapters.security import (
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
     GetCurrentUser,
+    GetPublicProfile,
     LogoutSession,
     RefreshSession,
+    UpdateMyProfile,
 )
-from app.modules.identity.domain.entities import User, UserStatus
+from app.modules.identity.domain.entities import User, UserRole, UserStatus
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     InvalidStateError,
     InvalidTokenError,
     UnconfirmedEsiaAccountError,
+    UserNotFoundError,
 )
 from app.modules.identity.domain.value_objects import EsiaIdentity
 from app.modules.identity.ports.repositories import UsernameTakenError
@@ -344,3 +347,71 @@ def _other_snils():
     from app.modules.identity.domain.value_objects import Snils
 
     return Snils.parse("08765430300")
+
+
+# ── Профили (GetPublicProfile / UpdateMyProfile) ──────────────────────────
+
+
+def _user(username="alice", display="Алиса", status=UserStatus.ACTIVE) -> User:
+    return User(
+        esia_oid=f"oid-{username}",
+        snils_hash=f"hash-{username}",
+        username=username,
+        display_name=display,
+        real_name_enc=None,
+        role=UserRole.USER,
+        status=status,
+    )
+
+
+async def test_public_profile_returns_active_user(repo) -> None:
+    await repo.add(_user(username="alice", display="Алиса"))
+    profile = await GetPublicProfile(users=repo).execute(username="alice")
+    assert profile.username == "alice"
+    assert profile.display_name == "Алиса"
+
+
+async def test_public_profile_case_insensitive(repo) -> None:
+    await repo.add(_user(username="alice"))
+    profile = await GetPublicProfile(users=repo).execute(username="ALICE")
+    assert profile.username == "alice"
+
+
+async def test_public_profile_unknown_raises(repo) -> None:
+    with pytest.raises(UserNotFoundError):
+        await GetPublicProfile(users=repo).execute(username="ghost")
+
+
+async def test_public_profile_hides_suspended(repo) -> None:
+    await repo.add(_user(username="bob", status=UserStatus.SUSPENDED))
+    with pytest.raises(UserNotFoundError):
+        await GetPublicProfile(users=repo).execute(username="bob")
+
+
+async def test_update_profile_changes_display_name(repo) -> None:
+    user = _user(username="carol", display="Старое")
+    await repo.add(user)
+    updated = await UpdateMyProfile(users=repo).execute(
+        user_id=user.id, display_name="Новое имя"
+    )
+    assert updated.display_name == "Новое имя"
+    stored = await repo.get_by_id(user.id)
+    assert stored is not None and stored.display_name == "Новое имя"
+
+
+async def test_update_profile_noop_when_none(repo) -> None:
+    user = _user(username="dave", display="Дэйв")
+    await repo.add(user)
+    updated = await UpdateMyProfile(users=repo).execute(
+        user_id=user.id, display_name=None
+    )
+    assert updated.display_name == "Дэйв"
+
+
+async def test_update_profile_unknown_user_raises(repo) -> None:
+    import uuid
+
+    with pytest.raises(UserNotFoundError):
+        await UpdateMyProfile(users=repo).execute(
+            user_id=uuid.uuid4(), display_name="X"
+        )

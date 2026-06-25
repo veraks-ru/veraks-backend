@@ -91,6 +91,21 @@ class User:
         """Может ли аккаунт пользоваться системой."""
         return self.status is UserStatus.ACTIVE
 
+    def edit_profile(self, *, display_name: str | None) -> bool:
+        """Редактирует публичный профиль (то, чем владеет пользователь).
+
+        ``display_name`` — пользовательское поле (PATCH /users/me), поэтому при
+        повторном входе ЕСИА его НЕ перезатирает (юридическое ФИО — отдельно в
+        ``real_name_enc``). Возвращает ``True``, если значение изменилось.
+        """
+        if display_name is None:
+            return False
+        new_value = display_name.strip()
+        if not new_value or new_value == self.display_name:
+            return False
+        self.display_name = new_value
+        return True
+
     def apply_esia_refresh(
         self, *, identity: EsiaIdentity, real_name_enc: bytes | None
     ) -> bool:

@@ -33,9 +33,11 @@ from app.modules.identity.adapters.stores import (
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
     GetCurrentUser,
+    GetPublicProfile,
     InitiateEsiaLogin,
     LogoutSession,
     RefreshSession,
+    UpdateMyProfile,
 )
 from app.modules.identity.domain.entities import User
 from app.modules.identity.domain.errors import IdentityError
@@ -191,6 +193,20 @@ def get_current_user_uc(
 ) -> GetCurrentUser:
     """Use-case загрузки текущего пользователя."""
     return GetCurrentUser(users=users, tokens=tokens)
+
+
+def get_public_profile_uc(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+) -> GetPublicProfile:
+    """Use-case публичного профиля по хэндлу."""
+    return GetPublicProfile(users=users)
+
+
+def get_update_profile_uc(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+) -> UpdateMyProfile:
+    """Use-case редактирования своего профиля."""
+    return UpdateMyProfile(users=users)
 
 
 # ── Аутентификация запроса ────────────────────────────────────────────────

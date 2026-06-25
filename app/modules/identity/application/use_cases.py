@@ -16,7 +16,11 @@ from app.modules.identity.application.dto import (
     SessionClaims,
     SessionTokens,
 )
-from app.modules.identity.domain.entities import User, generate_username_seed
+from app.modules.identity.domain.entities import (
+    User,
+    UserStatus,
+    generate_username_seed,
+)
 from app.modules.identity.domain.errors import (
     InvalidStateError,
     InvalidTokenError,
@@ -260,4 +264,39 @@ class GetCurrentUser:
         if user is None:
             raise UserNotFoundError("Пользователь не найден")
         ensure_account_can_authenticate(user)
+        return user
+
+
+class GetPublicProfile:
+    """Публичный профиль по хэндлу (псевдоним, без ПДн)."""
+
+    def __init__(self, *, users: UserRepository) -> None:
+        self._users = users
+
+    async def execute(self, *, username: str) -> User:
+        """Возвращает активного пользователя по username или 404.
+
+        Удалённые/заблокированные аккаунты публично не показываются.
+        """
+        user = await self._users.get_by_username(username)
+        if user is None or user.status is not UserStatus.ACTIVE:
+            raise UserNotFoundError("Профиль не найден")
+        return user
+
+
+class UpdateMyProfile:
+    """Редактирование собственного профиля (display_name)."""
+
+    def __init__(self, *, users: UserRepository) -> None:
+        self._users = users
+
+    async def execute(
+        self, *, user_id: uuid.UUID, display_name: str | None
+    ) -> User:
+        """Применяет правки профиля и сохраняет при изменении."""
+        user = await self._users.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError("Пользователь не найден")
+        if user.edit_profile(display_name=display_name):
+            return await self._users.update(user)
         return user
