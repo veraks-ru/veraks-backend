@@ -26,6 +26,7 @@ from app.modules.billing.adapters.repositories import (
     SqlAlchemyPrizeFundRepository,
     SqlAlchemySubscriptionRepository,
 )
+from app.modules.billing.adapters.season_directory import SqlAlchemySeasonDirectory
 from app.modules.billing.application.dto import Actor
 from app.modules.billing.application.use_cases import (
     AnnouncePrizeFund,
@@ -34,6 +35,7 @@ from app.modules.billing.application.use_cases import (
     CreatePayout,
     GetMySubscription,
     GetPrizeFund,
+    GetSeasonPrizeFund,
     ListPayouts,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
@@ -43,6 +45,7 @@ from app.modules.billing.domain.entities import SubscriptionPlan
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.gateways import (
     PayoutGateway,
+    SeasonDirectory,
     SubscriptionCheckoutGateway,
 )
 from app.modules.billing.ports.repositories import (
@@ -102,6 +105,11 @@ def get_payout_gateway() -> PayoutGateway:
     return YookassaPayoutGateway()
 
 
+def get_season_directory(session: SessionDep) -> SeasonDirectory:
+    """Резолв сезона по slug (чтение таблицы seasons в монолите)."""
+    return SqlAlchemySeasonDirectory(session)
+
+
 def get_audit_trail(session: SessionDep) -> AuditTrail:
     """Неизменяемый аудит-журнал (общая инфраструктура)."""
     return SqlAlchemyAuditTrail(session)
@@ -118,6 +126,7 @@ PayoutRepoDep = Annotated[PayoutRepository, Depends(get_payout_repository)]
 CheckoutGatewayDep = Annotated[
     SubscriptionCheckoutGateway, Depends(get_checkout_gateway)
 ]
+SeasonDirectoryDep = Annotated[SeasonDirectory, Depends(get_season_directory)]
 AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
 
 
@@ -226,6 +235,18 @@ def get_create_payout(
 def get_list_payouts(payouts: PayoutRepoDep) -> ListPayouts:
     """Use-case админ-обзора выплат."""
     return ListPayouts(payouts=payouts)
+
+
+def get_season_prize_fund(
+    seasons: SeasonDirectoryDep,
+    funds: PrizeFundRepoDep,
+    payouts: PayoutRepoDep,
+    ledger: LedgerRepoDep,
+) -> GetSeasonPrizeFund:
+    """Use-case прозрачности фонда по сезону."""
+    return GetSeasonPrizeFund(
+        seasons=seasons, funds=funds, payouts=payouts, ledger=ledger
+    )
 
 
 def get_approve_payout(

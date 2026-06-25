@@ -73,6 +73,7 @@ from app.modules.billing.domain.errors import (
     PayoutAlreadyDecidedError,
     PayoutNotFoundError,
     PrizeFundNotFoundError,
+    SeasonNotFoundError as BillingSeasonNotFoundError,
     SelfApprovalError,
     SubscriptionNotFoundError,
     SubscriptionPermissionError,
@@ -142,6 +143,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     # billing
     SubscriptionNotFoundError: status.HTTP_404_NOT_FOUND,
     PrizeFundNotFoundError: status.HTTP_404_NOT_FOUND,
+    BillingSeasonNotFoundError: status.HTTP_404_NOT_FOUND,
     PayoutNotFoundError: status.HTTP_404_NOT_FOUND,
     LedgerAccountNotFoundError: status.HTTP_404_NOT_FOUND,
     BillingPermissionError: status.HTTP_403_FORBIDDEN,

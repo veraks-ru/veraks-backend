@@ -22,7 +22,9 @@ Discipline: TDD for behavior changes. Keep `pytest` / `mypy app` / `ruff check a
 - [ ] A1 Users/Profiles: `get_by_username` repo; `GET /users/{username}`, `/predictions`, `/calibration`, `PATCH /users/me`, `GET /users/me/predictions`, `/users/me/payouts`. Cross-domain gateways → predictions/scoring(calibration)/billing(payouts). NOTE: settle display_name semantics here (Phase 0 E5 deferral).
 - [x] A2 crowd-signal `GET /events/{id}/predictions/summary` — `GetEventPredictionSummary` use-case (distribution per grade + consensus `c_e`), hidden until close (`PredictionSummaryHiddenError`→409, anti-anchoring §5). Public endpoint. 6 tests. 343 green.
 - [x] A4 `GET /billing/plans` + `GET /billing/subscriptions/me` (added `get_latest_by_user` to port+adapter+fake, `GetMySubscription` use-case, `PlanResponse`/`PlansResponse` schemas, 4 integration tests). 337 tests green.
-- [ ] A6 `GET /seasons/{slug}/prize-fund` (public, needs billing→seasons slug gateway + `PrizeFundRepository.get_by_season`), `GET /admin/payouts` (list).
+- [x] A6 `GET /admin/payouts` (list, admin, season filter) + `GET /seasons/{slug}/prize-fund` (public transparency: funds+balances+payouts; new `SeasonDirectory` billing→seasons gateway `SqlAlchemySeasonDirectory`, `PrizeFundRepository.list_by_season`, `GetSeasonPrizeFund` use-case, billing `SeasonNotFoundError`→404). 346 green.
+
+**Phase 2 COMPLETE except A1 (Users/Profiles).**
 
 ## Phase 3 — Workers / orchestration
 - [ ] B1 event auto-close worker: cron transitions events `open→closed` at `closes_at`, then `LockEventPredictions`.

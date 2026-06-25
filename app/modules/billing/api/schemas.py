@@ -7,7 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.modules.billing.application.dto import PrizeFundView
+from app.modules.billing.application.dto import PrizeFundView, SeasonPrizeFundView
 from app.modules.billing.domain.entities import (
     Payment,
     PaymentProvider,
@@ -215,4 +215,20 @@ class PayoutResponse(BaseModel):
             created_by=payout.created_by,
             approved_by=payout.approved_by,
             ledger_transaction_id=payout.ledger_transaction_id,
+        )
+
+
+class SeasonPrizeFundResponse(BaseModel):
+    """Прозрачность по сезону: фонды (с сальдо) и история выплат."""
+
+    season_slug: str
+    funds: list[PrizeFundResponse]
+    payouts: list[PayoutResponse]
+
+    @classmethod
+    def from_view(cls, view: SeasonPrizeFundView) -> "SeasonPrizeFundResponse":
+        return cls(
+            season_slug=view.season_slug,
+            funds=[PrizeFundResponse.from_view(f) for f in view.funds],
+            payouts=[PayoutResponse.from_domain(p) for p in view.payouts],
         )

@@ -90,6 +90,10 @@ class PrizeFundRepository(Protocol):
         """Фонд по идентификатору или ``None``."""
         ...
 
+    async def list_by_season(self, season_id: uuid.UUID) -> list[PrizeFund]:
+        """Фонды сезона (для публичной прозрачности по сезону)."""
+        ...
+
     async def update(self, fund: PrizeFund) -> PrizeFund:
         """Синхронизировать изменяемые поля (deposited, статус)."""
         ...

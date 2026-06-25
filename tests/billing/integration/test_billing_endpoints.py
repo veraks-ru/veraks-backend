@@ -30,6 +30,7 @@ from app.modules.billing.api.dependencies import (
     get_payment_repository,
     get_payout_repository,
     get_prize_fund_repository,
+    get_season_directory,
     get_subscription_repository,
 )
 from app.modules.billing.domain import chart
@@ -41,6 +42,7 @@ from tests.billing.fakes import (
     FakeAuditTrail,
     FakeCheckoutGateway,
     FakeClock,
+    FakeSeasonDirectory,
     InMemoryLedgerRepository,
     InMemoryPaymentRepository,
     InMemoryPayoutRepository,
@@ -73,6 +75,7 @@ class Ctx:
     client: TestClient
     ledger: InMemoryLedgerRepository
     funds: InMemoryPrizeFundRepository
+    seasons: FakeSeasonDirectory
     holder: dict
 
 
@@ -88,6 +91,7 @@ def ctx():
     funds = InMemoryPrizeFundRepository()
     payouts = InMemoryPayoutRepository()
     audit = FakeAuditTrail()
+    seasons = FakeSeasonDirectory()
     holder: dict = {"user": None}
 
     app = create_app()
@@ -98,6 +102,7 @@ def ctx():
     app.dependency_overrides[get_payout_repository] = lambda: payouts
     app.dependency_overrides[get_audit_trail] = lambda: audit
     app.dependency_overrides[get_checkout_gateway] = lambda: FakeCheckoutGateway()
+    app.dependency_overrides[get_season_directory] = lambda: seasons
     app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
 
     def _current_user() -> User:
@@ -110,7 +115,9 @@ def ctx():
 
     client = TestClient(app)
     try:
-        yield Ctx(client=client, ledger=ledger, funds=funds, holder=holder)
+        yield Ctx(
+            client=client, ledger=ledger, funds=funds, seasons=seasons, holder=holder
+        )
     finally:
         client.close()
 
@@ -259,6 +266,42 @@ def test_list_payouts_admin_only(ctx: Ctx) -> None:
     ctx.holder["user"] = _user(UserRole.USER)
     forbidden = ctx.client.get("/admin/payouts")
     assert forbidden.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_season_prize_fund_public_transparency(ctx: Ctx) -> None:
+    """GET /seasons/{slug}/prize-fund — публичная прозрачность фонда по сезону."""
+    season_id = uuid.uuid4()
+    ctx.seasons.set("2026q1", season_id)
+
+    admin = _user(UserRole.ADMIN)
+    ctx.holder["user"] = admin
+    fund_resp = ctx.client.post(
+        "/admin/prize-funds",
+        json={
+            "sponsor_name": "Acme",
+            "committed_kopecks": 1_000_000,
+            "season_id": str(season_id),
+        },
+    )
+    assert fund_resp.status_code == 201, fund_resp.text
+    fund_id = fund_resp.json()["id"]
+    ctx.client.post(
+        f"/admin/prize-funds/{fund_id}/deposit", json={"amount_kopecks": 1_000_000}
+    )
+
+    # Публично (без авторизации).
+    ctx.holder["user"] = None
+    resp = ctx.client.get("/seasons/2026q1/prize-fund")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["season_slug"] == "2026q1"
+    assert len(body["funds"]) == 1
+    assert body["funds"][0]["balance_kopecks"] == 1_000_000
+
+
+def test_season_prize_fund_unknown_season_404(ctx: Ctx) -> None:
+    resp = ctx.client.get("/seasons/nope/prize-fund")
+    assert resp.status_code == 404
 
 
 def test_admin_endpoint_requires_auth(ctx: Ctx) -> None:

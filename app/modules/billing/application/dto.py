@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from app.modules.billing.domain.entities import PrizeFund
+from app.modules.billing.domain.entities import Payout, PrizeFund
 from app.modules.identity.domain.entities import UserRole
 
 
@@ -23,3 +23,12 @@ class PrizeFundView:
 
     fund: PrizeFund
     balance_kopecks: int
+
+
+@dataclass(frozen=True, slots=True)
+class SeasonPrizeFundView:
+    """Прозрачность по сезону: его фонды (с сальдо) и история выплат."""
+
+    season_slug: str
+    funds: list[PrizeFundView]
+    payouts: list[Payout]

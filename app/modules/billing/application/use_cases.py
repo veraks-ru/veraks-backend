@@ -15,7 +15,11 @@ import uuid
 from collections.abc import Mapping
 from datetime import timedelta
 
-from app.modules.billing.application.dto import Actor, PrizeFundView
+from app.modules.billing.application.dto import (
+    Actor,
+    PrizeFundView,
+    SeasonPrizeFundView,
+)
 from app.modules.billing.domain import chart
 from app.modules.billing.domain.entities import (
     Payment,
@@ -33,6 +37,7 @@ from app.modules.billing.domain.errors import (
     LedgerAccountNotFoundError,
     PayoutNotFoundError,
     PrizeFundNotFoundError,
+    SeasonNotFoundError,
     SubscriptionNotFoundError,
 )
 from app.modules.billing.domain.ledger import (
@@ -50,7 +55,10 @@ from app.modules.billing.domain.policies import (
     ensure_distinct_approver,
 )
 from app.modules.billing.ports.clock import Clock
-from app.modules.billing.ports.gateways import SubscriptionCheckoutGateway
+from app.modules.billing.ports.gateways import (
+    SeasonDirectory,
+    SubscriptionCheckoutGateway,
+)
 from app.modules.billing.ports.repositories import (
     LedgerRepository,
     PaymentRepository,
@@ -428,6 +436,42 @@ class GetPrizeFund:
         # доступный остаток = кредит − дебет = −(дебет − кредит).
         available = -await self._ledger.balance(fund.ledger_account_id)
         return PrizeFundView(fund=fund, balance_kopecks=available)
+
+
+class GetSeasonPrizeFund:
+    """Прозрачность по сезону: фонды сезона (с сальдо) + история выплат (публично)."""
+
+    def __init__(
+        self,
+        *,
+        seasons: SeasonDirectory,
+        funds: PrizeFundRepository,
+        payouts: PayoutRepository,
+        ledger: LedgerRepository,
+    ) -> None:
+        self._seasons = seasons
+        self._funds = funds
+        self._payouts = payouts
+        self._ledger = ledger
+
+    async def execute(self, *, slug: str) -> SeasonPrizeFundView:
+        """Резолвит сезон по slug, собирает его фонды и выплаты.
+
+        Неизвестный сезон → :class:`SeasonNotFoundError` (маппится в 404).
+        """
+        season_id = await self._seasons.resolve_slug(slug)
+        if season_id is None:
+            raise SeasonNotFoundError(f"Сезон '{slug}' не найден")
+        funds = await self._funds.list_by_season(season_id)
+        views = [
+            PrizeFundView(
+                fund=fund,
+                balance_kopecks=-await self._ledger.balance(fund.ledger_account_id),
+            )
+            for fund in funds
+        ]
+        payouts = await self._payouts.list(season_id=season_id)
+        return SeasonPrizeFundView(season_slug=slug, funds=views, payouts=payouts)
 
 
 class GetMySubscription:

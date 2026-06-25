@@ -169,6 +169,15 @@ class SqlAlchemyPrizeFundRepository:
         orm = await self._session.get(PrizeFundORM, fund_id)
         return orm.to_domain() if orm else None
 
+    async def list_by_season(self, season_id: uuid.UUID) -> list[PrizeFund]:
+        stmt = (
+            select(PrizeFundORM)
+            .where(PrizeFundORM.season_id == season_id)
+            .order_by(PrizeFundORM.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [orm.to_domain() for orm in rows]
+
     async def update(self, fund: PrizeFund) -> PrizeFund:
         orm = await self._session.get(PrizeFundORM, fund.id)
         if orm is None:  # pragma: no cover

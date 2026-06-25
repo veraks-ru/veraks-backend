@@ -136,9 +136,25 @@ class InMemoryPrizeFundRepository:
     async def get_by_id(self, fund_id: uuid.UUID) -> PrizeFund | None:
         return self.items.get(fund_id)
 
+    async def list_by_season(self, season_id: uuid.UUID) -> list[PrizeFund]:
+        return [f for f in self.items.values() if f.season_id == season_id]
+
     async def update(self, fund: PrizeFund) -> PrizeFund:
         self.items[fund.id] = fund
         return fund
+
+
+class FakeSeasonDirectory:
+    """Резолв сезона по slug в памяти (slug → id)."""
+
+    def __init__(self, by_slug: dict[str, uuid.UUID] | None = None) -> None:
+        self._by_slug = by_slug or {}
+
+    def set(self, slug: str, season_id: uuid.UUID) -> None:
+        self._by_slug[slug] = season_id
+
+    async def resolve_slug(self, slug: str) -> uuid.UUID | None:
+        return self._by_slug.get(slug)
 
 
 class InMemoryPayoutRepository:

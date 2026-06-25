@@ -56,3 +56,16 @@ class PayoutGateway(Protocol):
     ) -> PayoutInstruction:
         """Инициировать выплату; вернуть идентификатор у провайдера."""
         ...
+
+
+@runtime_checkable
+class SeasonDirectory(Protocol):
+    """Резолв сезона по публичному ``slug`` (исходящая зависимость к seasons).
+
+    Прозрачность фонда по сезону требует перевести slug → id; billing не тянет
+    внутренние типы seasons, ему достаточно идентификатора.
+    """
+
+    async def resolve_slug(self, slug: str) -> uuid.UUID | None:
+        """``id`` сезона по slug или ``None``, если такого сезона нет."""
+        ...

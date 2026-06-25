@@ -72,6 +72,10 @@ class PrizeFundNotFoundError(BillingError):
     """Призовой фонд не найден."""
 
 
+class SeasonNotFoundError(BillingError):
+    """Сезон (по slug) для прозрачности фонда не найден."""
+
+
 class PayoutNotFoundError(BillingError):
     """Выплата не найдена."""
 

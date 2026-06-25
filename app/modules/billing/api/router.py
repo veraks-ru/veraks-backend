@@ -22,6 +22,7 @@ from app.modules.billing.api.dependencies import (
     get_list_payouts,
     get_my_subscription,
     get_prize_fund,
+    get_season_prize_fund,
     get_record_sponsor_deposit,
     get_record_subscription_payment,
     get_start_subscription,
@@ -36,6 +37,7 @@ from app.modules.billing.api.schemas import (
     PlansResponse,
     PrizeFundResponse,
     RecordDepositRequest,
+    SeasonPrizeFundResponse,
     StartSubscriptionRequest,
     StartSubscriptionResponse,
     SubscriptionResponse,
@@ -47,6 +49,7 @@ from app.modules.billing.application.use_cases import (
     CreatePayout,
     GetMySubscription,
     GetPrizeFund,
+    GetSeasonPrizeFund,
     ListPayouts,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
@@ -165,6 +168,20 @@ async def read_prize_fund(
     """Вернуть фонд и фактическое сальдо его счёта PRIZE."""
     view = await uc.execute(fund_id=fund_id)
     return PrizeFundResponse.from_view(view)
+
+
+@router.get(
+    "/seasons/{slug}/prize-fund",
+    response_model=SeasonPrizeFundResponse,
+    summary="Фонд сезона + история выплат (публично, прозрачность)",
+)
+async def read_season_prize_fund(
+    slug: str,
+    uc: Annotated[GetSeasonPrizeFund, Depends(get_season_prize_fund)],
+) -> SeasonPrizeFundResponse:
+    """Вернуть фонды сезона (с сальдо) и историю выплат; 404 для неизвестного сезона."""
+    view = await uc.execute(slug=slug)
+    return SeasonPrizeFundResponse.from_view(view)
 
 
 @router.post(
