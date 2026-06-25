@@ -218,10 +218,37 @@ async def test_roll_does_not_auto_finalize_when_gated() -> None:
             dispute_guard=FakeDisputeGuard(),
         ),
         clock=FakeClock(LATER),
-        auto_finalize=False,  # авто-финализация выключена (дизайн §6.4/§6.5)
+        auto_finalize=False,  # явно выключено — ручной режим
     )
     await roll.execute()
 
     season = await season_repo.get_by_id(season_id)
     assert season is not None and season.status is SeasonStatus.ACTIVE  # не тронут
     assert season_repo.finalizations == []
+
+
+async def test_roll_auto_finalizes_expired_active_season_by_default() -> None:
+    # Дефолт ``auto_finalize=True``: истёкший активный сезон без открытых споров
+    # закрывается таймером (боевой DisputeGuard блокирует закрытие при спорах).
+    season_id = uuid.uuid4()
+    season_repo = InMemorySeasonRepository()
+    await season_repo.add(
+        _active_season(season_id, ends_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+    )  # ends в прошлом относительно LATER
+    ratings = InMemoryRatingRepository()
+    roll = RollSeasons(
+        seasons=season_repo,
+        finalize=_finalize_uc(
+            season_repo=season_repo,
+            ratings=ratings,
+            season_id=season_id,
+            dispute_guard=FakeDisputeGuard(has_open=False),
+        ),
+        clock=FakeClock(LATER),
+        # auto_finalize не передан — берётся дефолт (True)
+    )
+    await roll.execute()
+
+    season = await season_repo.get_by_id(season_id)
+    assert season is not None and season.status is SeasonStatus.FINISHED
+    assert len(season_repo.finalizations) == 1

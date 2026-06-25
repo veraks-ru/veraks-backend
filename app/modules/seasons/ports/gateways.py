@@ -1,8 +1,9 @@
 """Порты-шлюзы seasons к данным других доменов.
 
 ``DisputeGuard`` — проверка открытых споров по событиям сезона перед
-финализацией. Домен resolutions/disputes ещё не построен, поэтому боевой
-адаптер — заглушка ``AlwaysAllowsDisputeGuard`` (fail-loud, см. дизайн §6.4).
+финализацией. Боевой адаптер — ``ResolutionDisputeGuard`` (домен resolutions);
+он связывается с seasons в composition root scoring/воркера, где направление
+зависимостей ``scoring → seasons`` сохранено (дизайн §6.4).
 """
 
 from __future__ import annotations

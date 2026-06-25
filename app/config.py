@@ -92,11 +92,11 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str = "redis://localhost:6379/0"
 
-    # Авто-финализация сезонов в таймерном ``season_roll``. По умолчанию ВЫКЛ:
-    # даже с реальной проверкой открытых споров (домен resolutions) включение
-    # авто-закрытия призовых сезонов — осознанное эксплуатационное решение
-    # (дизайн §6.4/§6.5).
-    seasons_auto_finalize: bool = False
+    # Авто-финализация сезонов в таймерном ``season_roll``. Включена: боевой
+    # ``ResolutionDisputeGuard`` (домен resolutions) блокирует финализацию сезона
+    # с открытыми спорами, поэтому таймерное авто-закрытие безопасно (§6.4/§6.5).
+    # Выключить можно через env, если нужно временно перевести на ручной режим.
+    seasons_auto_finalize: bool = True
 
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     esia: EsiaSettings = Field(default_factory=EsiaSettings)

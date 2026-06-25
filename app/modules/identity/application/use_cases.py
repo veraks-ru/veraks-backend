@@ -30,6 +30,7 @@ from app.modules.identity.domain.value_objects import EsiaIdentity
 from app.modules.identity.ports.esia import EsiaGateway
 from app.modules.identity.ports.repositories import (
     SnilsAlreadyExistsError,
+    UsernameTakenError,
     UserRepository,
 )
 from app.modules.identity.ports.security import (
@@ -42,6 +43,8 @@ from app.modules.identity.ports.security import (
 
 _STATE_TTL_SECONDS = 600
 _MAX_USERNAME_ATTEMPTS = 1000
+# Сколько раз переаллоцировать username при гонке на UNIQUE(username) во вставке.
+_MAX_REGISTER_ATTEMPTS = 5
 
 
 class InitiateEsiaLogin:
@@ -126,16 +129,27 @@ class CompleteEsiaLogin:
             username=await self._allocate_username(identity),
             real_name_enc=self._encrypt_name(identity),
         )
-        try:
-            created = await self._users.add(user)
-        except SnilsAlreadyExistsError:
-            # Параллельная регистрация того же гражданина победила — входим в неё.
-            winner = await self._users.get_by_snils_hash(snils_hash)
-            if winner is None:  # pragma: no cover — UNIQUE гарантирует наличие
-                raise
-            ensure_account_can_authenticate(winner)
-            return winner, False
-        return created, True
+        # Регистрация с защитой от двух гонок на UNIQUE-индексах:
+        #  * snils_hash — тот же гражданин зарегался параллельно → входим в него;
+        #  * username — хэндл заняли между pre-check и INSERT → переаллоцируем и
+        #    повторяем (логин не должен падать из-за гонки имён).
+        for _attempt in range(_MAX_REGISTER_ATTEMPTS):
+            try:
+                created = await self._users.add(user)
+            except SnilsAlreadyExistsError:
+                winner = await self._users.get_by_snils_hash(snils_hash)
+                if winner is None:  # pragma: no cover — UNIQUE гарантирует наличие
+                    raise
+                ensure_account_can_authenticate(winner)
+                return winner, False
+            except UsernameTakenError:
+                user.username = await self._allocate_username(identity)
+                continue
+            return created, True
+        # Исчерпали попытки переаллокации хэндла — крайне маловероятно.
+        raise UsernameTakenError(  # pragma: no cover — защитный предел
+            "Не удалось подобрать свободный username при регистрации"
+        )
 
     def _encrypt_name(self, identity: EsiaIdentity) -> bytes | None:
         """Шифрует ФИО для хранения (None, если ФИО пустое)."""

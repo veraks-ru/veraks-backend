@@ -137,11 +137,11 @@ class RollSeasons:
     """Таймерный переход сезонов: активация наступивших, финализация истёкших.
 
     Активация наступивших ``upcoming`` сезонов безопасна и включена всегда.
-    Авто-финализация истёкших ``active`` сезонов **выключена по умолчанию**
-    (``auto_finalize=False``): пока ``DisputeGuard`` — заглушка (TODO(resolutions)),
-    автоматически закрывать сезон поверх возможных открытых споров нельзя
-    (дизайн §6.4/§6.5). Финализация выполняется вручную админом, либо после
-    замены заглушки реальной проверкой.
+    Авто-финализация истёкших ``active`` сезонов управляется флагом
+    ``auto_finalize`` (по умолчанию ВКЛ): боевой ``DisputeGuard``
+    (``ResolutionDisputeGuard``) блокирует финализацию поверх открытых споров,
+    поэтому таймерное авто-закрытие безопасно (дизайн §6.4/§6.5). Флаг оставлен
+    для возможности временно перевести закрытие сезонов в ручной режим.
     """
 
     def __init__(
@@ -150,7 +150,7 @@ class RollSeasons:
         seasons: SeasonRepository,
         finalize: FinalizeSeason,
         clock: Clock,
-        auto_finalize: bool = False,
+        auto_finalize: bool = True,
     ) -> None:
         self._seasons = seasons
         self._finalize = finalize
@@ -169,8 +169,8 @@ class RollSeasons:
 
         if not self._auto_finalize:
             logger.info(
-                "Auto-finalization is gated (DisputeGuard is a stub) — "
-                "skipping automatic season finalization. TODO(resolutions)."
+                "Auto-finalization disabled by config — skipping timer-based "
+                "season finalization (manual admin finalization only)."
             )
             return
 

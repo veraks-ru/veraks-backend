@@ -103,7 +103,8 @@ async def season_roll(_ctx: dict[Any, Any]) -> None:
     """Таймерный переход сезонов: активация наступивших, финализация истёкших.
 
     Авто-финализация управляется флагом ``seasons_auto_finalize`` (по умолчанию
-    ВЫКЛ, пока ``DisputeGuard`` — заглушка; дизайн §6.4/§6.5).
+    ВКЛ; боевой ``ResolutionDisputeGuard`` блокирует закрытие сезона с открытыми
+    спорами, дизайн §6.4/§6.5).
     """
     settings = get_settings()
     async with session_scope() as session:

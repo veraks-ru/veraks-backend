@@ -29,6 +29,7 @@ from app.modules.identity.domain.errors import (
     UnconfirmedEsiaAccountError,
 )
 from app.modules.identity.domain.value_objects import EsiaIdentity
+from app.modules.identity.ports.repositories import UsernameTakenError
 from tests.identity.fakes import (
     FakeEsiaGateway,
     FakeRefreshTokenStore,
@@ -104,6 +105,42 @@ async def test_first_login_creates_account(
     # Access-токен валиден.
     claims = token_issuer.verify_access(result.tokens.access_token)
     assert claims.user_id == result.user_id
+
+
+class _UsernameRaceRepo(InMemoryUserRepository):
+    """Эмулирует гонку UNIQUE(username): первый ``add`` падает, затем успех."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._raised = False
+
+    async def add(self, user: User) -> User:
+        if not self._raised:
+            self._raised = True
+            raise UsernameTakenError(user.username)
+        return await super().add(user)
+
+
+async def test_login_retries_on_username_race(
+    confirmed_identity, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+) -> None:
+    """Гонка на UNIQUE(username) при регистрации не валит логин — хэндл переаллоцируется."""
+    repo = _UsernameRaceRepo()
+    uc = _build_complete_login(
+        identity=confirmed_identity,
+        repo=repo,
+        state_store=state_store,
+        refresh_store=refresh_store,
+        hasher=snils_hasher,
+        encryptor=encryptor,
+        token_issuer=token_issuer,
+    )
+
+    result = await uc.execute(code="abc", state="valid-state")
+
+    assert result.is_new_user is True
+    stored = await repo.get_by_id(result.user_id)
+    assert stored is not None and stored.username == "predictor"
 
 
 async def test_second_login_same_citizen_reuses_account(

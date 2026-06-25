@@ -234,6 +234,19 @@ async def test_accept_requires_new_outcome(stand, editor, participant, arbiter):
         await stand.decide.execute(dispute_id=dispute.id, actor=arbiter, accept=True)
 
 
+async def test_accept_rejects_overturn_to_same_outcome(stand, editor, participant, arbiter):
+    # Overturn в тот же исход бессмыслен: лишняя superseding-строка + повторное
+    # открытие окна. Должен быть отвергнут до записи ревизии.
+    event_id, dispute = await _open_dispute(stand, editor, participant, outcome=True)
+    with pytest.raises(InvalidResolutionDataError):
+        await stand.decide.execute(
+            dispute_id=dispute.id, actor=arbiter, accept=True, new_outcome=True
+        )
+    # История не выросла — ревизия не записана.
+    history = await stand.resolutions.list_for_event(event_id)
+    assert len(history) == 1
+
+
 async def test_cannot_decide_own_dispute(stand, editor, participant):
     _, dispute = await _open_dispute(stand, editor, participant)
     # Тот же пользователь (по id) пытается решить свой спор, но с ролью арбитра.

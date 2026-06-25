@@ -337,6 +337,10 @@ class DecideDispute:
         current = await self._resolutions.current_final(dispute.event_id)
         if current is None:
             raise ResolutionNotFoundError("У события нет зафиксированного исхода")
+        if new_outcome == current.outcome:
+            raise InvalidResolutionDataError(
+                "Новый исход overturn'а совпадает с текущим — пересмотр не нужен"
+            )
 
         window_end = now + self._window
         revision = Resolution.finalize(
