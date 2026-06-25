@@ -34,6 +34,7 @@ from app.modules.billing.application.use_cases import (
     CreatePayout,
     GetMySubscription,
     GetPrizeFund,
+    ListPayouts,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
     StartSubscription,
@@ -220,6 +221,11 @@ def get_create_payout(
 ) -> CreatePayout:
     """Use-case инициирования выплаты (maker)."""
     return CreatePayout(payouts=payouts, funds=funds, audit=audit, clock=clock)
+
+
+def get_list_payouts(payouts: PayoutRepoDep) -> ListPayouts:
+    """Use-case админ-обзора выплат."""
+    return ListPayouts(payouts=payouts)
 
 
 def get_approve_payout(

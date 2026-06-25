@@ -444,6 +444,20 @@ class GetMySubscription:
         return subscription
 
 
+class ListPayouts:
+    """Админ-обзор выплат (опц. фильтр по сезону)."""
+
+    def __init__(self, *, payouts: PayoutRepository) -> None:
+        self._payouts = payouts
+
+    async def execute(
+        self, *, actor: Actor, season_id: uuid.UUID | None = None
+    ) -> list[Payout]:
+        """Список выплат, новые сверху. Только для admin."""
+        ensure_can_manage_prize_funds(actor.role)
+        return await self._payouts.list(season_id=season_id)
+
+
 # ── Выплаты призов (PRIZE, maker-checker) ─────────────────────────────────
 
 

@@ -205,6 +205,13 @@ class SqlAlchemyPayoutRepository:
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
+    async def list(self, *, season_id: uuid.UUID | None = None) -> list[Payout]:
+        stmt = select(PayoutORM).order_by(PayoutORM.created_at.desc())
+        if season_id is not None:
+            stmt = stmt.where(PayoutORM.season_id == season_id)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [orm.to_domain() for orm in rows]
+
     async def update(self, payout: Payout) -> Payout:
         orm = await self._session.get(PayoutORM, payout.id)
         if orm is None:  # pragma: no cover

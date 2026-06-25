@@ -232,6 +232,35 @@ def test_prize_payout_maker_checker_flow(ctx: Ctx) -> None:
     assert public.json()["balance_kopecks"] == 1_000_000 - 10_000
 
 
+def test_list_payouts_admin_only(ctx: Ctx) -> None:
+    """GET /admin/payouts: admin видит список; обычный пользователь — 403."""
+    maker = _user(UserRole.ADMIN)
+    ctx.holder["user"] = maker
+    fund_id = ctx.client.post(
+        "/admin/prize-funds",
+        json={"sponsor_name": "Acme", "committed_kopecks": 1_000_000},
+    ).json()["id"]
+    ctx.client.post(
+        f"/admin/prize-funds/{fund_id}/deposit", json={"amount_kopecks": 1_000_000}
+    )
+    ctx.client.post(
+        "/admin/payouts",
+        json={
+            "user_id": str(uuid.uuid4()),
+            "prize_fund_id": fund_id,
+            "amount_kopecks": 5_000,
+        },
+    )
+
+    listed = ctx.client.get("/admin/payouts")
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()) == 1
+
+    ctx.holder["user"] = _user(UserRole.USER)
+    forbidden = ctx.client.get("/admin/payouts")
+    assert forbidden.status_code == status.HTTP_403_FORBIDDEN
+
+
 def test_admin_endpoint_requires_auth(ctx: Ctx) -> None:
     ctx.holder["user"] = None
     resp = ctx.client.post(

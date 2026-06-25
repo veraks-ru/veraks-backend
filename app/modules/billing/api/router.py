@@ -19,6 +19,7 @@ from app.modules.billing.api.dependencies import (
     get_approve_payout,
     get_cancel_subscription,
     get_create_payout,
+    get_list_payouts,
     get_my_subscription,
     get_prize_fund,
     get_record_sponsor_deposit,
@@ -46,6 +47,7 @@ from app.modules.billing.application.use_cases import (
     CreatePayout,
     GetMySubscription,
     GetPrizeFund,
+    ListPayouts,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
     StartSubscription,
@@ -209,6 +211,21 @@ async def record_sponsor_deposit(
 
 
 # ── Выплаты призов (призовая касса, maker-checker) ────────────────────────
+
+
+@router.get(
+    "/admin/payouts",
+    response_model=list[PayoutResponse],
+    summary="Список выплат (admin, опц. фильтр по сезону)",
+)
+async def list_payouts(
+    actor: ActorDep,
+    uc: Annotated[ListPayouts, Depends(get_list_payouts)],
+    season_id: uuid.UUID | None = None,
+) -> list[PayoutResponse]:
+    """Вернуть выплаты (новые сверху); только admin."""
+    payouts = await uc.execute(actor=actor, season_id=season_id)
+    return [PayoutResponse.from_domain(p) for p in payouts]
 
 
 @router.post(

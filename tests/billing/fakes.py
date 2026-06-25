@@ -166,6 +166,12 @@ class InMemoryPayoutRepository:
                 return p
         return None
 
+    async def list(self, *, season_id: uuid.UUID | None = None) -> list[Payout]:
+        items = list(self.items.values())
+        if season_id is not None:
+            items = [p for p in items if p.season_id == season_id]
+        return sorted(items, key=lambda p: p.created_at, reverse=True)
+
     async def update(self, payout: Payout) -> Payout:
         self.items[payout.id] = payout
         return payout
