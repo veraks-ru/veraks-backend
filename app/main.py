@@ -29,6 +29,7 @@ from app.modules.predictions.domain.errors import (
     PredictionsClosedError,
     PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
+    ProfileUserNotFoundError,
 )
 from app.modules.scoring.api.router import router as scoring_router
 from app.modules.scoring.domain.errors import (
@@ -114,6 +115,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     InvalidEventDataError: status.HTTP_400_BAD_REQUEST,
     # predictions
     PredictionTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
+    ProfileUserNotFoundError: status.HTTP_404_NOT_FOUND,
     PredictionNotFoundError: status.HTTP_404_NOT_FOUND,
     PredictionsClosedError: status.HTTP_409_CONFLICT,
     PredictionLockedError: status.HTTP_409_CONFLICT,

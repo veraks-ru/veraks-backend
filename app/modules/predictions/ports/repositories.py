@@ -51,6 +51,16 @@ class PredictionRepository(Protocol):
         """Все прогнозы события (для последующего скоринга домена scoring)."""
         ...
 
+    async def list_for_user(
+        self, user_id: uuid.UUID, *, resolved_only: bool = False
+    ) -> list[Prediction]:
+        """Прогнозы пользователя, новые сверху.
+
+        ``resolved_only=True`` оставляет только засчитанные (есть ``brier_score``)
+        — для публичного трек-рекорда; ``False`` — все, включая ожидающие.
+        """
+        ...
+
 
 class PredictionAlreadyExistsError(Exception):
     """Нарушение ``UNIQUE(user_id, event_id)`` — параллельная постановка прогноза."""

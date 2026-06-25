@@ -15,6 +15,8 @@ import pytest
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
     GetMyPrediction,
+    ListMyPredictions,
+    ListUserPredictions,
     LockEventPredictions,
     PlacePrediction,
 )
@@ -24,12 +26,14 @@ from app.modules.predictions.domain.errors import (
     PredictionsClosedError,
     PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
+    ProfileUserNotFoundError,
 )
 from tests.predictions.conftest import FIXED_NOW
 from tests.predictions.fakes import (
     FakeAuditRecorder,
     FakeClock,
     FakeEventGateway,
+    FakeUserDirectory,
     InMemoryPredictionRepository,
 )
 
@@ -262,3 +266,59 @@ async def test_lock_event_predictions_locks_all(
         )
         == 0
     )
+
+
+# ── Трек-рекорд (ListMyPredictions / ListUserPredictions) ─────────────────
+
+
+def _resolved(user_id, event_id, grade, brier) -> "object":
+    from decimal import Decimal
+
+    from app.modules.predictions.domain.entities import Prediction
+
+    p = Prediction.place(user_id=user_id, event_id=event_id, grade=grade)
+    p.brier_score = Decimal(str(brier))
+    return p
+
+
+async def test_my_predictions_returns_all_including_pending(predictions, user_id) -> None:
+    from app.modules.predictions.domain.entities import Prediction
+
+    pending = Prediction.place(
+        user_id=user_id, event_id=uuid.uuid4(), grade=ConfidenceGrade.FIFTY_FIFTY
+    )
+    await predictions.add(pending)
+    await predictions.add(
+        _resolved(user_id, uuid.uuid4(), ConfidenceGrade.PROBABLY_YES, 0.09)
+    )
+
+    items = await ListMyPredictions(predictions=predictions).execute(user_id=user_id)
+    assert len(items) == 2
+
+
+async def test_user_predictions_only_resolved(predictions, user_id) -> None:
+    from app.modules.predictions.domain.entities import Prediction
+
+    await predictions.add(
+        Prediction.place(
+            user_id=user_id, event_id=uuid.uuid4(), grade=ConfidenceGrade.FIFTY_FIFTY
+        )
+    )  # ожидающий — публично не показывается
+    await predictions.add(
+        _resolved(user_id, uuid.uuid4(), ConfidenceGrade.DEFINITELY_YES, 0.01)
+    )
+    users = FakeUserDirectory({"alice": user_id})
+
+    items = await ListUserPredictions(users=users, predictions=predictions).execute(
+        username="alice"
+    )
+    assert len(items) == 1
+    assert items[0].brier_score is not None
+
+
+async def test_user_predictions_unknown_profile_raises(predictions) -> None:
+    users = FakeUserDirectory()
+    with pytest.raises(ProfileUserNotFoundError):
+        await ListUserPredictions(users=users, predictions=predictions).execute(
+            username="ghost"
+        )

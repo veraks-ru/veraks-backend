@@ -24,12 +24,14 @@ from app.modules.predictions.api.dependencies import (
     get_clock,
     get_event_gateway,
     get_prediction_repository,
+    get_user_directory,
 )
 from tests.predictions.conftest import FIXED_NOW
 from tests.predictions.fakes import (
     FakeAuditRecorder,
     FakeClock,
     FakeEventGateway,
+    FakeUserDirectory,
     InMemoryPredictionRepository,
 )
 
@@ -65,6 +67,9 @@ def make_client(open_snapshot):
         app.dependency_overrides[get_event_gateway] = lambda: event_gateway
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
         app.dependency_overrides[get_audit_recorder] = lambda: FakeAuditRecorder()
+        app.dependency_overrides[get_user_directory] = lambda: FakeUserDirectory(
+            {user.username: user.id}
+        )
         if authenticated:
             app.dependency_overrides[get_current_user] = lambda: user
 
@@ -184,6 +189,57 @@ def test_predictions_summary_after_close(make_client, closed_snapshot) -> None:
     assert body["total_count"] == 3
     assert body["distribution"]["definitely_yes"] == 2
     assert body["mean_probability"] == "0.70"  # (0.9+0.9+0.3)/3
+
+
+def test_my_predictions_lists_own(make_client, open_snapshot) -> None:
+    """GET /users/me/predictions — все свои прогнозы, включая ожидающие."""
+    client, repo, _, user = make_client()
+    from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
+
+    repo.seed(
+        Prediction.place(
+            user_id=user.id,
+            event_id=open_snapshot.event_id,
+            grade=ConfidenceGrade.PROBABLY_YES,
+        )
+    )
+    resp = client.get("/users/me/predictions")
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()) == 1
+
+
+def test_my_predictions_requires_auth(make_client) -> None:
+    client, _, _, _ = make_client(authenticated=False)
+    assert client.get("/users/me/predictions").status_code == 401
+
+
+def test_user_predictions_public_only_resolved(make_client) -> None:
+    """GET /users/{username}/predictions — публично, только засчитанные."""
+    from decimal import Decimal
+
+    from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
+
+    client, repo, _, user = make_client(authenticated=False)
+    pending = Prediction.place(
+        user_id=user.id, event_id=uuid.uuid4(), grade=ConfidenceGrade.FIFTY_FIFTY
+    )
+    resolved = Prediction.place(
+        user_id=user.id, event_id=uuid.uuid4(), grade=ConfidenceGrade.DEFINITELY_YES
+    )
+    resolved.brier_score = Decimal("0.01")
+    repo.seed(pending)
+    repo.seed(resolved)
+
+    resp = client.get(f"/users/{user.username}/predictions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == 1  # ожидающий скрыт
+    assert body[0]["brier_score"] is not None
+
+
+def test_user_predictions_unknown_profile_404(make_client) -> None:
+    client, _, _, _ = make_client(authenticated=False)
+    assert client.get("/users/ghost/predictions").status_code == 404
 
 
 def test_default_clock_is_system_clock() -> None:

@@ -46,6 +46,19 @@ class FakeEventGateway:
         return self._by_id.get(event_id)
 
 
+class FakeUserDirectory:
+    """Резолв username → user_id в памяти (только «активные»)."""
+
+    def __init__(self, by_username: dict[str, uuid.UUID] | None = None) -> None:
+        self._by_username = by_username or {}
+
+    def set(self, username: str, user_id: uuid.UUID) -> None:
+        self._by_username[username] = user_id
+
+    async def resolve_username(self, username: str) -> uuid.UUID | None:
+        return self._by_username.get(username)
+
+
 class FakeAuditRecorder:
     """Собирает записи истории в список (для проверок в тестах)."""
 
@@ -109,6 +122,15 @@ class InMemoryPredictionRepository:
             for p in self._by_id.values()
             if p.event_id == event_id
         ]
+
+    async def list_for_user(
+        self, user_id: uuid.UUID, *, resolved_only: bool = False
+    ) -> list[Prediction]:
+        items = [p for p in self._by_id.values() if p.user_id == user_id]
+        if resolved_only:
+            items = [p for p in items if p.brier_score is not None]
+        items.sort(key=lambda p: p.created_at, reverse=True)
+        return [self._clone(p) for p in items]  # type: ignore[misc]
 
     @staticmethod
     def _clone(prediction: Prediction | None) -> Prediction | None:

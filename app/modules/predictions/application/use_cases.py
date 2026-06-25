@@ -27,6 +27,7 @@ from app.modules.predictions.domain.errors import (
     PredictionNotFoundError,
     PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
+    ProfileUserNotFoundError,
 )
 from app.modules.predictions.domain.policies import ensure_event_accepts_predictions
 from app.modules.predictions.ports.audit import AuditRecorder
@@ -36,6 +37,7 @@ from app.modules.predictions.ports.repositories import (
     PredictionAlreadyExistsError,
     PredictionRepository,
 )
+from app.modules.predictions.ports.users import UserDirectory
 
 _ACTION_CREATED = "prediction.created"
 _ACTION_UPDATED = "prediction.updated"
@@ -188,6 +190,34 @@ class GetEventPredictionSummary:
             distribution=distribution,
             mean_probability=mean,
         )
+
+
+class ListMyPredictions:
+    """Свои прогнозы (все, включая ожидающие разрешения)."""
+
+    def __init__(self, *, predictions: PredictionRepository) -> None:
+        self._predictions = predictions
+
+    async def execute(self, *, user_id: uuid.UUID) -> list[Prediction]:
+        """Прогнозы текущего пользователя, новые сверху."""
+        return await self._predictions.list_for_user(user_id)
+
+
+class ListUserPredictions:
+    """Публичный трек-рекорд: разрешённые прогнозы пользователя по хэндлу."""
+
+    def __init__(
+        self, *, users: UserDirectory, predictions: PredictionRepository
+    ) -> None:
+        self._users = users
+        self._predictions = predictions
+
+    async def execute(self, *, username: str) -> list[Prediction]:
+        """Разрешённые (засчитанные) прогнозы пользователя; 404, если нет."""
+        user_id = await self._users.resolve_username(username)
+        if user_id is None:
+            raise ProfileUserNotFoundError("Профиль не найден")
+        return await self._predictions.list_for_user(user_id, resolved_only=True)
 
 
 class LockEventPredictions:

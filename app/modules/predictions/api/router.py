@@ -16,6 +16,8 @@ from fastapi import APIRouter, Depends
 from app.modules.identity.api.dependencies import CurrentUser
 from app.modules.predictions.api.dependencies import (
     get_event_prediction_summary,
+    get_list_my_predictions,
+    get_list_user_predictions,
     get_my_prediction,
     get_place_prediction,
 )
@@ -27,6 +29,8 @@ from app.modules.predictions.api.schemas import (
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
     GetMyPrediction,
+    ListMyPredictions,
+    ListUserPredictions,
     PlacePrediction,
 )
 
@@ -70,6 +74,34 @@ async def get_predictions_summary(
     (до закрытия — ``409``, консенсус скрыт ради честности скоринга)."""
     summary = await uc.execute(event_id=event_id)
     return PredictionSummaryResponse.from_summary(summary)
+
+
+@router.get(
+    "/users/me/predictions",
+    response_model=list[PredictionResponse],
+    summary="Мои прогнозы (включая ожидающие)",
+)
+async def my_predictions(
+    current_user: CurrentUser,
+    uc: Annotated[ListMyPredictions, Depends(get_list_my_predictions)],
+) -> list[PredictionResponse]:
+    """Все прогнозы текущего пользователя (новые сверху)."""
+    items = await uc.execute(user_id=current_user.id)
+    return [PredictionResponse.from_domain(p) for p in items]
+
+
+@router.get(
+    "/users/{username}/predictions",
+    response_model=list[PredictionResponse],
+    summary="Разрешённые прогнозы пользователя (публично)",
+)
+async def user_predictions(
+    username: str,
+    uc: Annotated[ListUserPredictions, Depends(get_list_user_predictions)],
+) -> list[PredictionResponse]:
+    """Публичный трек-рекорд: только засчитанные прогнозы; 404, если нет профиля."""
+    items = await uc.execute(username=username)
+    return [PredictionResponse.from_domain(p) for p in items]
 
 
 @router.get(

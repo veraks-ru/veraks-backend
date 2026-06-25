@@ -85,3 +85,17 @@ class SqlAlchemyPredictionRepository:
         stmt = select(PredictionORM).where(PredictionORM.event_id == event_id)
         rows = (await self._session.execute(stmt)).scalars().all()
         return [row.to_domain() for row in rows]
+
+    async def list_for_user(
+        self, user_id: uuid.UUID, *, resolved_only: bool = False
+    ) -> list[Prediction]:
+        """Прогнозы пользователя (новые сверху); опц. только засчитанные."""
+        stmt = (
+            select(PredictionORM)
+            .where(PredictionORM.user_id == user_id)
+            .order_by(PredictionORM.created_at.desc())
+        )
+        if resolved_only:
+            stmt = stmt.where(PredictionORM.brier_score.is_not(None))
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]

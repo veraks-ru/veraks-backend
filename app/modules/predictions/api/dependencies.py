@@ -17,12 +17,15 @@ from app.modules.events.adapters.repository import SqlAlchemyEventRepository
 from app.modules.predictions.adapters.audit_trail import AuditTrailRecorder
 from app.modules.predictions.adapters.clock import SystemClock
 from app.modules.predictions.adapters.event_gateway import EventRepositoryGateway
+from app.modules.predictions.adapters.user_gateway import SqlAlchemyUserDirectory
 from app.modules.predictions.adapters.repository import (
     SqlAlchemyPredictionRepository,
 )
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
     GetMyPrediction,
+    ListMyPredictions,
+    ListUserPredictions,
     LockEventPredictions,
     PlacePrediction,
 )
@@ -30,6 +33,7 @@ from app.modules.predictions.ports.audit import AuditRecorder
 from app.modules.predictions.ports.clock import Clock
 from app.modules.predictions.ports.events import EventGateway
 from app.modules.predictions.ports.repositories import PredictionRepository
+from app.modules.predictions.ports.users import UserDirectory
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -62,12 +66,18 @@ def get_audit_recorder(session: SessionDep) -> AuditRecorder:
     return AuditTrailRecorder(SqlAlchemyAuditTrail(session))
 
 
+def get_user_directory(session: SessionDep) -> UserDirectory:
+    """Резолв пользователя по хэндлу (чтение таблицы users в монолите)."""
+    return SqlAlchemyUserDirectory(session)
+
+
 PredictionRepoDep = Annotated[
     PredictionRepository, Depends(get_prediction_repository)
 ]
 EventGatewayDep = Annotated[EventGateway, Depends(get_event_gateway)]
 ClockDep = Annotated[Clock, Depends(get_clock)]
 AuditDep = Annotated[AuditRecorder, Depends(get_audit_recorder)]
+UserDirectoryDep = Annotated[UserDirectory, Depends(get_user_directory)]
 
 
 # ── Use-cases ─────────────────────────────────────────────────────────────
@@ -97,6 +107,18 @@ def get_event_prediction_summary(
     return GetEventPredictionSummary(
         predictions=predictions, events=events, clock=clock
     )
+
+
+def get_list_my_predictions(predictions: PredictionRepoDep) -> ListMyPredictions:
+    """Use-case своих прогнозов (включая ожидающие)."""
+    return ListMyPredictions(predictions=predictions)
+
+
+def get_list_user_predictions(
+    users: UserDirectoryDep, predictions: PredictionRepoDep
+) -> ListUserPredictions:
+    """Use-case публичного трек-рекорда по хэндлу."""
+    return ListUserPredictions(users=users, predictions=predictions)
 
 
 def get_lock_event_predictions(

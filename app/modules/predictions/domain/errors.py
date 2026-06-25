@@ -35,6 +35,10 @@ class PredictionTargetEventNotFoundError(PredictionError):
     """Событие, по которому ставится прогноз, не существует."""
 
 
+class ProfileUserNotFoundError(PredictionError):
+    """Пользователь с таким хэндлом не найден (публичный трек-рекорд)."""
+
+
 class PredictionSummaryHiddenError(PredictionError):
     """Агрегат прогнозов («сигнал толпы») запрошен до закрытия приёма.
 
