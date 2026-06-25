@@ -18,6 +18,7 @@ from app.db.base import Base
 
 # Регистрируем модели в метадате (важно для autogenerate).
 from app.modules.identity.adapters import orm as _identity_orm  # noqa: F401
+from app.modules.events.adapters import orm as _events_orm  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
