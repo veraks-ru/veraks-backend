@@ -270,9 +270,38 @@ class Event:
     def begin_resolution(self, *, now: datetime | None = None) -> None:
         """``closed → resolving``: старт подведения исхода.
 
-        TODO(resolutions): инициируется доменом resolutions, а не events-API.
+        Инициируется доменом resolutions (через ``EventResolutionGateway``),
+        а не events-API.
         """
         self._transition_to(EventStatus.RESOLVING, now=now)
+
+    def record_outcome(
+        self,
+        *,
+        outcome: bool,
+        dispute_window_ends_at: datetime,
+        now: datetime | None = None,
+    ) -> None:
+        """``resolving|disputed → resolved``: фиксирует исход и окно оспаривания.
+
+        Денормализованные ``outcome``/``resolved_at`` и ``dispute_window_ends_at``
+        проставляются доменом resolutions при подведении исхода и при его
+        пересмотре по принятому спору (overturn из ``disputed`` с новым исходом
+        и заново открытым окном).
+        """
+        moment = now or _utcnow()
+        self._transition_to(EventStatus.RESOLVED, now=moment)
+        self.outcome = outcome
+        self.resolved_at = moment
+        self.dispute_window_ends_at = dispute_window_ends_at
+
+    def open_dispute(self, *, now: datetime | None = None) -> None:
+        """``resolved → disputed``: на событие подано оспаривание в пределах окна."""
+        self._transition_to(EventStatus.DISPUTED, now=now)
+
+    def dismiss_dispute(self, *, now: datetime | None = None) -> None:
+        """``disputed → resolved``: спор отклонён, исход и окно сохраняются."""
+        self._transition_to(EventStatus.RESOLVED, now=now)
 
     def _transition_to(self, target: EventStatus, *, now: datetime | None) -> None:
         """Проверяет переход по карте автомата и применяет его."""

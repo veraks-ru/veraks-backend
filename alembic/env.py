@@ -22,6 +22,8 @@ from app.modules.events.adapters import orm as _events_orm  # noqa: F401
 from app.modules.predictions.adapters import orm as _predictions_orm  # noqa: F401
 from app.modules.scoring.adapters import orm as _scoring_orm  # noqa: F401
 from app.modules.seasons.adapters import orm as _seasons_orm  # noqa: F401
+from app.modules.resolutions.adapters import orm as _resolutions_orm  # noqa: F401
+from app.shared.audit.adapters import orm as _audit_orm  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

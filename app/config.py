@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from functools import lru_cache
 from typing import Annotated
 
@@ -51,6 +52,20 @@ class EsiaSettings(BaseSettings):
         return self.scopes.split()
 
 
+class ResolutionsSettings(BaseSettings):
+    """Параметры разрешения событий и окна оспаривания."""
+
+    model_config = SettingsConfigDict(env_prefix="RESOLUTIONS_", extra="ignore")
+
+    # Длительность окна оспаривания после фиксации (и пересмотра) исхода.
+    dispute_window_hours: int = Field(default=72, ge=0)
+
+    @property
+    def dispute_window(self) -> timedelta:
+        """Окно оспаривания как ``timedelta``."""
+        return timedelta(hours=self.dispute_window_hours)
+
+
 class Settings(BaseSettings):
     """Корневые настройки приложения."""
 
@@ -65,13 +80,14 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # Авто-финализация сезонов в таймерном ``season_roll``. По умолчанию ВЫКЛ:
-    # пока проверка открытых споров — заглушка (TODO(resolutions)), нельзя
-    # автоматически закрывать сезон поверх возможных споров (дизайн §6.4/§6.5).
-    # Включать только после замены заглушки реальной проверкой.
+    # даже с реальной проверкой открытых споров (домен resolutions) включение
+    # авто-закрытия призовых сезонов — осознанное эксплуатационное решение
+    # (дизайн §6.4/§6.5).
     seasons_auto_finalize: bool = False
 
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     esia: EsiaSettings = Field(default_factory=EsiaSettings)
+    resolutions: ResolutionsSettings = Field(default_factory=ResolutionsSettings)
 
 
 @lru_cache

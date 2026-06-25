@@ -38,8 +38,19 @@ from app.modules.scoring.application.seasons_coordination import (
     RollSeasons,
 )
 from app.modules.scoring.application.use_cases import RecomputeRatings, ScoreEvent
-from app.modules.seasons.adapters.dispute_guard import AlwaysAllowsDisputeGuard
+from app.modules.resolutions.adapters.clock import SystemClock as ResolutionsClock
+from app.modules.resolutions.adapters.dispute_guard import ResolutionDisputeGuard
+from app.modules.resolutions.adapters.event_gateway import (
+    SqlAlchemyEventResolutionGateway,
+)
+from app.modules.resolutions.adapters.repositories import (
+    SqlAlchemyDisputeRepository,
+    SqlAlchemyResolutionRepository,
+    SqlAlchemyScoringDispatchRepository,
+)
+from app.modules.resolutions.application.use_cases import CloseDisputeWindows
 from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +118,7 @@ async def season_roll(_ctx: dict[Any, Any]) -> None:
         )
         finalize = FinalizeSeason(
             seasons=seasons,
-            dispute_guard=AlwaysAllowsDisputeGuard(),
+            dispute_guard=ResolutionDisputeGuard(SqlAlchemyDisputeRepository(session)),
             recompute=recompute,
             ratings=ratings,
             clock=clock,
@@ -121,10 +132,34 @@ async def season_roll(_ctx: dict[Any, Any]) -> None:
         await roll.execute()
 
 
+async def close_dispute_windows(ctx: dict[Any, Any]) -> int:
+    """Закрывает истёкшие окна оспаривания и ставит скоринг по событиям.
+
+    Для каждого ``resolved``-события с истёкшим окном без открытых споров,
+    если скоринг по текущей резолюции ещё не ставился, фиксирует диспатч и
+    ставит ``score_event``. Идемпотентно (маркер диспатча) — повторный тик не
+    дублирует постановку.
+    """
+    async with session_scope() as session:
+        clock = ResolutionsClock()
+        uc = CloseDisputeWindows(
+            events=SqlAlchemyEventResolutionGateway(session),
+            resolutions=SqlAlchemyResolutionRepository(session),
+            disputes=SqlAlchemyDisputeRepository(session),
+            dispatches=SqlAlchemyScoringDispatchRepository(session),
+            tasks=ArqTaskScheduler(ctx["redis"]),
+            audit=SqlAlchemyAuditTrail(session),
+            clock=clock,
+        )
+        dispatched = await uc.execute()
+    logger.info("close_dispute_windows: %d events enqueued for scoring", dispatched)
+    return dispatched
+
+
 class WorkerSettings:
     """Настройки arq-воркера: задачи и расписание."""
 
-    functions = [score_event, recompute_ratings, season_roll]
+    functions = [score_event, recompute_ratings, season_roll, close_dispute_windows]
     cron_jobs = [
         # Ночной полный пересчёт рейтингов.
         # ``cron`` типизирован под слишком широкий ``WorkerCoroutine``
@@ -134,5 +169,7 @@ class WorkerSettings:
         # Roll сезонов каждые 15 минут (активация наступивших; финализация —
         # только если включён ``seasons_auto_finalize``).
         cron(season_roll, minute={0, 15, 30, 45}),  # type: ignore[arg-type]
+        # Закрытие окон оспаривания и постановка скоринга — каждые 5 минут.
+        cron(close_dispute_windows, minute=set(range(0, 60, 5))),
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

@@ -47,6 +47,20 @@ from app.modules.seasons.domain.errors import (
     SeasonPermissionError,
     SeasonSlugTakenError,
 )
+from app.modules.resolutions.api.router import router as resolutions_router
+from app.modules.resolutions.domain.errors import (
+    DisputeAlreadyDecidedError,
+    DisputeNotAllowedError,
+    DisputeNotFoundError,
+    DisputeWindowClosedError,
+    EventNotResolvableError,
+    InvalidResolutionDataError,
+    ResolutionError,
+    ResolutionNotFoundError,
+    ResolutionPermissionError,
+    ResolutionTargetEventNotFoundError,
+    SelfDisputeDecisionError,
+)
 from app.modules.identity.api.router import router as identity_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
@@ -96,6 +110,17 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     SeasonFinalizationBlockedError: status.HTTP_409_CONFLICT,
     SeasonPermissionError: status.HTTP_403_FORBIDDEN,
     InvalidSeasonDataError: status.HTTP_400_BAD_REQUEST,
+    # resolutions
+    ResolutionTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
+    ResolutionNotFoundError: status.HTTP_404_NOT_FOUND,
+    DisputeNotFoundError: status.HTTP_404_NOT_FOUND,
+    ResolutionPermissionError: status.HTTP_403_FORBIDDEN,
+    DisputeNotAllowedError: status.HTTP_403_FORBIDDEN,
+    SelfDisputeDecisionError: status.HTTP_403_FORBIDDEN,
+    EventNotResolvableError: status.HTTP_409_CONFLICT,
+    DisputeWindowClosedError: status.HTTP_409_CONFLICT,
+    DisputeAlreadyDecidedError: status.HTTP_409_CONFLICT,
+    InvalidResolutionDataError: status.HTTP_400_BAD_REQUEST,
 }
 
 
@@ -161,11 +186,22 @@ def create_app() -> FastAPI:
             content={"detail": str(exc), "error": type(exc).__name__},
         )
 
+    @app.exception_handler(ResolutionError)
+    async def _resolution_error_handler(
+        _request: Request, exc: ResolutionError
+    ) -> JSONResponse:
+        """Единый маппинг доменных ошибок resolutions в JSON-ответ."""
+        return JSONResponse(
+            status_code=_resolve_status(exc),
+            content={"detail": str(exc), "error": type(exc).__name__},
+        )
+
     app.include_router(identity_router)
     app.include_router(events_router)
     app.include_router(predictions_router)
     app.include_router(scoring_router)
     app.include_router(seasons_router)
+    app.include_router(resolutions_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:

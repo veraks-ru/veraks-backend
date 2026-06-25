@@ -41,7 +41,8 @@ from app.modules.scoring.ports.gateways import (
 )
 from app.modules.scoring.ports.repositories import RatingRepository
 from app.modules.scoring.ports.season_config import SeasonConfigGateway
-from app.modules.seasons.adapters.dispute_guard import AlwaysAllowsDisputeGuard
+from app.modules.resolutions.adapters.dispute_guard import ResolutionDisputeGuard
+from app.modules.resolutions.adapters.repositories import SqlAlchemyDisputeRepository
 from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
 from app.modules.seasons.domain.policies import ensure_can_transition
 from app.modules.seasons.ports.gateways import DisputeGuard
@@ -96,9 +97,12 @@ def get_season_repository(session: SessionDep) -> SeasonRepository:
     return SqlAlchemySeasonRepository(session)
 
 
-def get_dispute_guard() -> DisputeGuard:
-    """Проверка открытых споров (заглушка fail-loud; TODO(resolutions))."""
-    return AlwaysAllowsDisputeGuard()
+def get_dispute_guard(session: SessionDep) -> DisputeGuard:
+    """Проверка открытых споров по событиям сезона (домен resolutions).
+
+    Делит сессию запроса с финализацией — проверка идёт в той же транзакции.
+    """
+    return ResolutionDisputeGuard(SqlAlchemyDisputeRepository(session))
 
 
 GatewayDep = Annotated[EventScoringGateway, Depends(get_event_scoring_gateway)]
