@@ -62,6 +62,11 @@ class InMemoryPredictionRepository:
     def __init__(self) -> None:
         self._by_id: dict[uuid.UUID, Prediction] = {}
 
+    def seed(self, prediction: Prediction) -> Prediction:
+        """Тестовый помощник: положить прогноз напрямую (синхронно)."""
+        self._by_id[prediction.id] = self._clone(prediction)
+        return prediction
+
     async def get_by_id(self, prediction_id: uuid.UUID) -> Prediction | None:
         return self._clone(self._by_id.get(prediction_id))
 

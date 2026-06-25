@@ -15,14 +15,17 @@ from fastapi import APIRouter, Depends
 
 from app.modules.identity.api.dependencies import CurrentUser
 from app.modules.predictions.api.dependencies import (
+    get_event_prediction_summary,
     get_my_prediction,
     get_place_prediction,
 )
 from app.modules.predictions.api.schemas import (
     PlacePredictionRequest,
     PredictionResponse,
+    PredictionSummaryResponse,
 )
 from app.modules.predictions.application.use_cases import (
+    GetEventPredictionSummary,
     GetMyPrediction,
     PlacePrediction,
 )
@@ -52,6 +55,21 @@ async def put_prediction(
         grade=payload.confidence_grade,
     )
     return PredictionResponse.from_domain(prediction)
+
+
+@router.get(
+    "/events/{event_id}/predictions/summary",
+    response_model=PredictionSummaryResponse,
+    summary="Сигнал толпы по событию (распределение + консенсус)",
+)
+async def get_predictions_summary(
+    event_id: uuid.UUID,
+    uc: Annotated[GetEventPredictionSummary, Depends(get_event_prediction_summary)],
+) -> PredictionSummaryResponse:
+    """Публичный агрегат прогнозов. Доступен только после закрытия приёма
+    (до закрытия — ``409``, консенсус скрыт ради честности скоринга)."""
+    summary = await uc.execute(event_id=event_id)
+    return PredictionSummaryResponse.from_summary(summary)
 
 
 @router.get(

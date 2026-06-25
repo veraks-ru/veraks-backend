@@ -33,3 +33,11 @@ class PredictionNotFoundError(PredictionError):
 
 class PredictionTargetEventNotFoundError(PredictionError):
     """Событие, по которому ставится прогноз, не существует."""
+
+
+class PredictionSummaryHiddenError(PredictionError):
+    """Агрегат прогнозов («сигнал толпы») запрошен до закрытия приёма.
+
+    Консенсус скрыт, пока окно открыто, — иначе он позволяет якорить/копировать
+    решение (анти-накрутка скоринга §5: «консенсус скрыт до твоего ввода»).
+    """

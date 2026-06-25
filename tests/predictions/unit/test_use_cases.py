@@ -13,6 +13,7 @@ from decimal import Decimal
 import pytest
 
 from app.modules.predictions.application.use_cases import (
+    GetEventPredictionSummary,
     GetMyPrediction,
     LockEventPredictions,
     PlacePrediction,
@@ -21,6 +22,7 @@ from app.modules.predictions.domain.entities import ConfidenceGrade
 from app.modules.predictions.domain.errors import (
     PredictionNotFoundError,
     PredictionsClosedError,
+    PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
 )
 from tests.predictions.conftest import FIXED_NOW
@@ -177,6 +179,63 @@ async def test_get_my_prediction_missing_raises(predictions, user_id, event_id) 
         await GetMyPrediction(predictions=predictions).execute(
             user_id=user_id, event_id=event_id
         )
+
+
+def _summary_uc(predictions, events, clock) -> GetEventPredictionSummary:
+    return GetEventPredictionSummary(predictions=predictions, events=events, clock=clock)
+
+
+async def test_summary_aggregates_distribution_after_close(
+    predictions, clock, audit, closed_snapshot, event_id
+) -> None:
+    # Сигнал толпы виден только после закрытия приёма (анти-якорение, §5).
+    # Кладём прогнозы напрямую (окно уже закрыто) и агрегируем.
+    from app.modules.predictions.domain.entities import Prediction
+
+    grades = [
+        ConfidenceGrade.DEFINITELY_YES,  # 0.90
+        ConfidenceGrade.DEFINITELY_YES,  # 0.90
+        ConfidenceGrade.FIFTY_FIFTY,     # 0.50
+        ConfidenceGrade.PROBABLY_NO,     # 0.30
+    ]
+    for grade in grades:
+        await predictions.add(
+            Prediction.place(user_id=uuid.uuid4(), event_id=event_id, grade=grade)
+        )
+    events = FakeEventGateway([closed_snapshot])
+
+    summary = await _summary_uc(predictions, events, clock).execute(event_id=event_id)
+
+    assert summary.total_count == 4
+    assert summary.distribution[ConfidenceGrade.DEFINITELY_YES] == 2
+    assert summary.distribution[ConfidenceGrade.FIFTY_FIFTY] == 1
+    assert summary.distribution[ConfidenceGrade.PROBABLY_NO] == 1
+    assert summary.distribution[ConfidenceGrade.DEFINITELY_NO] == 0
+    # Консенсус толпы c_e = среднее вероятностей = (0.9+0.9+0.5+0.3)/4 = 0.65.
+    assert summary.mean_probability == Decimal("0.65")
+
+
+async def test_summary_hidden_while_event_open(
+    predictions, clock, open_snapshot, event_id
+) -> None:
+    events = FakeEventGateway([open_snapshot])
+    with pytest.raises(PredictionSummaryHiddenError):
+        await _summary_uc(predictions, events, clock).execute(event_id=event_id)
+
+
+async def test_summary_empty_after_close(
+    predictions, clock, closed_snapshot, event_id
+) -> None:
+    events = FakeEventGateway([closed_snapshot])
+    summary = await _summary_uc(predictions, events, clock).execute(event_id=event_id)
+    assert summary.total_count == 0
+    assert summary.mean_probability is None
+
+
+async def test_summary_unknown_event_raises(predictions, clock, event_id) -> None:
+    events = FakeEventGateway([])
+    with pytest.raises(PredictionTargetEventNotFoundError):
+        await _summary_uc(predictions, events, clock).execute(event_id=event_id)
 
 
 async def test_lock_event_predictions_locks_all(

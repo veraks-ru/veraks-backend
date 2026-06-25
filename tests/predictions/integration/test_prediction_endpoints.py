@@ -155,6 +155,37 @@ def test_put_prediction_invalid_grade_422(make_client, open_snapshot) -> None:
     assert resp.status_code == 422
 
 
+def test_predictions_summary_hidden_while_open(make_client, open_snapshot) -> None:
+    """До закрытия приёма сигнал толпы скрыт → 409 (анти-якорение)."""
+    client, _, _, _ = make_client()
+    resp = client.get(f"/events/{open_snapshot.event_id}/predictions/summary")
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "PredictionSummaryHiddenError"
+
+
+def test_predictions_summary_after_close(make_client, closed_snapshot) -> None:
+    """После закрытия — публичный агрегат распределения и консенсуса."""
+    from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
+
+    client, repo, _, _ = make_client(gateway=FakeEventGateway([closed_snapshot]))
+    event_id = closed_snapshot.event_id
+    for grade in (
+        ConfidenceGrade.DEFINITELY_YES,
+        ConfidenceGrade.DEFINITELY_YES,
+        ConfidenceGrade.PROBABLY_NO,
+    ):
+        repo.seed(
+            Prediction.place(user_id=uuid.uuid4(), event_id=event_id, grade=grade)
+        )
+
+    resp = client.get(f"/events/{event_id}/predictions/summary")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_count"] == 3
+    assert body["distribution"]["definitely_yes"] == 2
+    assert body["mean_probability"] == "0.70"  # (0.9+0.9+0.3)/3
+
+
 def test_default_clock_is_system_clock() -> None:
     """Дефолтный провайдер часов — системные (UTC)."""
     from app.modules.predictions.adapters.clock import SystemClock

@@ -21,6 +21,7 @@ from app.modules.predictions.adapters.repository import (
     SqlAlchemyPredictionRepository,
 )
 from app.modules.predictions.application.use_cases import (
+    GetEventPredictionSummary,
     GetMyPrediction,
     LockEventPredictions,
     PlacePrediction,
@@ -87,6 +88,15 @@ def get_place_prediction(
 def get_my_prediction(predictions: PredictionRepoDep) -> GetMyPrediction:
     """Use-case чтения своего прогноза."""
     return GetMyPrediction(predictions=predictions)
+
+
+def get_event_prediction_summary(
+    predictions: PredictionRepoDep, events: EventGatewayDep, clock: ClockDep
+) -> GetEventPredictionSummary:
+    """Use-case агрегированного «сигнала толпы» по событию."""
+    return GetEventPredictionSummary(
+        predictions=predictions, events=events, clock=clock
+    )
 
 
 def get_lock_event_predictions(

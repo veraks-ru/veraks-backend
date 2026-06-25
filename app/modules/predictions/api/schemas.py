@@ -12,7 +12,27 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.modules.predictions.application.dto import PredictionSummary
 from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
+
+
+class PredictionSummaryResponse(BaseModel):
+    """«Сигнал толпы»: распределение прогнозов по событию + консенсус."""
+
+    event_id: uuid.UUID
+    total_count: int
+    distribution: dict[ConfidenceGrade, int]
+    mean_probability: Decimal | None
+
+    @classmethod
+    def from_summary(cls, summary: PredictionSummary) -> PredictionSummaryResponse:
+        """Маппинг агрегата прикладного слоя в ответ."""
+        return cls(
+            event_id=summary.event_id,
+            total_count=summary.total_count,
+            distribution=summary.distribution,
+            mean_probability=summary.mean_probability,
+        )
 
 
 class PlacePredictionRequest(BaseModel):

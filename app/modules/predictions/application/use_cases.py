@@ -16,11 +16,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from app.modules.predictions.application.dto import PredictionAuditEntry
+from app.modules.predictions.application.dto import (
+    PredictionAuditEntry,
+    PredictionSummary,
+)
 from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
 from app.modules.predictions.domain.errors import (
     PredictionNotFoundError,
+    PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
 )
 from app.modules.predictions.domain.policies import ensure_event_accepts_predictions
@@ -135,6 +140,54 @@ class GetMyPrediction:
         if prediction is None:
             raise PredictionNotFoundError("Прогноз по событию не найден")
         return prediction
+
+
+class GetEventPredictionSummary:
+    """Агрегированный «сигнал толпы» по событию (распределение + консенсус).
+
+    Виден **только после закрытия приёма** (анти-якорение, дизайн скоринга §5):
+    пока окно открыто, раскрытие консенсуса позволяло бы списывать/якорить
+    прогноз. До закрытия — :class:`PredictionSummaryHiddenError`.
+    """
+
+    def __init__(
+        self,
+        *,
+        predictions: PredictionRepository,
+        events: EventGateway,
+        clock: Clock,
+    ) -> None:
+        self._predictions = predictions
+        self._events = events
+        self._clock = clock
+
+    async def execute(self, *, event_id: uuid.UUID) -> PredictionSummary:
+        """Считает распределение по градациям и средний прогноз (``c_e``)."""
+        snapshot = await self._events.get_snapshot(event_id)
+        if snapshot is None:
+            raise PredictionTargetEventNotFoundError("Событие не найдено")
+        if snapshot.is_accepting_at(self._clock.now()):
+            raise PredictionSummaryHiddenError(
+                "Сигнал толпы скрыт до закрытия приёма прогнозов"
+            )
+
+        votes = await self._predictions.list_for_event(event_id)
+        distribution = {grade: 0 for grade in ConfidenceGrade}
+        for vote in votes:
+            distribution[vote.confidence_grade] += 1
+
+        total = len(votes)
+        mean = (
+            sum((v.probability for v in votes), Decimal(0)) / total
+            if total
+            else None
+        )
+        return PredictionSummary(
+            event_id=event_id,
+            total_count=total,
+            distribution=distribution,
+            mean_probability=mean,
+        )
 
 
 class LockEventPredictions:

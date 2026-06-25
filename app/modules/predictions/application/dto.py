@@ -9,6 +9,24 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
+
+from app.modules.predictions.domain.entities import ConfidenceGrade
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionSummary:
+    """Агрегат прогнозов по событию — «сигнал толпы».
+
+    ``distribution`` — число прогнозов на каждую градацию (все пять ключей,
+    отсутствующие = 0). ``mean_probability`` — консенсус толпы ``c_e`` (среднее
+    внутренних вероятностей), ``None`` при отсутствии прогнозов.
+    """
+
+    event_id: uuid.UUID
+    total_count: int
+    distribution: dict[ConfidenceGrade, int]
+    mean_probability: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)

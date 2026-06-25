@@ -27,6 +27,7 @@ from app.modules.predictions.domain.errors import (
     PredictionLockedError,
     PredictionNotFoundError,
     PredictionsClosedError,
+    PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
 )
 from app.modules.scoring.api.router import router as scoring_router
@@ -114,6 +115,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     PredictionNotFoundError: status.HTTP_404_NOT_FOUND,
     PredictionsClosedError: status.HTTP_409_CONFLICT,
     PredictionLockedError: status.HTTP_409_CONFLICT,
+    PredictionSummaryHiddenError: status.HTTP_409_CONFLICT,
     # scoring
     ScoringTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
     RatingNotFoundError: status.HTTP_404_NOT_FOUND,
