@@ -106,6 +106,25 @@ class SqlAlchemyEventScoringGateway:
             for probability, outcome in rows
         ]
 
+    async def list_season_calibration_entries(
+        self, season_id: uuid.UUID
+    ) -> list[tuple[float, int]]:
+        """Пары ``(номинал, исход)`` по всем засчитанным прогнозам сезона."""
+        stmt = (
+            select(PredictionORM.probability, EventORM.outcome)
+            .join(EventORM, EventORM.id == PredictionORM.event_id)
+            .where(
+                EventORM.season_id == season_id,
+                PredictionORM.scored_at.is_not(None),
+                EventORM.outcome.is_not(None),
+            )
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [
+            (float(probability), 1 if outcome else 0)
+            for probability, outcome in rows
+        ]
+
     # ── Внутреннее ──────────────────────────────────────────────────────────
 
     def _is_scoreable(self, event: EventORM) -> bool:

@@ -30,6 +30,7 @@ from app.modules.scoring.application.use_cases import (
     GetSeasonLeaderboard,
     GetSeasonQualification,
     GetUserCalibration,
+    RecalibrateSeasonGradations,
     RecomputeRatings,
     ScoreEvent,
 )
@@ -158,6 +159,11 @@ def get_recompute_ratings(
     return RecomputeRatings(
         gateway=gateway, ratings=ratings, clock=clock, season_config=season_config
     )
+
+
+def get_recalibrate_gradations(gateway: GatewayDep) -> RecalibrateSeasonGradations:
+    """Use-case межсезонной рекалибровки маппинга градаций."""
+    return RecalibrateSeasonGradations(gateway=gateway)
 
 
 def get_leaderboard_uc(ratings: RatingRepoDep) -> GetLeaderboard:

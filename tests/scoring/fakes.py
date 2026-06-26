@@ -54,11 +54,13 @@ class FakeEventScoringGateway:
         events: dict[uuid.UUID, ResolvedEvent] | None = None,
         resolved: Sequence[ResolvedEvent] | None = None,
         user_entries: dict[uuid.UUID, list[tuple[float, int]]] | None = None,
+        season_entries: dict[uuid.UUID, list[tuple[float, int]]] | None = None,
     ) -> None:
         self._statuses = statuses or {}
         self._events = events or {}
         self._resolved = list(resolved or [])
         self._user_entries = user_entries or {}
+        self._season_entries = season_entries or {}
 
     async def get_status(self, event_id: uuid.UUID) -> EventScoringStatus:
         return self._statuses.get(
@@ -82,6 +84,11 @@ class FakeEventScoringGateway:
         self, user_id: uuid.UUID
     ) -> list[tuple[float, int]]:
         return list(self._user_entries.get(user_id, []))
+
+    async def list_season_calibration_entries(
+        self, season_id: uuid.UUID
+    ) -> list[tuple[float, int]]:
+        return list(self._season_entries.get(season_id, []))
 
 
 class FakeSeasonConfigGateway:

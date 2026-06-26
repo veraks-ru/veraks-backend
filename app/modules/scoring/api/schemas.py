@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.modules.scoring.application.dto import GradationRecalibration
 from app.modules.scoring.domain.calibration import CalibrationReport
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.seasons.domain.value_objects import QualificationResult
@@ -55,6 +56,26 @@ class LeaderboardResponse(BaseModel):
     scope_type: ScopeType
     scope_id: uuid.UUID | None
     entries: list[RatingResponse]
+
+
+class GradationRecalibrationResponse(BaseModel):
+    """Предложение нового номинала градации по итогам прошедшего сезона."""
+
+    nominal: float
+    observed_freq: float
+    n: int
+    fitted: float
+
+    @classmethod
+    def from_domain(
+        cls, item: GradationRecalibration
+    ) -> GradationRecalibrationResponse:
+        return cls(
+            nominal=item.nominal,
+            observed_freq=item.observed_freq,
+            n=item.n,
+            fitted=item.fitted,
+        )
 
 
 class CalibrationBinResponse(BaseModel):

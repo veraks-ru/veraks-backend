@@ -35,7 +35,7 @@ Discipline: TDD for behavior changes. Keep `pytest` / `mypy app` / `ruff check a
 
 ## Phase 3 — Workers / orchestration
 - [x] B1 event auto-close worker: `EventRepository.list_open_due(now)` (port/adapter/fake, `Sequence` return to dodge `list`-shadow), `CloseExpiredEvents` use-case (open→closed + SYSTEM audit, idempotent), worker task `close_expired_events` (every minute) that closes then calls `LockEventPredictions` per closed event. 2 unit tests + worker-wiring updated. 370 green.
-- [ ] B2 recalibration use-case + port: read prior-season `(grade, freq, n)`, run isotonic `recalibrate`, persist into next-season `LeagueConfig`.
+- [x] B2 recalibration wiring: `EventScoringGateway.list_season_calibration_entries` (port/adapter/fake), `RecalibrateSeasonGradations` use-case (groups season population by nominal → freq/n → isotonic `recalibrate`), `GradationRecalibration` DTO, admin endpoint `GET /admin/seasons/{id}/recalibration` (returns suggested monotone mapping for next season; freezing into LeagueConfig left to activation by design). Dead PAV code now has a real caller. 4 unit + 2 integration tests. 374 green.
 - [ ] B3 `reconcile` worker: ledger sums vs provider/bank (stub external side, real ledger side).
 
 ## Phase 4 — Billing completion

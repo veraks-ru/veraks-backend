@@ -41,6 +41,15 @@ class EventScoringGateway(Protocol):
         """Пары ``(номинальная вероятность, исход)`` по засчитанным прогнозам."""
         ...
 
+    async def list_season_calibration_entries(
+        self, season_id: uuid.UUID
+    ) -> list[tuple[float, int]]:
+        """Пары ``(номинал, исход)`` по всем засчитанным прогнозам сезона.
+
+        Популяционная выборка для межсезонной рекалибровки маппинга градаций.
+        """
+        ...
+
 
 @runtime_checkable
 class PredictionScoreWriter(Protocol):

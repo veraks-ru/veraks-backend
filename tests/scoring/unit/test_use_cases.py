@@ -17,6 +17,7 @@ from app.modules.scoring.application.dto import EventScoringStatus
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
     GetUserCalibration,
+    RecalibrateSeasonGradations,
     RecomputeRatings,
     ScoreEvent,
 )
@@ -265,3 +266,35 @@ async def test_get_user_calibration_unknown_profile_raises() -> None:
     )
     with pytest.raises(ProfileNotFoundError):
         await uc.execute(username="ghost")
+
+
+async def test_recalibrate_season_gradations_fits_observed_frequencies() -> None:
+    season_id = uuid.uuid4()
+    # «Скорее да» (0.70) сбывался в 80% случаев → номинал должен подрасти к 0.8.
+    entries = [(0.70, 1)] * 8 + [(0.70, 0)] * 2 + [(0.90, 1)] * 9 + [(0.90, 0)] * 1
+    gateway = FakeEventScoringGateway(season_entries={season_id: entries})
+
+    result = await RecalibrateSeasonGradations(gateway=gateway).execute(
+        season_id=season_id
+    )
+
+    by_nominal = {r.nominal: r for r in result}
+    assert by_nominal[0.70].observed_freq == pytest.approx(0.80, abs=1e-9)
+    assert by_nominal[0.70].fitted == pytest.approx(0.80, abs=1e-9)
+    assert by_nominal[0.90].fitted == pytest.approx(0.90, abs=1e-9)
+    # Монотонность сохранена: fitted(0.70) <= fitted(0.90).
+    assert by_nominal[0.70].fitted <= by_nominal[0.90].fitted
+
+
+async def test_recalibrate_enforces_monotonicity_on_inversions() -> None:
+    season_id = uuid.uuid4()
+    # Инверсия: 0.30 сбывается чаще (0.6), чем 0.50 (0.4) — изотония их сольёт.
+    entries = [(0.30, 1)] * 6 + [(0.30, 0)] * 4 + [(0.50, 1)] * 4 + [(0.50, 0)] * 6
+    gateway = FakeEventScoringGateway(season_entries={season_id: entries})
+
+    result = await RecalibrateSeasonGradations(gateway=gateway).execute(
+        season_id=season_id
+    )
+    fitted = [r.fitted for r in sorted(result, key=lambda r: r.nominal)]
+    # После PAV последовательность неубывающая (инверсия устранена объединением).
+    assert fitted == sorted(fitted)

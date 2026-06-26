@@ -23,9 +23,14 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 
-from app.modules.scoring.application.dto import PredictionScore, SeasonConfigView
+from app.modules.scoring.application.dto import (
+    GradationRecalibration,
+    PredictionScore,
+    SeasonConfigView,
+)
 from app.modules.scoring.domain.calibration import CalibrationReport, calibrate
 from app.modules.scoring.domain.constants import MIN_PREDICTORS
+from app.modules.scoring.domain.recalibration import recalibrate
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.errors import (
     EventNotResolvedError,
@@ -463,3 +468,45 @@ class GetUserCalibration:
             raise ProfileNotFoundError("Профиль не найден")
         entries = await self._gateway.list_user_calibration_entries(user_id)
         return user_id, calibrate(entries)
+
+
+class RecalibrateSeasonGradations:
+    """Межсезонная рекалибровка маппинга «градация → вероятность».
+
+    Читает популяционные частоты «ДА» по каждому номиналу за прошедший сезон и
+    пересчитывает номиналы изотонической регрессией (монотонность сохраняется).
+    Результат — предложение нового маппинга для следующего сезона (заморозка в
+    ``LeagueConfig`` — отдельный шаг активации, условия конкурса не меняются по
+    ходу сезона). Чистая доменная математика (``recalibrate``) — здесь только
+    группировка популяции и оркестрация.
+    """
+
+    def __init__(self, *, gateway: EventScoringGateway) -> None:
+        self._gateway = gateway
+
+    async def execute(
+        self, *, season_id: uuid.UUID
+    ) -> list[GradationRecalibration]:
+        """Считает предложение нового маппинга по прогнозам сезона."""
+        entries = await self._gateway.list_season_calibration_entries(season_id)
+        grouped: dict[float, list[int]] = {}
+        for nominal, outcome in entries:
+            grouped.setdefault(nominal, []).append(outcome)
+
+        observed: list[tuple[float, float, int]] = []
+        for nominal in sorted(grouped):
+            outcomes = grouped[nominal]
+            n = len(outcomes)
+            observed.append((nominal, math.fsum(outcomes) / n, n))
+
+        fitted = recalibrate(
+            [(f"{nominal:.2f}", freq, n) for nominal, freq, n in observed]
+        )
+        return [
+            GradationRecalibration(
+                nominal=nominal, observed_freq=freq, n=n, fitted=new_nominal
+            )
+            for (nominal, freq, n), (_, new_nominal) in zip(
+                observed, fitted, strict=True
+            )
+        ]

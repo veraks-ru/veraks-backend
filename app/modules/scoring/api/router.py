@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from app.modules.scoring.api.dependencies import (
     get_finalize_season,
     get_leaderboard_uc,
+    get_recalibrate_gradations,
     get_recompute_ratings,
     get_score_event,
     get_season_leaderboard_uc,
@@ -28,6 +29,7 @@ from app.modules.scoring.api.dependencies import (
 from app.modules.scoring.api.schemas import (
     CalibrationResponse,
     FinalizeSeasonResponse,
+    GradationRecalibrationResponse,
     LeaderboardResponse,
     QualificationResponse,
     RatingResponse,
@@ -40,6 +42,7 @@ from app.modules.scoring.application.use_cases import (
     GetSeasonLeaderboard,
     GetSeasonQualification,
     GetUserCalibration,
+    RecalibrateSeasonGradations,
     RecomputeRatings,
     ScoreEvent,
 )
@@ -199,6 +202,28 @@ async def recompute_ratings(
     """
     upserted = await uc.execute(season_id=season_id)
     return RecomputeRatingsResponse(upserted=upserted)
+
+
+@router.get(
+    "/admin/seasons/{season_id}/recalibration",
+    response_model=list[GradationRecalibrationResponse],
+    summary="Предложение межсезонной рекалибровки градаций (admin)",
+)
+async def season_recalibration(
+    season_id: uuid.UUID,
+    uc: Annotated[
+        RecalibrateSeasonGradations, Depends(get_recalibrate_gradations)
+    ],
+    _role: Annotated[object, Depends(require_recompute_role)],
+) -> list[GradationRecalibrationResponse]:
+    """Пересчёт номиналов градаций по фактическим частотам прошедшего сезона.
+
+    Возвращает предложение нового маппинга (монотонного) для следующего сезона;
+    заморозка в ``LeagueConfig`` — отдельный шаг активации (условия конкурса не
+    меняются по ходу сезона).
+    """
+    items = await uc.execute(season_id=season_id)
+    return [GradationRecalibrationResponse.from_domain(i) for i in items]
 
 
 @router.post(

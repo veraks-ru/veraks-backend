@@ -243,6 +243,26 @@ def test_recompute_requires_admin(make_client) -> None:
     assert resp.status_code == 403
 
 
+def test_season_recalibration_endpoint(make_client) -> None:
+    season_id = uuid.uuid4()
+    entries = [(0.70, 1)] * 8 + [(0.70, 0)] * 2  # «Скорее да» сбывался в 80%
+    gateway = FakeEventScoringGateway(season_entries={season_id: entries})
+    client, _, _, _ = make_client(gateway=gateway, role=UserRole.ADMIN)
+
+    resp = client.get(f"/admin/seasons/{season_id}/recalibration")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body[0]["nominal"] == pytest.approx(0.70)
+    assert body[0]["observed_freq"] == pytest.approx(0.80, abs=1e-9)
+    assert body[0]["fitted"] == pytest.approx(0.80, abs=1e-9)
+
+
+def test_season_recalibration_requires_admin(make_client) -> None:
+    client, _, _, _ = make_client(role=UserRole.EDITOR)
+    resp = client.get(f"/admin/seasons/{uuid.uuid4()}/recalibration")
+    assert resp.status_code == 403
+
+
 async def test_recompute_as_admin(make_client) -> None:
     ids = [uuid.uuid4() for _ in range(5)]
     event, _ = make_event(

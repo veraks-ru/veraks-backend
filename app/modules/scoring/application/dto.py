@@ -62,6 +62,22 @@ class FinalizeResult:
 
 
 @dataclass(frozen=True, slots=True)
+class GradationRecalibration:
+    """Результат межсезонной рекалибровки одной градации.
+
+    ``nominal`` — старый номинал градации (зафиксированный в прошлом сезоне),
+    ``observed_freq`` — фактическая частота «ДА» среди прогнозов этой градации,
+    ``n`` — объём выборки, ``fitted`` — пересчитанный номинал (изотонически
+    монотонный) для следующего сезона.
+    """
+
+    nominal: float
+    observed_freq: float
+    n: int
+    fitted: float
+
+
+@dataclass(frozen=True, slots=True)
 class SeasonConfigView:
     """Проекция сезона из домена seasons для нужд квалификации в scoring.
 
