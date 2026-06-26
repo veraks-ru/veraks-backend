@@ -32,6 +32,8 @@ from app.modules.predictions.adapters.repository import (
     SqlAlchemyPredictionRepository,
 )
 from app.modules.predictions.application.use_cases import LockEventPredictions
+from app.modules.billing.adapters.repositories import SqlAlchemyLedgerRepository
+from app.modules.billing.application.use_cases import ReconcileLedger
 from app.modules.scoring.adapters.clock import SystemClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
 from app.modules.scoring.adapters.scoring_gateway import (
@@ -189,6 +191,31 @@ async def close_expired_events(_ctx: dict[Any, Any]) -> int:
     return len(closed)
 
 
+async def reconcile(_ctx: dict[Any, Any]) -> int:
+    """Сверка целостности журнала: баланс книг по каждой кассе.
+
+    Двойная запись гарантирует ``debit == credit`` по кассе; расхождение —
+    признак повреждения данных в обход триггеров. Тревога логируется как ERROR.
+    TODO(billing-infra): добавить сверку с сеттлментами провайдера/банка.
+    """
+    imbalanced = 0
+    async with session_scope() as session:
+        reports = await ReconcileLedger(
+            ledger=SqlAlchemyLedgerRepository(session)
+        ).execute()
+    for report in reports:
+        if not report.balanced:
+            imbalanced += 1
+            logger.error(
+                "reconcile: ledger %s IMBALANCED — debit=%d credit=%d",
+                report.ledger_type.value,
+                report.total_debit_kopecks,
+                report.total_credit_kopecks,
+            )
+    logger.info("reconcile: %d/%d ledgers imbalanced", imbalanced, len(reports))
+    return imbalanced
+
+
 class WorkerSettings:
     """Настройки arq-воркера: задачи и расписание."""
 
@@ -198,6 +225,7 @@ class WorkerSettings:
         season_roll,
         close_dispute_windows,
         close_expired_events,
+        reconcile,
     ]
     cron_jobs = [
         # Ночной полный пересчёт рейтингов.
@@ -213,5 +241,7 @@ class WorkerSettings:
         # Авто-закрытие приёма по дедлайну (closes_at) — каждую минуту, чтобы
         # приём не оставался открытым заметно дольше серверного дедлайна.
         cron(close_expired_events),  # type: ignore[arg-type]
+        # Сверка баланса книг — ежечасно (раннее обнаружение рассогласований).
+        cron(reconcile, minute=7),  # type: ignore[arg-type]
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

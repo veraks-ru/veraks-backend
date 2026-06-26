@@ -16,7 +16,11 @@ from app.modules.billing.domain.entities import (
     Payout,
     Subscription,
 )
-from app.modules.billing.domain.ledger import LedgerAccount, LedgerTransaction
+from app.modules.billing.domain.ledger import (
+    LedgerAccount,
+    LedgerTransaction,
+    LedgerType,
+)
 
 
 @runtime_checkable
@@ -39,6 +43,10 @@ class LedgerRepository(Protocol):
 
     async def balance(self, account_id: uuid.UUID) -> int:
         """Сальдо счёта в копейках как ``сумма(debit) − сумма(credit)``."""
+        ...
+
+    async def totals_by_type(self, ledger_type: LedgerType) -> tuple[int, int]:
+        """Суммы ``(дебеты, кредиты)`` всех ног кассы (для сверки баланса книг)."""
         ...
 
 

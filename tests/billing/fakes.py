@@ -22,6 +22,7 @@ from app.modules.billing.domain.ledger import (
     EntryDirection,
     LedgerAccount,
     LedgerTransaction,
+    LedgerType,
 )
 from app.modules.billing.ports.gateways import CheckoutIntent, PayoutInstruction
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
@@ -71,6 +72,18 @@ class InMemoryLedgerRepository:
                 else:
                     total -= entry.amount_kopecks
         return total
+
+    async def totals_by_type(self, ledger_type: LedgerType) -> tuple[int, int]:
+        debit = credit = 0
+        for txn in self.transactions:
+            if txn.ledger_type is not ledger_type:
+                continue
+            for entry in txn.entries:
+                if entry.direction is EntryDirection.DEBIT:
+                    debit += entry.amount_kopecks
+                else:
+                    credit += entry.amount_kopecks
+        return debit, credit
 
     def seed_account(self, account: LedgerAccount) -> None:
         """Хелпер: засеять счёт плана счетов."""

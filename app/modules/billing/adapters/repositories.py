@@ -31,6 +31,7 @@ from app.modules.billing.domain.ledger import (
     EntryDirection,
     LedgerAccount,
     LedgerTransaction,
+    LedgerType,
 )
 
 
@@ -89,6 +90,43 @@ class SqlAlchemyLedgerRepository:
             LedgerEntryORM.account_id == account_id
         )
         return int((await self._session.execute(stmt)).scalar_one())
+
+    async def totals_by_type(self, ledger_type: LedgerType) -> tuple[int, int]:
+        """Суммы дебетов и кредитов всех ног кассы (join ноги → транзакции)."""
+        debit = func.coalesce(
+            func.sum(
+                case(
+                    (
+                        LedgerEntryORM.direction == EntryDirection.DEBIT,
+                        LedgerEntryORM.amount_kopecks,
+                    ),
+                    else_=0,
+                )
+            ),
+            0,
+        )
+        credit = func.coalesce(
+            func.sum(
+                case(
+                    (
+                        LedgerEntryORM.direction == EntryDirection.CREDIT,
+                        LedgerEntryORM.amount_kopecks,
+                    ),
+                    else_=0,
+                )
+            ),
+            0,
+        )
+        stmt = (
+            select(debit, credit)
+            .join(
+                LedgerTransactionORM,
+                LedgerTransactionORM.id == LedgerEntryORM.transaction_id,
+            )
+            .where(LedgerTransactionORM.ledger_type == ledger_type)
+        )
+        row = (await self._session.execute(stmt)).one()
+        return int(row[0]), int(row[1])
 
 
 class SqlAlchemySubscriptionRepository:

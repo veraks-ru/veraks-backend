@@ -11,6 +11,7 @@ from app.worker import (
     close_dispute_windows,
     close_expired_events,
     recompute_ratings,
+    reconcile,
     score_event,
     season_roll,
 )
@@ -23,10 +24,11 @@ def test_worker_registers_all_tasks() -> None:
         season_roll,
         close_dispute_windows,
         close_expired_events,
+        reconcile,
     }
 
 
 def test_worker_has_cron_schedule() -> None:
     # Ночной пересчёт + roll сезонов + закрытие окон оспаривания + авто-закрытие
-    # приёма по дедлайну.
-    assert len(WorkerSettings.cron_jobs) == 4
+    # приёма по дедлайну + почасовая сверка журнала.
+    assert len(WorkerSettings.cron_jobs) == 5

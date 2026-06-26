@@ -17,6 +17,7 @@ from datetime import timedelta
 
 from app.modules.billing.application.dto import (
     Actor,
+    LedgerReconciliation,
     PrizeFundView,
     SeasonPrizeFundView,
 )
@@ -511,6 +512,36 @@ class ListMyPayouts:
     async def execute(self, *, user_id: uuid.UUID) -> list[Payout]:
         """Выплаты текущего пользователя, новые сверху."""
         return await self._payouts.list_by_user(user_id)
+
+
+class ReconcileLedger:
+    """Сверка целостности журнала: баланс книг по каждой кассе.
+
+    Двойная запись гарантирует ``debit == credit`` в каждой транзакции (триггер),
+    значит и по кассе целиком суммы обязаны сходиться. Расхождение — признак
+    повреждения данных в обход триггеров; воркер ``reconcile`` поднимает тревогу.
+
+    TODO(billing-infra): к внутренней сверке добавить сверку с внешними
+    источниками — операционный кэш ↔ сеттлменты провайдера, призовой кэш ↔
+    депозиты спонсора и выплаты (нужны данные провайдера/банка).
+    """
+
+    def __init__(self, *, ledger: LedgerRepository) -> None:
+        self._ledger = ledger
+
+    async def execute(self) -> list[LedgerReconciliation]:
+        """Возвращает по строке на кассу с суммами дебетов/кредитов."""
+        reports: list[LedgerReconciliation] = []
+        for ledger_type in LedgerType:
+            debit, credit = await self._ledger.totals_by_type(ledger_type)
+            reports.append(
+                LedgerReconciliation(
+                    ledger_type=ledger_type,
+                    total_debit_kopecks=debit,
+                    total_credit_kopecks=credit,
+                )
+            )
+        return reports
 
 
 # ── Выплаты призов (PRIZE, maker-checker) ─────────────────────────────────

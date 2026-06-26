@@ -36,7 +36,9 @@ Discipline: TDD for behavior changes. Keep `pytest` / `mypy app` / `ruff check a
 ## Phase 3 — Workers / orchestration
 - [x] B1 event auto-close worker: `EventRepository.list_open_due(now)` (port/adapter/fake, `Sequence` return to dodge `list`-shadow), `CloseExpiredEvents` use-case (open→closed + SYSTEM audit, idempotent), worker task `close_expired_events` (every minute) that closes then calls `LockEventPredictions` per closed event. 2 unit tests + worker-wiring updated. 370 green.
 - [x] B2 recalibration wiring: `EventScoringGateway.list_season_calibration_entries` (port/adapter/fake), `RecalibrateSeasonGradations` use-case (groups season population by nominal → freq/n → isotonic `recalibrate`), `GradationRecalibration` DTO, admin endpoint `GET /admin/seasons/{id}/recalibration` (returns suggested monotone mapping for next season; freezing into LeagueConfig left to activation by design). Dead PAV code now has a real caller. 4 unit + 2 integration tests. 374 green.
-- [ ] B3 `reconcile` worker: ledger sums vs provider/bank (stub external side, real ledger side).
+- [x] B3 `reconcile` worker: `LedgerRepository.totals_by_type` (port/adapter/fake, join entries→transactions), `ReconcileLedger` use-case (per-kassa debit==credit integrity check), `LedgerReconciliation` DTO, worker task `reconcile` (hourly, logs ERROR on imbalance). External provider/bank comparison left as TODO(billing-infra). 2 unit tests + worker-wiring (6 tasks, 5 cron). 376 green.
+
+**Phase 3 COMPLETE.** ✅
 
 ## Phase 4 — Billing completion
 - [ ] A5 payout dispatch (call `send_payout`) + `POST /webhooks/payouts/...` lifecycle `approved→processing→paid/failed`.

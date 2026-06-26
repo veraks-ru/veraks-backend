@@ -215,3 +215,41 @@ async def test_create_payout_requires_admin(stand: Stand, admin, user) -> None:
             prize_fund_id=fund.id,
             amount_kopecks=1_000,
         )
+
+
+# ── Сверка журнала (ReconcileLedger) ──────────────────────────────────────
+
+
+async def test_reconcile_ledger_books_balanced(stand: Stand, admin, user) -> None:
+    """После проводок обе кассы сходятся (дебеты == кредиты)."""
+    from app.modules.billing.application.use_cases import ReconcileLedger
+    from app.modules.billing.domain.ledger import LedgerType
+
+    # OPERATIONS: приём платежа по подписке.
+    sub, _ = await stand.start_subscription.execute(
+        user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
+    )
+    await stand.record_payment.execute(
+        provider=PaymentProvider.YOOKASSA,
+        provider_payment_id="pay-rec",
+        amount_kopecks=49_000,
+        subscription_id=sub.id,
+    )
+    # PRIZE: депозит спонсора.
+    await _funded_fund(stand, admin, amount=1_000_000)
+
+    reports = await ReconcileLedger(ledger=stand.ledger).execute()
+
+    by_type = {r.ledger_type: r for r in reports}
+    assert by_type[LedgerType.OPERATIONS].balanced is True
+    assert by_type[LedgerType.OPERATIONS].total_debit_kopecks == 49_000
+    assert by_type[LedgerType.PRIZE].balanced is True
+    assert by_type[LedgerType.PRIZE].total_debit_kopecks == 1_000_000
+
+
+async def test_reconcile_empty_ledger_is_balanced(stand: Stand) -> None:
+    from app.modules.billing.application.use_cases import ReconcileLedger
+
+    reports = await ReconcileLedger(ledger=stand.ledger).execute()
+    assert all(r.balanced for r in reports)
+    assert all(r.total_debit_kopecks == 0 for r in reports)
