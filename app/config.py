@@ -79,6 +79,20 @@ class BillingSettings(BaseSettings):
     annual_price_kopecks: int = Field(default=490_000, ge=1)
 
 
+class WebhookSettings(BaseSettings):
+    """Секреты верификации подписи входящих вебхуков провайдеров.
+
+    Пустой секрет означает «верификация выключена» (локальная разработка/тесты);
+    в проде секреты обязательны — иначе подделанный вебхук мог бы провести
+    платёж/выплату. Адаптер проверяет HMAC-SHA256 тела по этому секрету.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="WEBHOOK_", extra="ignore")
+
+    yookassa_payment_secret: str = ""
+    yookassa_payout_secret: str = ""
+
+
 class Settings(BaseSettings):
     """Корневые настройки приложения."""
 
@@ -102,6 +116,7 @@ class Settings(BaseSettings):
     esia: EsiaSettings = Field(default_factory=EsiaSettings)
     resolutions: ResolutionsSettings = Field(default_factory=ResolutionsSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
+    webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
 
 
 @lru_cache

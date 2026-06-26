@@ -279,6 +279,31 @@ def test_my_payouts_requires_auth(ctx: Ctx) -> None:
     assert ctx.client.get("/users/me/payouts").status_code == status.HTTP_401_UNAUTHORIZED
 
 
+def test_payout_webhook_rejects_bad_signature_when_secret_set() -> None:
+    """С заданным секретом вебхук без/с неверной подписью → 401 (до use-case)."""
+    from app.config import WebhookSettings, get_settings
+
+    base = get_settings()
+    with_secret = base.model_copy(
+        update={"webhooks": WebhookSettings(yookassa_payout_secret="s3cr3t")}
+    )
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: with_secret
+    with TestClient(app) as client:
+        body = {
+            "provider": "yookassa",
+            "provider_payout_id": "po-x",
+            "succeeded": True,
+        }
+        # Без подписи — отклонено до use-case (не доходит до БД).
+        assert client.post("/webhooks/payouts/yookassa", json=body).status_code == 401
+        # С неверной подписью — тоже 401.
+        bad = client.post(
+            "/webhooks/payouts/yookassa", json=body, headers={"X-Signature": "nope"}
+        )
+        assert bad.status_code == 401
+
+
 def test_payout_dispatch_and_webhook_lifecycle(ctx: Ctx) -> None:
     """approve → dispatch (processing) → вебхук (paid): полный жизненный цикл."""
     maker = _user(UserRole.ADMIN)

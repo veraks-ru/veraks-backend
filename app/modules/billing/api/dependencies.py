@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import SettingsDep
@@ -45,6 +45,7 @@ from app.modules.billing.application.use_cases import (
     StartSubscription,
 )
 from app.modules.billing.domain.entities import SubscriptionPlan
+from app.modules.billing.domain.webhooks import verify_signature
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.gateways import (
     PayoutGateway,
@@ -288,3 +289,38 @@ def get_approve_payout(
     return ApprovePayout(
         payouts=payouts, funds=funds, ledger=ledger, audit=audit, clock=clock
     )
+
+
+# ── Верификация подписи вебхуков ──────────────────────────────────────────
+
+_SIGNATURE_HEADER = "x-signature"
+
+
+async def verify_payment_webhook(request: Request, settings: SettingsDep) -> None:
+    """Проверяет подпись вебхука приёма платежа (HMAC по телу).
+
+    Пустой секрет (``WEBHOOK_YOOKASSA_PAYMENT_SECRET``) — верификация выключена
+    (dev/тест). При заданном секрете неверная/отсутствующая подпись → 401.
+    """
+    body = await request.body()
+    signature = request.headers.get(_SIGNATURE_HEADER)
+    if not verify_signature(
+        settings.webhooks.yookassa_payment_secret, body, signature
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверная подпись вебхука",
+        )
+
+
+async def verify_payout_webhook(request: Request, settings: SettingsDep) -> None:
+    """Проверяет подпись вебхука результата выплаты (HMAC по телу)."""
+    body = await request.body()
+    signature = request.headers.get(_SIGNATURE_HEADER)
+    if not verify_signature(
+        settings.webhooks.yookassa_payout_secret, body, signature
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверная подпись вебхука",
+        )

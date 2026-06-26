@@ -29,6 +29,8 @@ from app.modules.billing.api.dependencies import (
     get_record_sponsor_deposit,
     get_record_subscription_payment,
     get_start_subscription,
+    verify_payment_webhook,
+    verify_payout_webhook,
 )
 from app.modules.billing.api.schemas import (
     AnnouncePrizeFundRequest,
@@ -155,6 +157,7 @@ async def cancel_subscription(
     "/webhooks/payments/yookassa",
     response_model=PaymentResponse,
     summary="Вебхук приёма платежа (→ операционная касса)",
+    dependencies=[Depends(verify_payment_webhook)],
 )
 async def yookassa_payment_webhook(
     payload: PaymentWebhookRequest,
@@ -162,8 +165,8 @@ async def yookassa_payment_webhook(
 ) -> PaymentResponse:
     """Идемпотентно принять платёж и провести его в OPERATIONS.
 
-    TODO(billing-infra): проверять подпись вебхука провайдера в адаптере до
-    вызова use-case; здесь — упрощённое тело.
+    Подпись вебхука проверяется зависимостью ``verify_payment_webhook`` до входа
+    (HMAC по телу; при заданном ``WEBHOOK_YOOKASSA_PAYMENT_SECRET``).
     """
     payment = await uc.execute(
         provider=payload.provider,
@@ -323,6 +326,7 @@ async def dispatch_payout(
     "/webhooks/payouts/yookassa",
     response_model=PayoutResponse,
     summary="Вебхук результата выплаты (→ paid/failed)",
+    dependencies=[Depends(verify_payout_webhook)],
 )
 async def yookassa_payout_webhook(
     payload: PayoutWebhookRequest,
@@ -330,8 +334,8 @@ async def yookassa_payout_webhook(
 ) -> PayoutResponse:
     """Идемпотентно фиксирует исход выплаты у провайдера.
 
-    TODO(billing-infra): проверять подпись вебхука провайдера в адаптере до
-    вызова use-case; здесь — упрощённое тело.
+    Подпись вебхука проверяется зависимостью ``verify_payout_webhook`` до входа
+    (HMAC по телу; при заданном ``WEBHOOK_YOOKASSA_PAYOUT_SECRET``).
     """
     payout = await uc.execute(
         provider=payload.provider,
