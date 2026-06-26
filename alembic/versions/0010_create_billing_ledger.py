@@ -406,10 +406,13 @@ def upgrade() -> None:
     )
 
     # ── Засев плана счетов ────────────────────────────────────────────────
+    # ВАЖНО: ledger_type объявляем enum-типом (не Text), иначе под asyncpg
+    # значение биндится как VARCHAR без приведения и Postgres отклоняет вставку
+    # ("column is of type ledger_type but expression is of type character varying").
     accounts_table = sa.table(
         "ledger_accounts",
         sa.column("id", postgresql.UUID(as_uuid=True)),
-        sa.column("ledger_type", sa.Text()),
+        sa.column("ledger_type", ledger_type),
         sa.column("account_code", sa.Text()),
         sa.column("title", sa.Text()),
         sa.column("currency", sa.Text()),
