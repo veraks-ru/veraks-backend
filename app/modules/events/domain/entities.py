@@ -205,6 +205,12 @@ class Event:
                 raise EventEditNotAllowedError(
                     "Временное окно нельзя менять после публикации события"
                 )
+            if season_id is not None and season_id != self.season_id:
+                # Сезон события влияет на честность сезонного зачёта — после
+                # начала приёма прогнозов менять принадлежность к сезону нельзя.
+                raise EventEditNotAllowedError(
+                    "Сезон нельзя менять после публикации события"
+                )
 
         changed = False
         if title is not None:
@@ -256,10 +262,8 @@ class Event:
     def close(self, *, now: datetime | None = None) -> None:
         """``open → closed``: прекращает приём прогнозов (блокировка).
 
-        Вызывается редакцией вручную или системным воркером по ``closes_at``.
-
-        TODO(events-infra): периодический воркер закрывает события по
-        наступлению ``closes_at`` (см. поток жизненного цикла).
+        Вызывается редакцией вручную или системным воркером
+        ``close_expired_events`` по наступлению ``closes_at``.
         """
         self._transition_to(EventStatus.CLOSED, now=now)
 

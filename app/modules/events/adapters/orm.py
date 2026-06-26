@@ -78,9 +78,11 @@ class EventORM(Base):
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
-    # FK на seasons появится вместе с доменом seasons. TODO(seasons).
     season_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, index=True
+        UUID(as_uuid=True),
+        ForeignKey("seasons.id"),
+        nullable=True,
+        index=True,
     )
     status: Mapped[EventStatus] = mapped_column(
         _status_enum, nullable=False, index=True

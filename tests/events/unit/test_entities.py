@@ -113,6 +113,16 @@ def test_edit_open_event_locks_window_and_category(future_window) -> None:
     )
     with pytest.raises(EventEditNotAllowedError):
         event.apply_edits(window=moved, now=FIXED_NOW)
+    # Сезон заблокирован после публикации (честность сезонного зачёта).
+    with pytest.raises(EventEditNotAllowedError):
+        event.apply_edits(season_id=uuid.uuid4(), now=FIXED_NOW)
+
+
+def test_edit_draft_allows_season_change(future_window) -> None:
+    event = _make_draft(future_window)
+    season_id = uuid.uuid4()
+    assert event.apply_edits(season_id=season_id, now=FIXED_NOW) is True
+    assert event.season_id == season_id
 
 
 def test_edit_forbidden_after_close(future_window) -> None:
