@@ -257,6 +257,43 @@ class CancelEvent(_TransitionUseCase):
         event.cancel(now=self._clock.now())
 
 
+class CloseExpiredEvents:
+    """Авто-закрытие приёма по истёкшему ``closes_at`` (системный триггер).
+
+    Фоновая задача: переводит ``open → closed`` все события, чей серверный
+    дедлайн прошёл, и пишет системную запись аудита. Возвращает id закрытых
+    событий — вызывающий (воркер) по ним блокирует прогнозы (домен predictions).
+    Идемпотентна: повторный прогон не находит уже закрытых.
+    """
+
+    def __init__(
+        self, *, events: EventRepository, clock: Clock, audit: AuditTrail
+    ) -> None:
+        self._events = events
+        self._clock = clock
+        self._audit = audit
+
+    async def execute(self) -> list[uuid.UUID]:
+        """Закрывает все просроченные открытые события; отдаёт их id."""
+        now = self._clock.now()
+        closed: list[uuid.UUID] = []
+        for event in await self._events.list_open_due(now):
+            event.close(now=now)
+            saved = await self._events.update(event)
+            await self._audit.record(
+                actor_id=None,
+                actor_type=AuditActorType.SYSTEM,
+                action="event.closed",
+                entity_type="event",
+                entity_id=saved.id,
+                before={"status": "open"},
+                after={"status": _status_value(saved)},
+                metadata={"reason": "auto_close_deadline"},
+            )
+            closed.append(saved.id)
+        return closed
+
+
 class GetEvent:
     """Чтение деталей события (публично)."""
 

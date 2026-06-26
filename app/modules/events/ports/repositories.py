@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from app.modules.events.domain.entities import Category, Event, EventStatus
@@ -42,6 +44,10 @@ class EventRepository(Protocol):
 
     async def list(self, criteria: EventFilter) -> list[Event]:
         """Возвращает события по фильтру (сортировка — по ``closes_at``)."""
+        ...
+
+    async def list_open_due(self, now: datetime) -> Sequence[Event]:
+        """Открытые события с истёкшим ``closes_at`` (для авто-закрытия приёма)."""
         ...
 
 

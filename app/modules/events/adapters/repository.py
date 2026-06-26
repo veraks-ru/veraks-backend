@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.events.adapters.orm import CategoryORM, EventORM
-from app.modules.events.domain.entities import Category, Event
+from app.modules.events.domain.entities import Category, Event, EventStatus
 from app.modules.events.domain.errors import CategorySlugTakenError
 from app.modules.events.ports.repositories import EventFilter
 
@@ -67,6 +69,19 @@ class SqlAlchemyEventRepository:
             stmt.order_by(EventORM.closes_at.asc())
             .limit(criteria.limit)
             .offset(criteria.offset)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]
+
+    async def list_open_due(self, now: datetime) -> Sequence[Event]:
+        """Открытые события с истёкшим ``closes_at`` (для авто-закрытия)."""
+        stmt = (
+            select(EventORM)
+            .where(
+                EventORM.status == EventStatus.OPEN,
+                EventORM.closes_at <= now,
+            )
+            .order_by(EventORM.closes_at.asc())
         )
         rows = (await self._session.execute(stmt)).scalars().all()
         return [row.to_domain() for row in rows]

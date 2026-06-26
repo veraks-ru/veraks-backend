@@ -8,7 +8,7 @@ Postgres и без реальных часов.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -59,6 +59,17 @@ class InMemoryEventRepository:
             items = [e for e in items if e.season_id == criteria.season_id]
         items.sort(key=lambda e: e.window.closes_at)
         return items[criteria.offset : criteria.offset + criteria.limit]
+
+    async def list_open_due(self, now: datetime) -> Sequence[Event]:
+        from app.modules.events.domain.entities import EventStatus
+
+        due = [
+            self._clone(e)
+            for e in self._by_id.values()
+            if e.status is EventStatus.OPEN and e.window.closes_at <= now
+        ]
+        due.sort(key=lambda e: e.window.closes_at)
+        return due
 
     @staticmethod
     def _clone(event: Event | None) -> Event | None:

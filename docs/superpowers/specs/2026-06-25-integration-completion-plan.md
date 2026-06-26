@@ -34,7 +34,7 @@ Discipline: TDD for behavior changes. Keep `pytest` / `mypy app` / `ruff check a
 **Phase 2 COMPLETE except A1 (Users/Profiles).**
 
 ## Phase 3 — Workers / orchestration
-- [ ] B1 event auto-close worker: cron transitions events `open→closed` at `closes_at`, then `LockEventPredictions`.
+- [x] B1 event auto-close worker: `EventRepository.list_open_due(now)` (port/adapter/fake, `Sequence` return to dodge `list`-shadow), `CloseExpiredEvents` use-case (open→closed + SYSTEM audit, idempotent), worker task `close_expired_events` (every minute) that closes then calls `LockEventPredictions` per closed event. 2 unit tests + worker-wiring updated. 370 green.
 - [ ] B2 recalibration use-case + port: read prior-season `(grade, freq, n)`, run isotonic `recalibrate`, persist into next-season `LeagueConfig`.
 - [ ] B3 `reconcile` worker: ledger sums vs provider/bank (stub external side, real ledger side).
 

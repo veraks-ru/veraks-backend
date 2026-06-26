@@ -9,6 +9,7 @@ from __future__ import annotations
 from app.worker import (
     WorkerSettings,
     close_dispute_windows,
+    close_expired_events,
     recompute_ratings,
     score_event,
     season_roll,
@@ -21,9 +22,11 @@ def test_worker_registers_all_tasks() -> None:
         recompute_ratings,
         season_roll,
         close_dispute_windows,
+        close_expired_events,
     }
 
 
 def test_worker_has_cron_schedule() -> None:
-    # Ночной пересчёт + roll сезонов + закрытие окон оспаривания.
-    assert len(WorkerSettings.cron_jobs) == 3
+    # Ночной пересчёт + roll сезонов + закрытие окон оспаривания + авто-закрытие
+    # приёма по дедлайну.
+    assert len(WorkerSettings.cron_jobs) == 4

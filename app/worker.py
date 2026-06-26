@@ -24,6 +24,14 @@ from arq.connections import ArqRedis, RedisSettings
 
 from app.config import get_settings
 from app.db.session import session_scope
+from app.modules.events.adapters.clock import SystemClock as EventsClock
+from app.modules.events.adapters.repository import SqlAlchemyEventRepository
+from app.modules.events.application.use_cases import CloseExpiredEvents
+from app.modules.predictions.adapters.clock import SystemClock as PredictionsClock
+from app.modules.predictions.adapters.repository import (
+    SqlAlchemyPredictionRepository,
+)
+from app.modules.predictions.application.use_cases import LockEventPredictions
 from app.modules.scoring.adapters.clock import SystemClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
 from app.modules.scoring.adapters.scoring_gateway import (
@@ -157,10 +165,40 @@ async def close_dispute_windows(ctx: dict[Any, Any]) -> int:
     return dispatched
 
 
+async def close_expired_events(_ctx: dict[Any, Any]) -> int:
+    """Авто-закрытие приёма по истёкшему ``closes_at`` и блокировка прогнозов.
+
+    Композит-рут фона, которому разрешено знать оба домена (events и
+    predictions): закрывает просроченные ``open``-события (домен events) и по
+    каждому закрытому блокирует прогнозы (домен predictions) — финальный рубеж
+    инварианта «после дедлайна правок нет». Идемпотентно на обоих шагах.
+    """
+    async with session_scope() as session:
+        closed = await CloseExpiredEvents(
+            events=SqlAlchemyEventRepository(session),
+            clock=EventsClock(),
+            audit=SqlAlchemyAuditTrail(session),
+        ).execute()
+        lock = LockEventPredictions(
+            predictions=SqlAlchemyPredictionRepository(session),
+            clock=PredictionsClock(),
+        )
+        for event_id in closed:
+            await lock.execute(event_id=event_id)
+    logger.info("close_expired_events: %d events auto-closed", len(closed))
+    return len(closed)
+
+
 class WorkerSettings:
     """Настройки arq-воркера: задачи и расписание."""
 
-    functions = [score_event, recompute_ratings, season_roll, close_dispute_windows]
+    functions = [
+        score_event,
+        recompute_ratings,
+        season_roll,
+        close_dispute_windows,
+        close_expired_events,
+    ]
     cron_jobs = [
         # Ночной полный пересчёт рейтингов.
         # ``cron`` типизирован под слишком широкий ``WorkerCoroutine``
@@ -172,5 +210,8 @@ class WorkerSettings:
         cron(season_roll, minute={0, 15, 30, 45}),  # type: ignore[arg-type]
         # Закрытие окон оспаривания и постановка скоринга — каждые 5 минут.
         cron(close_dispute_windows, minute=set(range(0, 60, 5))),
+        # Авто-закрытие приёма по дедлайну (closes_at) — каждую минуту, чтобы
+        # приём не оставался открытым заметно дольше серверного дедлайна.
+        cron(close_expired_events),  # type: ignore[arg-type]
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

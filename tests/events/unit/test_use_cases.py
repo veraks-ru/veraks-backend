@@ -19,6 +19,7 @@ from app.modules.events.application.dto import (
 from app.modules.events.application.use_cases import (
     CancelEvent,
     CloseEvent,
+    CloseExpiredEvents,
     CreateCategory,
     CreateEvent,
     PublishEvent,
@@ -177,6 +178,47 @@ async def test_cancel_requires_editor(
     cancel = CancelEvent(events=events, clock=clock, audit=audit)
     with pytest.raises(EventPermissionError):
         await cancel.execute(actor=user_actor, event_id=event.id)
+
+
+async def test_close_expired_events_auto_closes_open_past_deadline(
+    events, categories, clock, audit, editor_actor, category
+) -> None:
+    """Фоновое авто-закрытие переводит просроченные open → closed с аудитом."""
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
+    await PublishEvent(events=events, clock=clock, audit=audit).execute(
+        actor=editor_actor, event_id=event.id
+    )
+
+    # Часы переводим за closes_at (окно: closes_at = FIXED_NOW + 30 дней).
+    clock.set(FIXED_NOW + timedelta(days=31))
+    closed_ids = await CloseExpiredEvents(
+        events=events, clock=clock, audit=audit
+    ).execute()
+
+    assert closed_ids == [event.id]
+    stored = await events.get_by_id(event.id)
+    assert stored is not None and stored.status is EventStatus.CLOSED
+    assert "event.closed" in audit.actions()
+    # Повторный прогон идемпотентен — закрывать больше нечего.
+    assert await CloseExpiredEvents(events=events, clock=clock, audit=audit).execute() == []
+
+
+async def test_close_expired_events_skips_not_yet_due(
+    events, categories, clock, audit, editor_actor, category
+) -> None:
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
+    await PublishEvent(events=events, clock=clock, audit=audit).execute(
+        actor=editor_actor, event_id=event.id
+    )
+    # Часы до дедлайна — событие не трогаем.
+    closed_ids = await CloseExpiredEvents(
+        events=events, clock=clock, audit=audit
+    ).execute()
+    assert closed_ids == []
+    stored = await events.get_by_id(event.id)
+    assert stored is not None and stored.status is EventStatus.OPEN
 
 
 async def test_create_category_slug_conflict(categories, editor_actor, category) -> None:
