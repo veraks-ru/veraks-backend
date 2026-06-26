@@ -28,6 +28,7 @@ from app.modules.billing.api.dependencies import (
     get_clock,
     get_ledger_repository,
     get_payment_repository,
+    get_payout_gateway,
     get_payout_repository,
     get_prize_fund_repository,
     get_season_directory,
@@ -42,6 +43,7 @@ from tests.billing.fakes import (
     FakeAuditTrail,
     FakeCheckoutGateway,
     FakeClock,
+    FakePayoutGateway,
     FakeSeasonDirectory,
     InMemoryLedgerRepository,
     InMemoryPaymentRepository,
@@ -102,6 +104,7 @@ def ctx():
     app.dependency_overrides[get_payout_repository] = lambda: payouts
     app.dependency_overrides[get_audit_trail] = lambda: audit
     app.dependency_overrides[get_checkout_gateway] = lambda: FakeCheckoutGateway()
+    app.dependency_overrides[get_payout_gateway] = lambda: FakePayoutGateway()
     app.dependency_overrides[get_season_directory] = lambda: seasons
     app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
 
@@ -274,6 +277,54 @@ def test_my_payouts_returns_own(ctx: Ctx) -> None:
 
 def test_my_payouts_requires_auth(ctx: Ctx) -> None:
     assert ctx.client.get("/users/me/payouts").status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_payout_dispatch_and_webhook_lifecycle(ctx: Ctx) -> None:
+    """approve → dispatch (processing) → вебхук (paid): полный жизненный цикл."""
+    maker = _user(UserRole.ADMIN)
+    checker = _user(UserRole.ADMIN)
+
+    ctx.holder["user"] = maker
+    fund_id = ctx.client.post(
+        "/admin/prize-funds",
+        json={"sponsor_name": "Acme", "committed_kopecks": 1_000_000},
+    ).json()["id"]
+    ctx.client.post(
+        f"/admin/prize-funds/{fund_id}/deposit", json={"amount_kopecks": 1_000_000}
+    )
+    payout_id = ctx.client.post(
+        "/admin/payouts",
+        json={
+            "user_id": str(uuid.uuid4()),
+            "prize_fund_id": fund_id,
+            "amount_kopecks": 8_700,
+        },
+    ).json()["id"]
+
+    # checker подтверждает
+    ctx.holder["user"] = checker
+    assert (
+        ctx.client.post(f"/admin/payouts/{payout_id}/approve").json()["status"]
+        == "approved"
+    )
+
+    # admin отправляет провайдеру → processing
+    dispatched = ctx.client.post(f"/admin/payouts/{payout_id}/dispatch")
+    assert dispatched.status_code == 200, dispatched.text
+    assert dispatched.json()["status"] == "processing"
+
+    # вебхук провайдера (без авторизации) → paid
+    ctx.holder["user"] = None
+    webhook = ctx.client.post(
+        "/webhooks/payouts/yookassa",
+        json={
+            "provider": "yookassa",
+            "provider_payout_id": f"po-{payout_id}",
+            "succeeded": True,
+        },
+    )
+    assert webhook.status_code == 200, webhook.text
+    assert webhook.json()["status"] == "paid"
 
 
 def test_list_payouts_admin_only(ctx: Ctx) -> None:

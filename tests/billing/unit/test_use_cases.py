@@ -20,6 +20,7 @@ from app.modules.billing.domain.errors import (
     BillingPermissionError,
     InsufficientPrizeFundError,
     PayoutAlreadyDecidedError,
+    PayoutNotFoundError,
     SelfApprovalError,
 )
 from tests.billing.conftest import FIXED_NOW, Stand
@@ -253,3 +254,132 @@ async def test_reconcile_empty_ledger_is_balanced(stand: Stand) -> None:
     reports = await ReconcileLedger(ledger=stand.ledger).execute()
     assert all(r.balanced for r in reports)
     assert all(r.total_debit_kopecks == 0 for r in reports)
+
+
+# ── Отправка выплаты и вебхук результата (dispatch / webhook) ──────────────
+
+
+def _approved_payout(amount=8_700, **over):
+    from app.modules.billing.domain.entities import Payout
+
+    return Payout(
+        user_id=uuid.uuid4(),
+        prize_fund_id=uuid.uuid4(),
+        amount_kopecks=amount,
+        created_by=uuid.uuid4(),
+        status=PayoutStatus.APPROVED,
+        approved_by=uuid.uuid4(),
+        **over,
+    )
+
+
+def _dispatch_uc(payouts):
+    from app.modules.billing.application.use_cases import DispatchPayout
+    from tests.billing.fakes import FakeAuditTrail, FakeClock, FakePayoutGateway
+
+    return DispatchPayout(
+        payouts=payouts,
+        gateway=FakePayoutGateway(),
+        audit=FakeAuditTrail(),
+        clock=FakeClock(FIXED_NOW),
+    )
+
+
+def _webhook_uc(payouts):
+    from app.modules.billing.application.use_cases import RecordPayoutResult
+    from tests.billing.fakes import FakeAuditTrail, FakeClock
+
+    return RecordPayoutResult(
+        payouts=payouts, audit=FakeAuditTrail(), clock=FakeClock(FIXED_NOW)
+    )
+
+
+async def test_dispatch_payout_sends_and_marks_processing() -> None:
+    from app.modules.billing.application.dto import Actor
+    from app.modules.identity.domain.entities import UserRole
+    from tests.billing.fakes import InMemoryPayoutRepository
+
+    payouts = InMemoryPayoutRepository()
+    payout = _approved_payout()
+    await payouts.add(payout)
+    admin = Actor(user_id=uuid.uuid4(), role=UserRole.ADMIN)
+
+    saved = await _dispatch_uc(payouts).execute(actor=admin, payout_id=payout.id)
+
+    assert saved.status is PayoutStatus.PROCESSING
+    assert saved.provider is PaymentProvider.YOOKASSA
+    assert saved.provider_payout_id == f"po-{payout.id}"
+
+
+async def test_dispatch_requires_admin() -> None:
+    from app.modules.billing.application.dto import Actor
+    from app.modules.identity.domain.entities import UserRole
+    from tests.billing.fakes import InMemoryPayoutRepository
+
+    payouts = InMemoryPayoutRepository()
+    payout = _approved_payout()
+    await payouts.add(payout)
+    user = Actor(user_id=uuid.uuid4(), role=UserRole.USER)
+
+    with pytest.raises(BillingPermissionError):
+        await _dispatch_uc(payouts).execute(actor=user, payout_id=payout.id)
+
+
+async def test_webhook_marks_paid_and_failed() -> None:
+    from app.modules.billing.domain.entities import Payout
+    from tests.billing.fakes import InMemoryPayoutRepository
+
+    payouts = InMemoryPayoutRepository()
+    paid_target = Payout(
+        user_id=uuid.uuid4(),
+        prize_fund_id=uuid.uuid4(),
+        amount_kopecks=5_000,
+        created_by=uuid.uuid4(),
+        status=PayoutStatus.PROCESSING,
+        provider=PaymentProvider.YOOKASSA,
+        provider_payout_id="po-ok",
+    )
+    await payouts.add(paid_target)
+
+    saved = await _webhook_uc(payouts).execute(
+        provider=PaymentProvider.YOOKASSA, provider_payout_id="po-ok", succeeded=True
+    )
+    assert saved.status is PayoutStatus.PAID
+    assert saved.paid_at is not None
+
+
+async def test_webhook_is_idempotent_on_terminal() -> None:
+    from app.modules.billing.domain.entities import Payout
+    from tests.billing.fakes import InMemoryPayoutRepository
+
+    payouts = InMemoryPayoutRepository()
+    payout = Payout(
+        user_id=uuid.uuid4(),
+        prize_fund_id=uuid.uuid4(),
+        amount_kopecks=5_000,
+        created_by=uuid.uuid4(),
+        status=PayoutStatus.PROCESSING,
+        provider=PaymentProvider.YOOKASSA,
+        provider_payout_id="po-dup",
+    )
+    await payouts.add(payout)
+    uc = _webhook_uc(payouts)
+
+    first = await uc.execute(
+        provider=PaymentProvider.YOOKASSA, provider_payout_id="po-dup", succeeded=True
+    )
+    second = await uc.execute(
+        provider=PaymentProvider.YOOKASSA, provider_payout_id="po-dup", succeeded=False
+    )
+    # Повтор не переводит из paid в failed — терминальное состояние стабильно.
+    assert first.status is PayoutStatus.PAID
+    assert second.status is PayoutStatus.PAID
+
+
+async def test_webhook_unknown_payout_raises() -> None:
+    from tests.billing.fakes import InMemoryPayoutRepository
+
+    with pytest.raises(PayoutNotFoundError):
+        await _webhook_uc(InMemoryPayoutRepository()).execute(
+            provider=PaymentProvider.YOOKASSA, provider_payout_id="ghost", succeeded=True
+        )

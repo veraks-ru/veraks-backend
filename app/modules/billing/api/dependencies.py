@@ -33,11 +33,13 @@ from app.modules.billing.application.use_cases import (
     ApprovePayout,
     CancelSubscription,
     CreatePayout,
+    DispatchPayout,
     GetMySubscription,
     GetPrizeFund,
     GetSeasonPrizeFund,
     ListMyPayouts,
     ListPayouts,
+    RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
     StartSubscription,
@@ -127,6 +129,7 @@ PayoutRepoDep = Annotated[PayoutRepository, Depends(get_payout_repository)]
 CheckoutGatewayDep = Annotated[
     SubscriptionCheckoutGateway, Depends(get_checkout_gateway)
 ]
+PayoutGatewayDep = Annotated[PayoutGateway, Depends(get_payout_gateway)]
 SeasonDirectoryDep = Annotated[SeasonDirectory, Depends(get_season_directory)]
 AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
 
@@ -241,6 +244,25 @@ def get_list_payouts(payouts: PayoutRepoDep) -> ListPayouts:
 def get_list_my_payouts(payouts: PayoutRepoDep) -> ListMyPayouts:
     """Use-case своих выплат."""
     return ListMyPayouts(payouts=payouts)
+
+
+def get_dispatch_payout(
+    payouts: PayoutRepoDep,
+    gateway: PayoutGatewayDep,
+    audit: AuditDep,
+    clock: ClockDep,
+) -> DispatchPayout:
+    """Use-case отправки подтверждённой выплаты провайдеру."""
+    return DispatchPayout(
+        payouts=payouts, gateway=gateway, audit=audit, clock=clock
+    )
+
+
+def get_record_payout_result(
+    payouts: PayoutRepoDep, audit: AuditDep, clock: ClockDep
+) -> RecordPayoutResult:
+    """Use-case приёма результата выплаты из вебхука провайдера."""
+    return RecordPayoutResult(payouts=payouts, audit=audit, clock=clock)
 
 
 def get_season_prize_fund(

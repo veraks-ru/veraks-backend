@@ -97,6 +97,18 @@ class PaymentWebhookRequest(BaseModel):
     subscription_id: uuid.UUID | None = None
 
 
+class PayoutWebhookRequest(BaseModel):
+    """Упрощённое тело вебхука результата выплаты физлицу.
+
+    TODO(billing-infra): заменить на реальную схему провайдера и проверять
+    подпись вебхука в адаптере до вызова use-case.
+    """
+
+    provider: PaymentProvider
+    provider_payout_id: str = Field(min_length=1)
+    succeeded: bool
+
+
 class PaymentResponse(BaseModel):
     """Проекция платежа."""
 

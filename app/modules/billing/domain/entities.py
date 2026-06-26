@@ -231,16 +231,31 @@ class Payout:
     def mark_processing(
         self, *, provider: PaymentProvider, provider_payout_id: str
     ) -> None:
-        """Отметить отправку провайдеру выплат."""
+        """Отметить отправку провайдеру выплат (только из ``approved``)."""
+        if self.status is not PayoutStatus.APPROVED:
+            raise PayoutAlreadyDecidedError(
+                f"Отправить можно только подтверждённую выплату, статус "
+                f"{self.status.value}"
+            )
         self.status = PayoutStatus.PROCESSING
         self.provider = provider
         self.provider_payout_id = provider_payout_id
 
     def mark_paid(self, *, now: datetime) -> None:
-        """Зафиксировать успешную выплату."""
+        """Зафиксировать успешную выплату (только из ``processing``)."""
+        if self.status is not PayoutStatus.PROCESSING:
+            raise PayoutAlreadyDecidedError(
+                f"Отметить оплаченной можно только отправленную выплату, статус "
+                f"{self.status.value}"
+            )
         self.status = PayoutStatus.PAID
         self.paid_at = now
 
     def mark_failed(self) -> None:
-        """Зафиксировать неуспех выплаты у провайдера."""
+        """Зафиксировать неуспех выплаты у провайдера (только из ``processing``)."""
+        if self.status is not PayoutStatus.PROCESSING:
+            raise PayoutAlreadyDecidedError(
+                f"Отметить неуспешной можно только отправленную выплату, статус "
+                f"{self.status.value}"
+            )
         self.status = PayoutStatus.FAILED

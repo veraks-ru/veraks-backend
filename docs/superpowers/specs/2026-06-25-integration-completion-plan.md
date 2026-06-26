@@ -41,7 +41,7 @@ Discipline: TDD for behavior changes. Keep `pytest` / `mypy app` / `ruff check a
 **Phase 3 COMPLETE.** ✅
 
 ## Phase 4 — Billing completion
-- [ ] A5 payout dispatch (call `send_payout`) + `POST /webhooks/payouts/...` lifecycle `approved→processing→paid/failed`.
+- [x] A5 payout dispatch + webhook lifecycle: entity transition guards added (`mark_processing`←approved, `mark_paid`/`mark_failed`←processing); `DispatchPayout` use-case (calls `send_payout`, approved→processing) + `POST /admin/payouts/{id}/dispatch`; `RecordPayoutResult` use-case (idempotent on terminal) + `POST /webhooks/payouts/yookassa` → paid/failed; `PayoutWebhookRequest` schema. 5 unit + 1 integration (full approve→dispatch→webhook→paid) tests. 383 green.
 - [ ] D1 webhook signature verification (payments + payouts), `WEBHOOK_*` settings.
 - [x] E1 `events.season_id`: post-publish lock added to `apply_edits` (season frozen once `open`, fairness of season scoring) + tests. ORM now declares `ForeignKey("seasons.id")` — the DB FK already existed (migration `0007`), only the ORM declaration was missing (create_all drift); no new migration. Stale auto-close TODO comment removed (done in B1). 377 green.
 

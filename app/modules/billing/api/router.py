@@ -19,10 +19,12 @@ from app.modules.billing.api.dependencies import (
     get_approve_payout,
     get_cancel_subscription,
     get_create_payout,
+    get_dispatch_payout,
     get_list_my_payouts,
     get_list_payouts,
     get_my_subscription,
     get_prize_fund,
+    get_record_payout_result,
     get_season_prize_fund,
     get_record_sponsor_deposit,
     get_record_subscription_payment,
@@ -34,6 +36,7 @@ from app.modules.billing.api.schemas import (
     PaymentResponse,
     PaymentWebhookRequest,
     PayoutResponse,
+    PayoutWebhookRequest,
     PlanResponse,
     PlansResponse,
     PrizeFundResponse,
@@ -48,11 +51,13 @@ from app.modules.billing.application.use_cases import (
     ApprovePayout,
     CancelSubscription,
     CreatePayout,
+    DispatchPayout,
     GetMySubscription,
     GetPrizeFund,
     GetSeasonPrizeFund,
     ListMyPayouts,
     ListPayouts,
+    RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
     StartSubscription,
@@ -296,4 +301,41 @@ async def approve_payout(
 ) -> PayoutResponse:
     """Подтвердить выплату (другой admin) и провести её в кассе PRIZE."""
     payout = await uc.execute(actor=actor, payout_id=payout_id)
+    return PayoutResponse.from_domain(payout)
+
+
+@router.post(
+    "/admin/payouts/{payout_id}/dispatch",
+    response_model=PayoutResponse,
+    summary="Отправить подтверждённую выплату провайдеру (admin)",
+)
+async def dispatch_payout(
+    payout_id: uuid.UUID,
+    actor: ActorDep,
+    uc: Annotated[DispatchPayout, Depends(get_dispatch_payout)],
+) -> PayoutResponse:
+    """Отправляет выплату провайдеру (``approved → processing``)."""
+    payout = await uc.execute(actor=actor, payout_id=payout_id)
+    return PayoutResponse.from_domain(payout)
+
+
+@router.post(
+    "/webhooks/payouts/yookassa",
+    response_model=PayoutResponse,
+    summary="Вебхук результата выплаты (→ paid/failed)",
+)
+async def yookassa_payout_webhook(
+    payload: PayoutWebhookRequest,
+    uc: Annotated[RecordPayoutResult, Depends(get_record_payout_result)],
+) -> PayoutResponse:
+    """Идемпотентно фиксирует исход выплаты у провайдера.
+
+    TODO(billing-infra): проверять подпись вебхука провайдера в адаптере до
+    вызова use-case; здесь — упрощённое тело.
+    """
+    payout = await uc.execute(
+        provider=payload.provider,
+        provider_payout_id=payload.provider_payout_id,
+        succeeded=payload.succeeded,
+    )
     return PayoutResponse.from_domain(payout)

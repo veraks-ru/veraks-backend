@@ -29,6 +29,7 @@ from app.modules.billing.domain.entities import (
     PaymentStatus,
     PrizeFund,
     Payout,
+    PayoutStatus,
     Subscription,
     SubscriptionPlan,
 )
@@ -57,6 +58,7 @@ from app.modules.billing.domain.policies import (
 )
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.gateways import (
+    PayoutGateway,
     SeasonDirectory,
     SubscriptionCheckoutGateway,
 )
@@ -693,5 +695,112 @@ class ApprovePayout:
                 "ledger_transaction_id": str(saved_txn.id),
                 "ledger_type": LedgerType.PRIZE.value,
             },
+        )
+        return saved
+
+
+class DispatchPayout:
+    """Отправка подтверждённой выплаты провайдеру (``approved → processing``).
+
+    Вызывает шлюз выплат физлицам и фиксирует ``provider``/``provider_payout_id``
+    для последующего сопоставления с вебхуком. Проводка кассы PRIZE уже сделана
+    на шаге подтверждения — здесь только внешняя отправка и смена статуса.
+    """
+
+    def __init__(
+        self,
+        *,
+        payouts: PayoutRepository,
+        gateway: PayoutGateway,
+        audit: AuditTrail,
+        clock: Clock,
+    ) -> None:
+        self._payouts = payouts
+        self._gateway = gateway
+        self._audit = audit
+        self._clock = clock
+
+    async def execute(self, *, actor: Actor, payout_id: uuid.UUID) -> Payout:
+        """Отправляет выплату провайдеру и переводит её в ``processing``."""
+        ensure_can_approve_payout(actor.role)
+        payout = await self._payouts.get_by_id(payout_id)
+        if payout is None:
+            raise PayoutNotFoundError(str(payout_id))
+
+        instruction = await self._gateway.send_payout(
+            payout_id=payout.id,
+            user_id=payout.user_id,
+            amount_kopecks=payout.amount_kopecks,
+        )
+        payout.mark_processing(
+            provider=PaymentProvider(instruction.provider),
+            provider_payout_id=instruction.provider_payout_id,
+        )
+        saved = await self._payouts.update(payout)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action="prize.payout.dispatched",
+            entity_type="payout",
+            entity_id=saved.id,
+            after={
+                "status": saved.status.value,
+                "provider": instruction.provider,
+                "provider_payout_id": instruction.provider_payout_id,
+            },
+        )
+        return saved
+
+
+class RecordPayoutResult:
+    """Приём результата выплаты из вебхука провайдера (``processing → paid/failed``).
+
+    Идемпотентно: повторный вебхук по уже терминальной выплате (paid/failed) —
+    no-op (возвращает текущее состояние). Сопоставление — по
+    ``(provider, provider_payout_id)``, проставленным на шаге отправки.
+    """
+
+    def __init__(
+        self,
+        *,
+        payouts: PayoutRepository,
+        audit: AuditTrail,
+        clock: Clock,
+    ) -> None:
+        self._payouts = payouts
+        self._audit = audit
+        self._clock = clock
+
+    async def execute(
+        self,
+        *,
+        provider: PaymentProvider,
+        provider_payout_id: str,
+        succeeded: bool,
+    ) -> Payout:
+        """Фиксирует исход выплаты у провайдера (paid/failed), идемпотентно."""
+        payout = await self._payouts.get_by_provider_ref(
+            provider=provider.value, provider_payout_id=provider_payout_id
+        )
+        if payout is None:
+            raise PayoutNotFoundError(
+                f"Выплата {provider.value}:{provider_payout_id} не найдена"
+            )
+        if payout.status in (PayoutStatus.PAID, PayoutStatus.FAILED):
+            return payout  # терминальное состояние — повторный вебхук игнорируем
+
+        if succeeded:
+            payout.mark_paid(now=self._clock.now())
+        else:
+            payout.mark_failed()
+        saved = await self._payouts.update(payout)
+        await self._audit.record(
+            actor_id=None,
+            actor_type=AuditActorType.SYSTEM,
+            action="prize.payout.paid" if succeeded else "prize.payout.failed",
+            entity_type="payout",
+            entity_id=saved.id,
+            after={"status": saved.status.value},
+            metadata={"provider": provider.value, "provider_payout_id": provider_payout_id},
         )
         return saved
