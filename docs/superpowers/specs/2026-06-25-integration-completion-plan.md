@@ -24,7 +24,9 @@ Discipline: TDD for behavior changes. Keep `pytest` / `mypy app` / `ruff check a
   - [~] A1.2 cross-domain enrichment (served from OWNING domain's router under `/users/...` paths to avoid module cycles):
     - [x] `GET /users/me/payouts` — served by billing router (`PayoutRepository.list_by_user`, `ListMyPayouts` use-case). Renamed admin `list`→`list_all` (shadowed builtin). 2 tests. 359 green.
     - [x] `GET /users/me/predictions` (all incl pending) + `GET /users/{username}/predictions` (public, resolved-only) — predictions router. New `UserDirectory` port + `SqlAlchemyUserDirectory` (predictions→identity username→id), `PredictionRepository.list_for_user(resolved_only=)`, `ListMyPredictions`/`ListUserPredictions` use-cases, `ProfileUserNotFoundError`→404. 5 unit/integration tests. 366 green.
-    - [ ] `GET /users/{username}/calibration` — scoring router (compute calibration from user's resolved predictions).
+    - [x] `GET /users/{username}/calibration` — scoring router. Calibration math already existed; switched endpoint from `{user_id}` (UUID, non-spec) to `{username}` via new scoring `UserDirectory` gateway. `GetUserCalibration` now resolves username→id (404 `ProfileNotFoundError`) and returns `(user_id, report)`. 368 green.
+
+**Phase 2 COMPLETE.** ✅
 - [x] A2 crowd-signal `GET /events/{id}/predictions/summary` — `GetEventPredictionSummary` use-case (distribution per grade + consensus `c_e`), hidden until close (`PredictionSummaryHiddenError`→409, anti-anchoring §5). Public endpoint. 6 tests. 343 green.
 - [x] A4 `GET /billing/plans` + `GET /billing/subscriptions/me` (added `get_latest_by_user` to port+adapter+fake, `GetMySubscription` use-case, `PlanResponse`/`PlansResponse` schemas, 4 integration tests). 337 tests green.
 - [x] A6 `GET /admin/payouts` (list, admin, season filter) + `GET /seasons/{slug}/prize-fund` (public transparency: funds+balances+payouts; new `SeasonDirectory` billing→seasons gateway `SqlAlchemySeasonDirectory`, `PrizeFundRepository.list_by_season`, `GetSeasonPrizeFund` use-case, billing `SeasonNotFoundError`→404). 346 green.

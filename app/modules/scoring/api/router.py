@@ -128,20 +128,20 @@ async def season_leaderboard(
 
 
 @router.get(
-    "/users/{user_id}/calibration",
+    "/users/{username}/calibration",
     response_model=CalibrationResponse,
     summary="Калибровка профиля (predicted vs actual)",
 )
 async def user_calibration(
-    user_id: uuid.UUID,
+    username: str,
     uc: Annotated[GetUserCalibration, Depends(get_user_calibration_uc)],
 ) -> CalibrationResponse:
     """Диаграмма надёжности по 5 градациям + декомпозиция Brier по Мёрфи.
 
-    TODO(users-integration): резолвить публичный ``username`` в ``user_id``
-    через профильный домен (контракт API задания — по ``username``).
+    Публичный профиль по ``username`` (контракт API задания); хэндл резолвится
+    в ``user_id`` через профильный шлюз. Неизвестный профиль → 404.
     """
-    report = await uc.execute(user_id=user_id)
+    user_id, report = await uc.execute(username=username)
     return CalibrationResponse.from_report(user_id, report)
 
 

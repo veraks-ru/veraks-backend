@@ -23,6 +23,7 @@ from app.modules.scoring.application.use_cases import (
 from app.modules.scoring.domain.entities import ScopeType
 from app.modules.scoring.domain.errors import (
     EventNotResolvedError,
+    ProfileNotFoundError,
     ScoringTargetEventNotFoundError,
 )
 from app.modules.scoring.domain.formulas import (
@@ -36,6 +37,7 @@ from tests.scoring.fakes import (
     FakeEventScoringGateway,
     FakePredictionScoreWriter,
     FakeSeasonConfigGateway,
+    FakeUserDirectory,
     InMemoryRatingRepository,
 )
 
@@ -243,13 +245,23 @@ async def test_get_leaderboard_returns_ranked_scope() -> None:
     assert board[0].rank == 1
 
 
-async def test_get_user_calibration_delegates_to_domain() -> None:
+async def test_get_user_calibration_resolves_username_and_delegates() -> None:
     user_id = uuid.uuid4()
     entries = [(0.70, 1)] * 31 + [(0.70, 0)] * 9
     gateway = FakeEventScoringGateway(user_entries={user_id: entries})
-    uc = GetUserCalibration(gateway=gateway)
+    users = FakeUserDirectory({"alice": user_id})
+    uc = GetUserCalibration(gateway=gateway, users=users)
 
-    report = await uc.execute(user_id=user_id)
+    resolved_id, report = await uc.execute(username="alice")
 
+    assert resolved_id == user_id
     assert report.n_total == 40
     assert report.bins[0].frequency == pytest.approx(0.775, abs=1e-4)
+
+
+async def test_get_user_calibration_unknown_profile_raises() -> None:
+    uc = GetUserCalibration(
+        gateway=FakeEventScoringGateway(), users=FakeUserDirectory()
+    )
+    with pytest.raises(ProfileNotFoundError):
+        await uc.execute(username="ghost")

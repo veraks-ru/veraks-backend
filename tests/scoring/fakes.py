@@ -31,6 +31,19 @@ class FakeClock:
         return self._now
 
 
+class FakeUserDirectory:
+    """Резолв username → user_id в памяти (только «активные»)."""
+
+    def __init__(self, by_username: dict[str, uuid.UUID] | None = None) -> None:
+        self._by_username = by_username or {}
+
+    def set(self, username: str, user_id: uuid.UUID) -> None:
+        self._by_username[username] = user_id
+
+    async def resolve_username(self, username: str) -> uuid.UUID | None:
+        return self._by_username.get(username)
+
+
 class FakeEventScoringGateway:
     """Шлюз к данным разрешённых событий и калибровочным записям."""
 

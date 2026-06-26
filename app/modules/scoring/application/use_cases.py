@@ -29,6 +29,7 @@ from app.modules.scoring.domain.constants import MIN_PREDICTORS
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.errors import (
     EventNotResolvedError,
+    ProfileNotFoundError,
     RatingNotFoundError,
     ScoringTargetEventNotFoundError,
 )
@@ -46,6 +47,7 @@ from app.modules.scoring.ports.gateways import (
 )
 from app.modules.scoring.ports.repositories import RatingRepository
 from app.modules.scoring.ports.season_config import SeasonConfigGateway
+from app.modules.scoring.ports.users import UserDirectory
 from app.modules.seasons.domain.entities import SeasonStatus
 from app.modules.seasons.domain.errors import SeasonNotFoundError
 from app.modules.seasons.domain.qualification import evaluate_qualification
@@ -440,12 +442,24 @@ class GetSeasonQualification:
 
 
 class GetUserCalibration:
-    """Калибровка профиля пользователя (predicted vs actual по градациям)."""
+    """Калибровка публичного профиля по хэндлу (predicted vs actual)."""
 
-    def __init__(self, *, gateway: EventScoringGateway) -> None:
+    def __init__(
+        self, *, gateway: EventScoringGateway, users: UserDirectory
+    ) -> None:
         self._gateway = gateway
+        self._users = users
 
-    async def execute(self, *, user_id: uuid.UUID) -> CalibrationReport:
-        """Строит отчёт калибровки по засчитанным прогнозам пользователя."""
+    async def execute(
+        self, *, username: str
+    ) -> tuple[uuid.UUID, CalibrationReport]:
+        """Резолвит хэндл и строит отчёт калибровки.
+
+        Возвращает ``(user_id, отчёт)``; неизвестный профиль →
+        :class:`ProfileNotFoundError` (маппится в 404).
+        """
+        user_id = await self._users.resolve_username(username)
+        if user_id is None:
+            raise ProfileNotFoundError("Профиль не найден")
         entries = await self._gateway.list_user_calibration_entries(user_id)
-        return calibrate(entries)
+        return user_id, calibrate(entries)

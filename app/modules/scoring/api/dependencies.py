@@ -24,6 +24,7 @@ from app.modules.scoring.adapters.scoring_gateway import (
 from app.modules.scoring.adapters.season_config_gateway import (
     SqlAlchemySeasonConfigGateway,
 )
+from app.modules.scoring.adapters.user_gateway import SqlAlchemyUserDirectory
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
     GetSeasonLeaderboard,
@@ -41,6 +42,7 @@ from app.modules.scoring.ports.gateways import (
 )
 from app.modules.scoring.ports.repositories import RatingRepository
 from app.modules.scoring.ports.season_config import SeasonConfigGateway
+from app.modules.scoring.ports.users import UserDirectory
 from app.modules.resolutions.adapters.dispute_guard import ResolutionDisputeGuard
 from app.modules.resolutions.adapters.repositories import SqlAlchemyDisputeRepository
 from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
@@ -177,9 +179,19 @@ def get_season_qualification_uc(
     return GetSeasonQualification(gateway=gateway, season_config=season_config)
 
 
-def get_user_calibration_uc(gateway: GatewayDep) -> GetUserCalibration:
-    """Use-case калибровки профиля."""
-    return GetUserCalibration(gateway=gateway)
+def get_user_directory(session: SessionDep) -> UserDirectory:
+    """Резолв пользователя по хэндлу (чтение таблицы users в монолите)."""
+    return SqlAlchemyUserDirectory(session)
+
+
+UserDirectoryDep = Annotated[UserDirectory, Depends(get_user_directory)]
+
+
+def get_user_calibration_uc(
+    gateway: GatewayDep, users: UserDirectoryDep
+) -> GetUserCalibration:
+    """Use-case калибровки профиля по хэндлу."""
+    return GetUserCalibration(gateway=gateway, users=users)
 
 
 def get_finalize_season(

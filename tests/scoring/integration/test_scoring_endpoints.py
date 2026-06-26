@@ -26,6 +26,7 @@ from app.modules.scoring.api.dependencies import (
     get_rating_repository,
     get_season_config_gateway,
     get_season_repository,
+    get_user_directory,
 )
 from app.modules.scoring.application.dto import EventScoringStatus, SeasonConfigView
 from app.modules.scoring.application.use_cases import RecomputeRatings
@@ -38,6 +39,7 @@ from tests.scoring.fakes import (
     FakeEventScoringGateway,
     FakePredictionScoreWriter,
     FakeSeasonConfigGateway,
+    FakeUserDirectory,
     InMemoryRatingRepository,
 )
 from tests.seasons.fakes import FakeDisputeGuard, InMemorySeasonRepository
@@ -67,6 +69,7 @@ def make_client():
         season_config: FakeSeasonConfigGateway | None = None,
         season_repo: InMemorySeasonRepository | None = None,
         dispute_guard: FakeDisputeGuard | None = None,
+        users: FakeUserDirectory | None = None,
         role: UserRole | None = UserRole.USER,
     ):
         gateway = gateway or FakeEventScoringGateway()
@@ -75,6 +78,7 @@ def make_client():
         season_config = season_config or FakeSeasonConfigGateway()
         season_repo = season_repo or InMemorySeasonRepository()
         dispute_guard = dispute_guard or FakeDisputeGuard()
+        users = users or FakeUserDirectory()
 
         app = create_app()
         app.dependency_overrides[get_event_scoring_gateway] = lambda: gateway
@@ -83,6 +87,7 @@ def make_client():
         app.dependency_overrides[get_season_config_gateway] = lambda: season_config
         app.dependency_overrides[get_season_repository] = lambda: season_repo
         app.dependency_overrides[get_dispute_guard] = lambda: dispute_guard
+        app.dependency_overrides[get_user_directory] = lambda: users
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
         if role is not None:
             app.dependency_overrides[get_current_user] = lambda: _user(role)
@@ -150,14 +155,21 @@ def test_user_calibration_endpoint(make_client) -> None:
     user_id = uuid.uuid4()
     entries = [(0.70, 1)] * 31 + [(0.70, 0)] * 9
     gateway = FakeEventScoringGateway(user_entries={user_id: entries})
-    client, _, _, _ = make_client(gateway=gateway)
+    users = FakeUserDirectory({"alice": user_id})
+    client, _, _, _ = make_client(gateway=gateway, users=users)
 
-    resp = client.get(f"/users/{user_id}/calibration")
+    resp = client.get("/users/alice/calibration")
     assert resp.status_code == 200
     body = resp.json()
     assert body["n_total"] == 40
     assert body["bins"][0]["frequency"] == pytest.approx(0.775, abs=1e-4)
     assert body["ece"] == pytest.approx(0.075, abs=1e-4)
+
+
+def test_user_calibration_unknown_profile_404(make_client) -> None:
+    client, _, _, _ = make_client()  # пустой UserDirectory
+    resp = client.get("/users/ghost/calibration")
+    assert resp.status_code == 404
 
 
 # ── Скоринг события (RBAC) ───────────────────────────────────────────────────

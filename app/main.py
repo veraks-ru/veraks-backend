@@ -34,6 +34,7 @@ from app.modules.predictions.domain.errors import (
 from app.modules.scoring.api.router import router as scoring_router
 from app.modules.scoring.domain.errors import (
     EventNotResolvedError,
+    ProfileNotFoundError,
     RatingNotFoundError,
     ScoringError,
     ScoringPermissionError,
@@ -123,6 +124,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     # scoring
     ScoringTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
     RatingNotFoundError: status.HTTP_404_NOT_FOUND,
+    ProfileNotFoundError: status.HTTP_404_NOT_FOUND,
     EventNotResolvedError: status.HTTP_409_CONFLICT,
     ScoringPermissionError: status.HTTP_403_FORBIDDEN,
     # seasons

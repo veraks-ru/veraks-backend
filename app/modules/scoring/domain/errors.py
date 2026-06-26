@@ -29,5 +29,9 @@ class RatingNotFoundError(ScoringError):
     """Запрошенный рейтинг (профиль/лидерборд) не найден."""
 
 
+class ProfileNotFoundError(ScoringError):
+    """Пользователь с таким публичным хэндлом не найден."""
+
+
 class ScoringPermissionError(ScoringError):
     """Недостаточно прав для запуска скоринга/пересчёта рейтингов."""
