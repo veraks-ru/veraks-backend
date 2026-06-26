@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.modules.events.api.router import router as events_router
@@ -174,6 +177,24 @@ def _resolve_status(exc: Exception) -> int:
 def create_app() -> FastAPI:
     """Собирает приложение: роутеры доменов + обработчики ошибок."""
     app = FastAPI(title="Orakul — биржа репутации предсказателей")
+
+    # CORS для локального фронтенда (Next.js). Источники — из env, по умолчанию
+    # dev-порт. allow_credentials=True обязателен для сессионных cookie, поэтому
+    # источники задаются явным списком (не "*").
+    origins = [
+        o.strip()
+        for o in os.environ.get(
+            "CORS_ALLOW_ORIGINS", "http://localhost:3000"
+        ).split(",")
+        if o.strip()
+    ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.exception_handler(IdentityError)
     async def _identity_error_handler(

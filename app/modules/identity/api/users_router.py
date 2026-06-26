@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -15,18 +16,39 @@ from app.modules.identity.api.dependencies import (
     CurrentUser,
     get_public_profile_uc,
     get_update_profile_uc,
+    get_user_repository,
 )
 from app.modules.identity.api.schemas import (
     MeResponse,
     PublicProfileResponse,
+    PublicUserRef,
     UpdateProfileRequest,
 )
 from app.modules.identity.application.use_cases import (
     GetPublicProfile,
     UpdateMyProfile,
 )
+from app.modules.identity.domain.entities import UserStatus
+from app.modules.identity.domain.errors import UserNotFoundError
+from app.modules.identity.ports.repositories import UserRepository
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+@router.get(
+    "/lookup/{user_id}",
+    response_model=PublicUserRef,
+    summary="Публичный хэндл по id (для лидербордов)",
+)
+async def public_profile_by_id(
+    user_id: uuid.UUID,
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+) -> PublicUserRef:
+    """Резолвит ``user_id`` в публичный хэндл (псевдоним). Только активные."""
+    user = await users.get_by_id(user_id)
+    if user is None or user.status is not UserStatus.ACTIVE:
+        raise UserNotFoundError("Профиль не найден")
+    return PublicUserRef(user_id=user.id, username=user.username, display_name=user.display_name)
 
 
 @router.patch("/me", response_model=MeResponse, summary="Изменить свой профиль")

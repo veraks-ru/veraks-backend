@@ -68,6 +68,14 @@ class PublicProfileResponse(BaseModel):
         )
 
 
+class PublicUserRef(BaseModel):
+    """Минимальная публичная ссылка на пользователя (для лидербордов)."""
+
+    user_id: uuid.UUID
+    username: str
+    display_name: str
+
+
 class UpdateProfileRequest(BaseModel):
     """Изменение собственного профиля. Поля опциональны (partial update)."""
 
