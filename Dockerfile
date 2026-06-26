@@ -12,9 +12,10 @@ COPY pyproject.toml ./
 COPY app ./app
 RUN pip install --upgrade pip && pip install -e .
 
-# Остальное (alembic, конфиги) — отдельным слоем.
+# Остальное (alembic, конфиги, сид) — отдельным слоем.
 COPY alembic ./alembic
 COPY alembic.ini ./
+COPY seed.py ./
 
 EXPOSE 8000
 

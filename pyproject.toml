@@ -12,7 +12,9 @@ dependencies = [
     "asyncpg>=0.29",
     "alembic>=1.13",
     "PyJWT>=2.8",
-    "cryptography>=42.0",
+    # Верхняя граница < 47: prebuilt aarch64-колесо cryptography 49.x падает с
+    # SIGILL (illegal instruction) в arm64-VM Docker Desktop. 42–46 работают.
+    "cryptography>=42.0,<47",
     "httpx>=0.27",
     "redis>=5.0",
     "arq>=0.25",

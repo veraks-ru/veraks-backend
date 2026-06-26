@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import select, text
 
 from app.config import get_settings
 from app.db.session import session_scope
@@ -115,11 +115,15 @@ def grade_for(outcome: bool, skill: float) -> int:
 
 
 async def reset(session) -> None:
-    for model in (
-        RatingORM, PredictionORM, ResolutionORM, EventORM,
-        CategoryORM, SeasonORM, UserORM,
-    ):
-        await session.execute(delete(model))
+    # TRUNCATE (а не DELETE): resolutions/ledger/audit — append-only, на DELETE
+    # стоит блокирующий триггер. TRUNCATE его не задевает; CASCADE подчищает
+    # зависимые таблицы (подписки/платежи/выплаты/диспуты и т.п.).
+    await session.execute(
+        text(
+            "TRUNCATE TABLE users, categories, seasons, events, predictions, "
+            "resolutions, disputes, ratings RESTART IDENTITY CASCADE"
+        )
+    )
 
 
 async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
