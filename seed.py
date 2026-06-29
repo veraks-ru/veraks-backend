@@ -60,6 +60,19 @@ GRADES = [
 ]
 PROB = {0: "0.10", 1: "0.30", 2: "0.50", 3: "0.70", 4: "0.90"}
 
+# Снапшот правил сезона. Пороги занижены под демо-пул (4 разрешённых события
+# в 4 категориях), чтобы засеянные участники реально квалифицировались.
+# Структура зеркалит seasons.domain.value_objects.LeagueConfig.
+LEAGUE_CONFIG = {
+    "gradation_map": [0.1, 0.3, 0.5, 0.7, 0.9],
+    "n_min": 3,           # минимум разрешённых прогнозов (у каждого их 4)
+    "c_min": 2,           # минимум охваченных категорий
+    "w_min": 0.0,         # порог охвата сложности — для демо снят
+    "m_per_category": 1,
+    "k_shrink": 1.0,      # меньше усадка → заметнее разброс skill на малом пуле
+    "min_predictors": 5,  # у каждого события 10 предсказателей
+}
+
 CATEGORIES = [
     ("politics", "Политика"),
     ("economy", "Экономика"),
@@ -172,11 +185,12 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
             starts_at=now - 30 * DAY,
             ends_at=now + 60 * DAY,
             status=SeasonStatus.ACTIVE,
-            league_config=None,
+            league_config=LEAGUE_CONFIG,
             created_at=now - 30 * DAY,
             updated_at=now,
         )
         session.add(season)
+        await session.flush()  # сезон на месте до вставки событий (FK season_id)
 
         # ── Разрешённые события + прогнозы (locked) ──
         for slug, title, outcome in RESOLVED:
@@ -186,7 +200,7 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
                 description="Демо-событие для локальной разработки.",
                 category_id=cats[slug],
                 created_by=editor_id,
-                season_id=None,
+                season_id=season.id,
                 status=EventStatus.RESOLVED,
                 opens_at=now - 40 * DAY,
                 closes_at=now - 12 * DAY,
@@ -241,7 +255,7 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
                 description="Демо-событие для локальной разработки.",
                 category_id=cats[slug],
                 created_by=editor_id,
-                season_id=None,
+                season_id=season.id,
                 status=EventStatus.OPEN,
                 opens_at=now - 5 * DAY,
                 closes_at=closes,
