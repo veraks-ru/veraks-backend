@@ -148,8 +148,11 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
         await reset(session)
 
         # ── Пользователи ──
+        # kalibr и mediana — админы (mediana нужна как второй админ для
+        # maker-checker выплат: подтверждающий обязан отличаться от инициатора).
+        # baseline — арбитр. Остальные — обычные участники.
+        roles = {0: UserRole.ADMIN, 1: UserRole.ADMIN, 2: UserRole.ARBITER}
         users: list[UserORM] = []
-        editor_id: uuid.UUID | None = None
         for i, (username, display, _skill, snils_num) in enumerate(USERS):
             digits = f"{snils_num:09d}00"
             u = UserORM(
@@ -159,7 +162,7 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
                 username=username,
                 display_name=display,
                 real_name_enc=None,
-                role=UserRole.EDITOR if i == 0 else UserRole.USER,
+                role=roles.get(i, UserRole.USER),
                 status=UserStatus.ACTIVE,
                 created_at=now - 220 * DAY,
             )

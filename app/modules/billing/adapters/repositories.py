@@ -69,6 +69,10 @@ class SqlAlchemyLedgerRepository:
         схемные триггеры (миграция ``0010``) дублируют это на уровне БД.
         """
         self._session.add(LedgerTransactionORM.from_domain(transaction))
+        # Транзакция должна существовать в БД ДО вставки ног: под asyncpg
+        # unit-of-work иначе батчит ноги раньше транзакции и ловит нарушение
+        # FK ledger_entries.transaction_id → ledger_transactions.id.
+        await self._session.flush()
         for entry in transaction.entries:
             self._session.add(
                 LedgerEntryORM.from_domain(
