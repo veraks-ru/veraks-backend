@@ -34,6 +34,9 @@ from app.modules.events.application.use_cases import (
 from app.modules.events.ports.clock import Clock
 from app.modules.events.ports.repositories import CategoryRepository, EventRepository
 from app.modules.identity.api.dependencies import CurrentUser
+from app.modules.predictions.adapters.clock import SystemClock as PredictionsClock
+from app.modules.predictions.adapters.repository import SqlAlchemyPredictionRepository
+from app.modules.predictions.application.use_cases import LockEventPredictions
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from app.shared.audit.ports.audit_trail import AuditTrail
 
@@ -109,6 +112,21 @@ def get_publish_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) ->
 def get_close_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> CloseEvent:
     """Use-case закрытия приёма прогнозов."""
     return CloseEvent(events=events, clock=clock, audit=audit)
+
+
+def get_lock_event_predictions(session: SessionDep) -> LockEventPredictions:
+    """Композит-рут HTTP: блокировка прогнозов при закрытии приёма.
+
+    Переход ``open → closed`` должен замораживать прогнозы так же, как это делает
+    фоновый воркер по наступлению ``closes_at`` (см. ``LockEventPredictions``):
+    иначе вручную закрытое событие не скорится (его прогнозы не ``is_locked``).
+    Единственное место, где events-API знает о predictions — как воркер знает
+    оба домена.
+    """
+    return LockEventPredictions(
+        predictions=SqlAlchemyPredictionRepository(session),
+        clock=PredictionsClock(),
+    )
 
 
 def get_cancel_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> CancelEvent:

@@ -22,6 +22,7 @@ from app.modules.events.api.dependencies import (
     get_get_event,
     get_list_categories,
     get_list_events,
+    get_lock_event_predictions,
     get_publish_event,
     get_update_event,
 )
@@ -43,6 +44,7 @@ from app.modules.events.application.use_cases import (
     PublishEvent,
     UpdateEvent,
 )
+from app.modules.predictions.application.use_cases import LockEventPredictions
 from app.modules.events.domain.entities import EventStatus
 from app.modules.events.ports.repositories import EventFilter
 
@@ -166,9 +168,16 @@ async def close_event(
     event_id: uuid.UUID,
     actor: ActorDep,
     uc: Annotated[CloseEvent, Depends(get_close_event)],
+    lock: Annotated[LockEventPredictions, Depends(get_lock_event_predictions)],
 ) -> EventResponse:
-    """Блокирует приём прогнозов вручную (editor/system)."""
+    """Закрывает приём (editor/system) и сразу замораживает прогнозы события.
+
+    Закрытие и блокировка идут в одной транзакции запроса: после ручного
+    закрытия событие можно скорить (его прогнозы становятся ``is_locked``),
+    как и при авто-закрытии воркером по ``closes_at``.
+    """
     event = await uc.execute(actor=actor, event_id=event_id)
+    await lock.execute(event_id=event_id)
     return EventResponse.from_domain(event)
 
 
