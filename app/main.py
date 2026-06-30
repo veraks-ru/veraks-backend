@@ -30,6 +30,7 @@ from app.modules.predictions.domain.errors import (
     PredictionLockedError,
     PredictionNotFoundError,
     PredictionsClosedError,
+    PredictionSubscriptionRequiredError,
     PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
     ProfileUserNotFoundError,
@@ -124,6 +125,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     PredictionsClosedError: status.HTTP_409_CONFLICT,
     PredictionLockedError: status.HTTP_409_CONFLICT,
     PredictionSummaryHiddenError: status.HTTP_409_CONFLICT,
+    PredictionSubscriptionRequiredError: status.HTTP_402_PAYMENT_REQUIRED,
     # scoring
     ScoringTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
     RatingNotFoundError: status.HTTP_404_NOT_FOUND,
@@ -176,7 +178,7 @@ def _resolve_status(exc: Exception) -> int:
 
 def create_app() -> FastAPI:
     """Собирает приложение: роутеры доменов + обработчики ошибок."""
-    app = FastAPI(title="Orakul — биржа репутации предсказателей")
+    app = FastAPI(title="Веракс — биржа репутации предсказателей")
 
     # CORS для локального фронтенда (Next.js). Источники — из env, по умолчанию
     # dev-порт. allow_credentials=True обязателен для сессионных cookie, поэтому

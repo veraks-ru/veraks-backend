@@ -75,8 +75,10 @@ class BillingSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="BILLING_", extra="ignore")
 
-    monthly_price_kopecks: int = Field(default=49_000, ge=1)
-    annual_price_kopecks: int = Field(default=490_000, ge=1)
+    daily_price_kopecks: int = Field(default=9_900, ge=1)
+    weekly_price_kopecks: int = Field(default=49_900, ge=1)
+    monthly_price_kopecks: int = Field(default=99_000, ge=1)
+    annual_price_kopecks: int = Field(default=499_000, ge=1)
 
 
 class WebhookSettings(BaseSettings):

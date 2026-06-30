@@ -21,6 +21,9 @@ from app.modules.predictions.adapters.user_gateway import SqlAlchemyUserDirector
 from app.modules.predictions.adapters.repository import (
     SqlAlchemyPredictionRepository,
 )
+from app.modules.predictions.adapters.subscription_gate import (
+    SqlAlchemySubscriptionGate,
+)
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
     GetMyPrediction,
@@ -33,6 +36,7 @@ from app.modules.predictions.ports.audit import AuditRecorder
 from app.modules.predictions.ports.clock import Clock
 from app.modules.predictions.ports.events import EventGateway
 from app.modules.predictions.ports.repositories import PredictionRepository
+from app.modules.predictions.ports.subscriptions import SubscriptionGate
 from app.modules.predictions.ports.users import UserDirectory
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 
@@ -71,6 +75,11 @@ def get_user_directory(session: SessionDep) -> UserDirectory:
     return SqlAlchemyUserDirectory(session)
 
 
+def get_subscription_gate(session: SessionDep) -> SubscriptionGate:
+    """Подписочный гейт голосования (чтение таблицы subscriptions billing)."""
+    return SqlAlchemySubscriptionGate(session)
+
+
 PredictionRepoDep = Annotated[
     PredictionRepository, Depends(get_prediction_repository)
 ]
@@ -78,6 +87,7 @@ EventGatewayDep = Annotated[EventGateway, Depends(get_event_gateway)]
 ClockDep = Annotated[Clock, Depends(get_clock)]
 AuditDep = Annotated[AuditRecorder, Depends(get_audit_recorder)]
 UserDirectoryDep = Annotated[UserDirectory, Depends(get_user_directory)]
+SubscriptionGateDep = Annotated[SubscriptionGate, Depends(get_subscription_gate)]
 
 
 # ── Use-cases ─────────────────────────────────────────────────────────────
@@ -88,10 +98,15 @@ def get_place_prediction(
     events: EventGatewayDep,
     clock: ClockDep,
     audit: AuditDep,
+    subscriptions: SubscriptionGateDep,
 ) -> PlacePrediction:
     """Use-case постановки/изменения прогноза."""
     return PlacePrediction(
-        predictions=predictions, events=events, clock=clock, audit=audit
+        predictions=predictions,
+        events=events,
+        clock=clock,
+        audit=audit,
+        subscriptions=subscriptions,
     )
 
 

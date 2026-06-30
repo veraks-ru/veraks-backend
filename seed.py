@@ -35,6 +35,12 @@ from app.modules.seasons.adapters.orm import SeasonORM
 from app.modules.seasons.domain.entities import SeasonStatus
 from app.modules.resolutions.adapters.orm import ResolutionORM
 from app.modules.resolutions.domain.entities import ResolutionStatus
+from app.modules.billing.adapters.orm import SubscriptionORM
+from app.modules.billing.domain.entities import (
+    PaymentProvider,
+    SubscriptionPlan,
+    SubscriptionStatus,
+)
 from app.modules.scoring.adapters.orm import RatingORM
 from app.modules.scoring.adapters.clock import SystemClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
@@ -171,6 +177,25 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
         editor_id = users[0].id
         skills = {users[i].id: USERS[i][2] for i in range(len(USERS))}
         await session.flush()  # пользователи на месте до вставки событий (FK)
+
+        # Активные подписки демо-аккаунтам: голосование требует подписки.
+        for u in users:
+            session.add(
+                SubscriptionORM(
+                    id=uuid.uuid4(),
+                    user_id=u.id,
+                    plan=SubscriptionPlan.MONTHLY,
+                    price_kopecks=99_000,
+                    provider=PaymentProvider.YOOKASSA,
+                    status=SubscriptionStatus.ACTIVE,
+                    provider_subscription_id=None,
+                    current_period_start=now - DAY,
+                    current_period_end=now + 30 * DAY,
+                    created_at=now - DAY,
+                    canceled_at=None,
+                )
+            )
+        await session.flush()
 
         # ── Категории ──
         cats: dict[str, uuid.UUID] = {}

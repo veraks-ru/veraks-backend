@@ -30,6 +30,8 @@ def _utcnow() -> datetime:
 class SubscriptionPlan(str, enum.Enum):
     """Тариф подписки."""
 
+    DAILY = "daily"
+    WEEKLY = "weekly"
     MONTHLY = "monthly"
     ANNUAL = "annual"
 

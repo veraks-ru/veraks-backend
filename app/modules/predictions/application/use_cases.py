@@ -25,7 +25,7 @@ from app.modules.predictions.application.dto import (
 from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
 from app.modules.predictions.domain.errors import (
     PredictionNotFoundError,
-    PredictionSummaryHiddenError,
+    PredictionSubscriptionRequiredError,
     PredictionTargetEventNotFoundError,
     ProfileUserNotFoundError,
 )
@@ -37,6 +37,7 @@ from app.modules.predictions.ports.repositories import (
     PredictionAlreadyExistsError,
     PredictionRepository,
 )
+from app.modules.predictions.ports.subscriptions import SubscriptionGate
 from app.modules.predictions.ports.users import UserDirectory
 
 _ACTION_CREATED = "prediction.created"
@@ -62,17 +63,24 @@ class PlacePrediction:
         events: EventGateway,
         clock: Clock,
         audit: AuditRecorder,
+        subscriptions: SubscriptionGate,
     ) -> None:
         self._predictions = predictions
         self._events = events
         self._clock = clock
         self._audit = audit
+        self._subscriptions = subscriptions
 
     async def execute(
         self, *, user_id: uuid.UUID, event_id: uuid.UUID, grade: ConfidenceGrade
     ) -> Prediction:
         """Ставит или обновляет прогноз; возвращает актуальное состояние."""
         now = self._clock.now()
+        # Голосовать может только подписчик (смотреть площадку — бесплатно).
+        if not await self._subscriptions.has_active_subscription(user_id, now):
+            raise PredictionSubscriptionRequiredError(
+                "Для голосования нужна активная подписка"
+            )
         snapshot = await self._events.get_snapshot(event_id)
         if snapshot is None:
             raise PredictionTargetEventNotFoundError("Событие не найдено")
@@ -147,9 +155,8 @@ class GetMyPrediction:
 class GetEventPredictionSummary:
     """Агрегированный «сигнал толпы» по событию (распределение + консенсус).
 
-    Виден **только после закрытия приёма** (анти-якорение, дизайн скоринга §5):
-    пока окно открыто, раскрытие консенсуса позволяло бы списывать/якорить
-    прогноз. До закрытия — :class:`PredictionSummaryHiddenError`.
+    Доступен всегда, в том числе пока приём открыт: текущий консенсус — часть
+    ценности площадки (можно зайти и посмотреть, как голосует толпа, не голосуя).
     """
 
     def __init__(
@@ -168,10 +175,6 @@ class GetEventPredictionSummary:
         snapshot = await self._events.get_snapshot(event_id)
         if snapshot is None:
             raise PredictionTargetEventNotFoundError("Событие не найдено")
-        if snapshot.is_accepting_at(self._clock.now()):
-            raise PredictionSummaryHiddenError(
-                "Сигнал толпы скрыт до закрытия приёма прогнозов"
-            )
 
         votes = await self._predictions.list_for_event(event_id)
         distribution = {grade: 0 for grade in ConfidenceGrade}

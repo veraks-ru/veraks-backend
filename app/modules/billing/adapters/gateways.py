@@ -29,6 +29,22 @@ class YookassaSubscriptionCheckoutGateway:
         )
 
 
+class LocalSubscriptionCheckoutGateway:
+    """Локальная заглушка оплаты (APP_ENV=local): без реального провайдера.
+
+    Возвращает фиктивный intent; активация подписки происходит сразу в
+    ``StartSubscription`` (instant_activate). НЕ для прода.
+    """
+
+    async def create_checkout(
+        self, *, subscription_id: uuid.UUID, amount_kopecks: int, description: str
+    ) -> CheckoutIntent:
+        return CheckoutIntent(
+            provider_subscription_id=f"local-{subscription_id}",
+            confirmation_url=f"local://subscription/{subscription_id}",
+        )
+
+
 class YookassaPayoutGateway:
     """Отправка выплаты физлицу через ЮKassa Payouts/СБП (призовая касса)."""
 

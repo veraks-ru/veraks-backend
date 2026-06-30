@@ -82,6 +82,8 @@ _ACTOR_TYPE_BY_ROLE: dict[UserRole, AuditActorType] = {
 
 # Длительность оплаченного периода по тарифу.
 _PLAN_PERIOD: dict[SubscriptionPlan, timedelta] = {
+    SubscriptionPlan.DAILY: timedelta(days=1),
+    SubscriptionPlan.WEEKLY: timedelta(days=7),
     SubscriptionPlan.MONTHLY: timedelta(days=30),
     SubscriptionPlan.ANNUAL: timedelta(days=365),
 }
@@ -120,12 +122,16 @@ class StartSubscription:
         audit: AuditTrail,
         clock: Clock,
         plan_prices: Mapping[SubscriptionPlan, int],
+        instant_activate: bool = False,
     ) -> None:
         self._subscriptions = subscriptions
         self._checkout = checkout
         self._audit = audit
         self._clock = clock
         self._plan_prices = plan_prices
+        # Локальный режим без реального провайдера: активируем сразу (дизайн —
+        # в проде активация приходит вебхуком об оплате).
+        self._instant_activate = instant_activate
 
     async def execute(
         self,
@@ -147,6 +153,9 @@ class StartSubscription:
             description=f"Подписка {plan.value}",
         )
         saved.provider_subscription_id = intent.provider_subscription_id
+        if self._instant_activate:
+            now = self._clock.now()
+            saved.activate(period_start=now, period_end=now + _PLAN_PERIOD[plan])
         saved = await self._subscriptions.update(saved)
 
         await self._audit.record(

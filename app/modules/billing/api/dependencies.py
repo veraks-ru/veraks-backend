@@ -16,6 +16,7 @@ from app.config import SettingsDep
 from app.db.session import get_session
 from app.modules.billing.adapters.clock import SystemClock
 from app.modules.billing.adapters.gateways import (
+    LocalSubscriptionCheckoutGateway,
     YookassaPayoutGateway,
     YookassaSubscriptionCheckoutGateway,
 )
@@ -99,8 +100,10 @@ def get_payout_repository(session: SessionDep) -> PayoutRepository:
     return SqlAlchemyPayoutRepository(session)
 
 
-def get_checkout_gateway() -> SubscriptionCheckoutGateway:
-    """Шлюз оплаты подписок (TODO(billing-infra): реальная интеграция)."""
+def get_checkout_gateway(settings: SettingsDep) -> SubscriptionCheckoutGateway:
+    """Шлюз оплаты подписок. Локально — заглушка с мгновенной активацией."""
+    if settings.app_env == "local":
+        return LocalSubscriptionCheckoutGateway()
     return YookassaSubscriptionCheckoutGateway()
 
 
@@ -141,6 +144,8 @@ AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
 def get_plan_prices(settings: SettingsDep) -> Mapping[SubscriptionPlan, int]:
     """Карта «тариф → цена в копейках» из настроек."""
     return {
+        SubscriptionPlan.DAILY: settings.billing.daily_price_kopecks,
+        SubscriptionPlan.WEEKLY: settings.billing.weekly_price_kopecks,
         SubscriptionPlan.MONTHLY: settings.billing.monthly_price_kopecks,
         SubscriptionPlan.ANNUAL: settings.billing.annual_price_kopecks,
     }
@@ -169,14 +174,16 @@ def get_start_subscription(
     audit: AuditDep,
     clock: ClockDep,
     plan_prices: PlanPricesDep,
+    settings: SettingsDep,
 ) -> StartSubscription:
-    """Use-case оформления подписки."""
+    """Use-case оформления подписки (локально — мгновенная активация)."""
     return StartSubscription(
         subscriptions=subscriptions,
         checkout=checkout,
         audit=audit,
         clock=clock,
         plan_prices=plan_prices,
+        instant_activate=settings.app_env == "local",
     )
 
 
