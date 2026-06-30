@@ -42,3 +42,7 @@ class CategorySlugTakenError(EventError):
 
 class EventPermissionError(EventError):
     """У актора недостаточно прав (RBAC) для операции над событиями."""
+
+
+class EventSubscriptionRequiredError(EventError):
+    """Предложить событие можно только с активной подпиской."""

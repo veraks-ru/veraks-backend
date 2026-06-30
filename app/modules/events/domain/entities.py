@@ -36,6 +36,7 @@ class EventStatus(str, enum.Enum):
     карта — в :data:`_ALLOWED_TRANSITIONS`.
     """
 
+    PROPOSED = "proposed"  # предложено пользователем, ждёт модерации
     DRAFT = "draft"
     OPEN = "open"
     CLOSED = "closed"
@@ -48,6 +49,8 @@ class EventStatus(str, enum.Enum):
 # Декларативная карта допустимых переходов конечного автомата.
 # Источник перехода → множество возможных целевых статусов.
 _ALLOWED_TRANSITIONS: dict[EventStatus, frozenset[EventStatus]] = {
+    # Модерация предложения: одобрить (→ draft) или отклонить (→ cancelled).
+    EventStatus.PROPOSED: frozenset({EventStatus.DRAFT, EventStatus.CANCELLED}),
     EventStatus.DRAFT: frozenset({EventStatus.OPEN, EventStatus.CANCELLED}),
     EventStatus.OPEN: frozenset({EventStatus.CLOSED, EventStatus.CANCELLED}),
     EventStatus.CLOSED: frozenset({EventStatus.RESOLVING, EventStatus.CANCELLED}),
@@ -164,6 +167,40 @@ class Event:
             updated_at=moment,
         )
 
+    @classmethod
+    def create_proposed(
+        cls,
+        *,
+        title: str,
+        description: str,
+        category_id: uuid.UUID,
+        created_by: uuid.UUID,
+        window: EventWindow,
+        resolution_source: str,
+        resolution_criteria: str,
+        season_id: uuid.UUID | None = None,
+        now: datetime | None = None,
+    ) -> Event:
+        """Создаёт предложение события (статус ``proposed``) от пользователя.
+
+        Те же инварианты, что у :meth:`create_draft`; отличие — статус и то,
+        что ``created_by`` — это предложивший участник, а не редактор. Дальше
+        предложение проходит модерацию (:meth:`approve`/:meth:`reject`).
+        """
+        draft = cls.create_draft(
+            title=title,
+            description=description,
+            category_id=category_id,
+            created_by=created_by,
+            window=window,
+            resolution_source=resolution_source,
+            resolution_criteria=resolution_criteria,
+            season_id=season_id,
+            now=now,
+        )
+        draft.status = EventStatus.PROPOSED
+        return draft
+
     # ── Редактирование ──────────────────────────────────────────────────────
 
     def apply_edits(
@@ -269,6 +306,14 @@ class Event:
 
     def cancel(self, *, now: datetime | None = None) -> None:
         """``{draft, open, closed} → cancelled``: отмена события редакцией."""
+        self._transition_to(EventStatus.CANCELLED, now=now)
+
+    def approve(self, *, now: datetime | None = None) -> None:
+        """``proposed → draft``: модерация одобрила пользовательское предложение."""
+        self._transition_to(EventStatus.DRAFT, now=now)
+
+    def reject(self, *, now: datetime | None = None) -> None:
+        """``proposed → cancelled``: модерация отклонила предложение."""
         self._transition_to(EventStatus.CANCELLED, now=now)
 
     def begin_resolution(self, *, now: datetime | None = None) -> None:

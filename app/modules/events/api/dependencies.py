@@ -21,21 +21,28 @@ from app.modules.events.adapters.repository import (
 )
 from app.modules.events.application.dto import Actor
 from app.modules.events.application.use_cases import (
+    ApproveEvent,
     CancelEvent,
     CreateCategory,
     CreateEvent,
     GetEvent,
     ListCategories,
     ListEvents,
+    ProposeEvent,
     PublishEvent,
     CloseEvent,
+    RejectEvent,
     UpdateEvent,
 )
 from app.modules.events.ports.clock import Clock
 from app.modules.events.ports.repositories import CategoryRepository, EventRepository
+from app.modules.events.ports.subscriptions import SubscriptionGate
 from app.modules.identity.api.dependencies import CurrentUser
 from app.modules.predictions.adapters.clock import SystemClock as PredictionsClock
 from app.modules.predictions.adapters.repository import SqlAlchemyPredictionRepository
+from app.modules.predictions.adapters.subscription_gate import (
+    SqlAlchemySubscriptionGate,
+)
 from app.modules.predictions.application.use_cases import LockEventPredictions
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from app.shared.audit.ports.audit_trail import AuditTrail
@@ -95,6 +102,38 @@ def get_create_event(
 ) -> CreateEvent:
     """Use-case создания события."""
     return CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+
+
+def get_subscription_gate(session: SessionDep) -> SubscriptionGate:
+    """Подписочный гейт (переиспользует адаптер predictions поверх billing)."""
+    return SqlAlchemySubscriptionGate(session)
+
+
+def get_propose_event(
+    events: EventRepoDep,
+    categories: CategoryRepoDep,
+    clock: ClockDep,
+    audit: AuditDep,
+    subscriptions: Annotated[SubscriptionGate, Depends(get_subscription_gate)],
+) -> ProposeEvent:
+    """Use-case пользовательского предложения события (нужна подписка)."""
+    return ProposeEvent(
+        events=events,
+        categories=categories,
+        clock=clock,
+        audit=audit,
+        subscriptions=subscriptions,
+    )
+
+
+def get_approve_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> ApproveEvent:
+    """Use-case одобрения предложения (модерация)."""
+    return ApproveEvent(events=events, clock=clock, audit=audit)
+
+
+def get_reject_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> RejectEvent:
+    """Use-case отклонения предложения (модерация)."""
+    return RejectEvent(events=events, clock=clock, audit=audit)
 
 
 def get_update_event(

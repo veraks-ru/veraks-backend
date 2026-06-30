@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query, status
 
 from app.modules.events.api.dependencies import (
     ActorDep,
+    get_approve_event,
     get_cancel_event,
     get_close_event,
     get_create_category,
@@ -23,7 +24,9 @@ from app.modules.events.api.dependencies import (
     get_list_categories,
     get_list_events,
     get_lock_event_predictions,
+    get_propose_event,
     get_publish_event,
+    get_reject_event,
     get_update_event,
 )
 from app.modules.events.api.schemas import (
@@ -34,6 +37,7 @@ from app.modules.events.api.schemas import (
     UpdateEventRequest,
 )
 from app.modules.events.application.use_cases import (
+    ApproveEvent,
     CancelEvent,
     CloseEvent,
     CreateCategory,
@@ -41,7 +45,9 @@ from app.modules.events.application.use_cases import (
     GetEvent,
     ListCategories,
     ListEvents,
+    ProposeEvent,
     PublishEvent,
+    RejectEvent,
     UpdateEvent,
 )
 from app.modules.predictions.application.use_cases import LockEventPredictions
@@ -155,6 +161,55 @@ async def publish_event(
     uc: Annotated[PublishEvent, Depends(get_publish_event)],
 ) -> EventResponse:
     """Открывает приём прогнозов по событию."""
+    event = await uc.execute(actor=actor, event_id=event_id)
+    return EventResponse.from_domain(event)
+
+
+# ── Пользовательские предложения и их модерация ───────────────────────────
+
+
+@router.post(
+    "/events/propose",
+    response_model=EventResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Предложить событие (подписчик, на модерацию)",
+)
+async def propose_event(
+    payload: CreateEventRequest,
+    actor: ActorDep,
+    uc: Annotated[ProposeEvent, Depends(get_propose_event)],
+) -> EventResponse:
+    """Пользователь с активной подпиской предлагает событие (статус ``proposed``)."""
+    event = await uc.execute(actor=actor, data=payload.to_input())
+    return EventResponse.from_domain(event)
+
+
+@router.post(
+    "/events/{event_id}/approve",
+    response_model=EventResponse,
+    summary="Одобрить предложение (editor/admin): proposed → draft",
+)
+async def approve_event(
+    event_id: uuid.UUID,
+    actor: ActorDep,
+    uc: Annotated[ApproveEvent, Depends(get_approve_event)],
+) -> EventResponse:
+    """Модерация одобряет предложение — оно становится черновиком редакции."""
+    event = await uc.execute(actor=actor, event_id=event_id)
+    return EventResponse.from_domain(event)
+
+
+@router.post(
+    "/events/{event_id}/reject",
+    response_model=EventResponse,
+    summary="Отклонить предложение (editor/admin): proposed → cancelled",
+)
+async def reject_event(
+    event_id: uuid.UUID,
+    actor: ActorDep,
+    uc: Annotated[RejectEvent, Depends(get_reject_event)],
+) -> EventResponse:
+    """Модерация отклоняет предложение."""
     event = await uc.execute(actor=actor, event_id=event_id)
     return EventResponse.from_domain(event)
 

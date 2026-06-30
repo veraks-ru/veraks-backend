@@ -23,6 +23,7 @@ from app.modules.events.domain.entities import Category, Event
 from app.modules.events.domain.errors import (
     CategoryNotFoundError,
     EventNotFoundError,
+    EventSubscriptionRequiredError,
     InvalidEventWindowError,
 )
 from app.modules.events.domain.policies import ensure_can_manage_events
@@ -33,6 +34,7 @@ from app.modules.events.ports.repositories import (
     EventFilter,
     EventRepository,
 )
+from app.modules.events.ports.subscriptions import SubscriptionGate
 from app.modules.identity.domain.entities import UserRole
 from app.shared.audit.domain.entities import AuditActorType
 from app.shared.audit.ports.audit_trail import AuditTrail
@@ -127,6 +129,67 @@ class CreateEvent:
                 "status": _status_value(saved),
                 "category_id": str(saved.category_id),
             },
+        )
+        return saved
+
+
+class ProposeEvent:
+    """Предложение события пользователем (статус ``proposed``, на модерацию).
+
+    Роль не проверяется (предлагать может любой участник), но нужна активная
+    подписка — как и для голосования. Валидация окна/категории/текста — та же,
+    что у :class:`CreateEvent`.
+    """
+
+    def __init__(
+        self,
+        *,
+        events: EventRepository,
+        categories: CategoryRepository,
+        clock: Clock,
+        audit: AuditTrail,
+        subscriptions: SubscriptionGate,
+    ) -> None:
+        self._events = events
+        self._categories = categories
+        self._clock = clock
+        self._audit = audit
+        self._subscriptions = subscriptions
+
+    async def execute(self, *, actor: Actor, data: NewEventInput) -> Event:
+        """Проверяет подписку и данные, сохраняет предложение на модерацию."""
+        now = self._clock.now()
+        if not await self._subscriptions.has_active_subscription(actor.user_id, now):
+            raise EventSubscriptionRequiredError(
+                "Предлагать события можно только с активной подпиской"
+            )
+        if not await self._categories.exists(data.category_id):
+            raise CategoryNotFoundError("Указанная категория не существует")
+
+        window = EventWindow(
+            opens_at=data.opens_at,
+            closes_at=data.closes_at,
+            resolves_at=data.resolves_at,
+        )
+        event = Event.create_proposed(
+            title=data.title,
+            description=data.description,
+            category_id=data.category_id,
+            created_by=actor.user_id,
+            window=window,
+            resolution_source=data.resolution_source,
+            resolution_criteria=data.resolution_criteria,
+            season_id=data.season_id,
+            now=now,
+        )
+        saved = await self._events.add(event)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action="event.proposed",
+            entity_type="event",
+            entity_id=saved.id,
+            after={"title": saved.title, "status": _status_value(saved)},
         )
         return saved
 
@@ -255,6 +318,24 @@ class CancelEvent(_TransitionUseCase):
 
     def _apply(self, event: Event) -> None:
         event.cancel(now=self._clock.now())
+
+
+class ApproveEvent(_TransitionUseCase):
+    """Модерация: ``proposed → draft`` (одобрить предложение, editor/admin)."""
+
+    _action = "event.approved"
+
+    def _apply(self, event: Event) -> None:
+        event.approve(now=self._clock.now())
+
+
+class RejectEvent(_TransitionUseCase):
+    """Модерация: ``proposed → cancelled`` (отклонить предложение, editor/admin)."""
+
+    _action = "event.rejected"
+
+    def _apply(self, event: Event) -> None:
+        event.reject(now=self._clock.now())
 
 
 class CloseExpiredEvents:

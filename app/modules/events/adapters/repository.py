@@ -61,6 +61,10 @@ class SqlAlchemyEventRepository:
         stmt = select(EventORM)
         if criteria.status is not None:
             stmt = stmt.where(EventORM.status == criteria.status)
+        else:
+            # Пользовательские предложения на модерации не светятся в общем
+            # каталоге — их видно только по явному фильтру status=proposed.
+            stmt = stmt.where(EventORM.status != EventStatus.PROPOSED)
         if criteria.category_id is not None:
             stmt = stmt.where(EventORM.category_id == criteria.category_id)
         if criteria.season_id is not None:
