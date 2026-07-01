@@ -85,16 +85,18 @@ def _migrated_database() -> Iterator[None]:
 async def _truncate_all(session: AsyncSession) -> None:
     """Усекает все таблицы — чистый лист между тестами.
 
-    Исключения: ``alembic_version`` и ``ledger_accounts`` — последняя содержит
-    план счетов, засеянный миграцией 0010 (статическая справочная данность, не
-    тестовые данные); её усечение сломало бы billing-сценарии.
+    Исключения — статические справочные данные, засеянные миграциями (не
+    тестовые): ``alembic_version``; ``ledger_accounts`` (план счетов, 0010);
+    ``divisions`` (лестница дивизионов, 0016). Их усечение сломало бы
+    billing/leagues-сценарии.
     """
     rows = (
         await session.execute(
             text(
                 "SELECT tablename FROM pg_tables "
                 "WHERE schemaname = 'public' "
-                "AND tablename NOT IN ('alembic_version', 'ledger_accounts')"
+                "AND tablename NOT IN "
+                "('alembic_version', 'ledger_accounts', 'divisions')"
             )
         )
     ).scalars().all()

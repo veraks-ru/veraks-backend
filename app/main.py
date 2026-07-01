@@ -100,6 +100,15 @@ from app.modules.social.domain.errors import (
     SelfFollowError,
     SocialError,
 )
+from app.modules.leagues.api.router import router as leagues_router
+from app.modules.leagues.domain.errors import (
+    DivisionNotFoundError,
+    InvalidLeagueDataError,
+    LeagueError,
+    LeagueNotFoundError,
+    LeaguePermissionError,
+    NotLeagueMemberError,
+)
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
@@ -186,6 +195,12 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     CommentForbiddenError: status.HTTP_403_FORBIDDEN,
     SelfFollowError: status.HTTP_409_CONFLICT,
     CommentTooLongError: status.HTTP_400_BAD_REQUEST,
+    # leagues
+    LeagueNotFoundError: status.HTTP_404_NOT_FOUND,
+    DivisionNotFoundError: status.HTTP_404_NOT_FOUND,
+    NotLeagueMemberError: status.HTTP_403_FORBIDDEN,
+    LeaguePermissionError: status.HTTP_403_FORBIDDEN,
+    InvalidLeagueDataError: status.HTTP_400_BAD_REQUEST,
 }
 
 
@@ -299,6 +314,16 @@ def create_app() -> FastAPI:
             content={"detail": str(exc), "error": type(exc).__name__},
         )
 
+    @app.exception_handler(LeagueError)
+    async def _league_error_handler(
+        _request: Request, exc: LeagueError
+    ) -> JSONResponse:
+        """Единый маппинг доменных ошибок leagues в JSON-ответ."""
+        return JSONResponse(
+            status_code=_resolve_status(exc),
+            content={"detail": str(exc), "error": type(exc).__name__},
+        )
+
     app.include_router(identity_router)
     app.include_router(users_router)
     app.include_router(events_router)
@@ -310,6 +335,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications_router)
     app.include_router(realtime_router)
     app.include_router(social_router)
+    app.include_router(leagues_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
