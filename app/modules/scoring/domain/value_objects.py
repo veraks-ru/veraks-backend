@@ -27,10 +27,16 @@ def quantize_score(value: float) -> Decimal:
 
 @dataclass(frozen=True, slots=True)
 class PredictionVote:
-    """Голос участника по событию: чей и с какой внутренней вероятностью."""
+    """Голос участника по событию: чей, с какой вероятностью и как рано.
+
+    ``time_weight`` — множитель веса вклада за ранность прогноза (``≥ 1``,
+    считается на границе из времён прогноза и окна события); по умолчанию
+    ``1.0`` — нейтрально, поэтому тайм-вейтинг не ломает существующие расчёты.
+    """
 
     user_id: uuid.UUID
     probability: float
+    time_weight: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)

@@ -30,8 +30,13 @@ from app.modules.scoring.domain.errors import (
 from app.modules.scoring.domain.formulas import (
     event_contribution,
     season_rating_from_contributions,
+    time_weight_from_earliness,
 )
-from app.modules.scoring.domain.value_objects import quantize_score
+from app.modules.scoring.domain.value_objects import (
+    PredictionVote,
+    ResolvedEvent,
+    quantize_score,
+)
 from tests.scoring.conftest import FIXED_NOW, make_event
 from tests.scoring.fakes import (
     FakeClock,
@@ -271,6 +276,50 @@ async def test_recompute_ratings_scope_filter_writes_only_touched_scopes() -> No
     assert len(await repo.leaderboard(ScopeType.GLOBAL, None)) == 10
     # Чужая категория НЕ тронута.
     assert await repo.leaderboard(ScopeType.CATEGORY, other_category) == []
+
+
+def test_time_weight_from_earliness_bounds_and_monotonicity() -> None:
+    assert time_weight_from_earliness(0.0) == 1.0  # у самого закрытия
+    assert time_weight_from_earliness(1.0) == 1.5  # в момент открытия (lam=0.5)
+    assert time_weight_from_earliness(0.5) == 1.25
+    # Клампинг за пределами [0, 1].
+    assert time_weight_from_earliness(-3.0) == 1.0
+    assert time_weight_from_earliness(9.0) == 1.5
+    # Монотонность по ранности.
+    assert time_weight_from_earliness(0.2) < time_weight_from_earliness(0.8)
+
+
+async def test_recompute_ratings_rewards_earlier_prediction() -> None:
+    """Два игрока обыграли толпу одинаково, но кто раньше — тот выше рейтингом."""
+    early_id, late_id = uuid.uuid4(), uuid.uuid4()
+    crowd = [uuid.uuid4() for _ in range(3)]
+    # Толпа уверена в ДА (0.9), исход НЕТ: обе «0.3» обыграли толпу одинаково,
+    # но early голосовал рано (time_weight 1.5), late — у закрытия (1.0).
+    votes = (
+        PredictionVote(user_id=crowd[0], probability=0.9),
+        PredictionVote(user_id=crowd[1], probability=0.9),
+        PredictionVote(user_id=crowd[2], probability=0.9),
+        PredictionVote(user_id=early_id, probability=0.3, time_weight=1.5),
+        PredictionVote(user_id=late_id, probability=0.3, time_weight=1.0),
+    )
+    event = ResolvedEvent(
+        event_id=uuid.uuid4(),
+        category_id=uuid.uuid4(),
+        season_id=None,
+        outcome=0,
+        votes=votes,
+    )
+    repo = InMemoryRatingRepository()
+    await RecomputeRatings(
+        gateway=FakeEventScoringGateway(resolved=[event]),
+        ratings=repo,
+        clock=FakeClock(FIXED_NOW),
+        season_config=FakeSeasonConfigGateway(),
+    ).execute()
+
+    board = {r.user_id: r for r in await repo.leaderboard(ScopeType.GLOBAL, None)}
+    assert board[early_id].skill_score > board[late_id].skill_score
+    assert board[early_id].rank < board[late_id].rank
 
 
 # ── GetLeaderboard / GetUserCalibration ─────────────────────────────────────

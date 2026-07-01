@@ -129,6 +129,7 @@ class _ScopeAccumulator:
     """
 
     weights: list[float] = field(default_factory=list)
+    rating_weights: list[float] = field(default_factory=list)
     advantages: list[float] = field(default_factory=list)
     briers: list[float] = field(default_factory=list)
     entries: list[tuple[float, int]] = field(default_factory=list)
@@ -137,13 +138,17 @@ class _ScopeAccumulator:
     def add(
         self,
         weight: float,
+        rating_weight: float,
         advantage: float,
         brier_score: float,
         prob: float,
         outcome: int,
         category_id: uuid.UUID,
     ) -> None:
+        # ``weight`` — «сырая» сложность события (охват/квалификация); в
+        # ``rating_weight`` уже вложен тайм-вейтинг (для сезонного рейтинга).
         self.weights.append(weight)
+        self.rating_weights.append(rating_weight)
         self.advantages.append(advantage)
         self.briers.append(brier_score)
         self.entries.append((prob, outcome))
@@ -258,7 +263,9 @@ class RecomputeRatings:
                 scope_id=scope_id,
                 mean_brier=quantize_score(data.mean_brier()),
                 skill_score=quantize_score(
-                    season_rating_from_contributions(data.weights, data.advantages)
+                    season_rating_from_contributions(
+                        data.rating_weights, data.advantages
+                    )
                 ),
                 calibration_error=quantize_score(calibrate(data.entries).ece),
                 n_resolved=data.n,
@@ -297,12 +304,16 @@ class RecomputeRatings:
         for vote in event.votes:
             advantage = crowd_advantage(vote.probability, probabilities, event.outcome)
             brier_score = brier(vote.probability, event.outcome)
+            # Тайм-вейтинг: ранний прогноз получает больший вес в рейтинге, но
+            # «сырой» вес сложности идёт в охват/квалификацию без надбавки.
+            rating_weight = weight * vote.time_weight
             for scope_type, scope_id in scopes:
                 bucket = acc.setdefault(
                     (scope_type, scope_id, vote.user_id), _ScopeAccumulator()
                 )
                 bucket.add(
                     weight,
+                    rating_weight,
                     advantage,
                     brier_score,
                     vote.probability,

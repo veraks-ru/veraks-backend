@@ -24,6 +24,7 @@ from app.modules.events.adapters.orm import EventORM
 from app.modules.events.domain.entities import EventStatus
 from app.modules.predictions.adapters.orm import PredictionORM
 from app.modules.scoring.application.dto import EventScoringStatus, PredictionScore
+from app.modules.scoring.domain.formulas import time_weight_from_earliness
 from app.modules.scoring.domain.value_objects import PredictionVote, ResolvedEvent
 from app.modules.scoring.ports.clock import Clock
 
@@ -33,6 +34,21 @@ def _to_outcome(value: bool | None) -> int | None:
     if value is None:
         return None
     return 1 if value else 0
+
+
+def _earliness(
+    made_at: datetime, opens_at: datetime, closes_at: datetime
+) -> float:
+    """Доля «ранности» прогноза в окне приёма ``∈ [0, 1]``.
+
+    ``1`` — прогноз в момент открытия, ``0`` — в момент закрытия. Вырожденное
+    окно (``closes_at ≤ opens_at``) → ``1.0`` (все прогнозы одинаково «ранние»).
+    Границы клампятся в самом ``time_weight_from_earliness``.
+    """
+    span = (closes_at - opens_at).total_seconds()
+    if span <= 0:
+        return 1.0
+    return (closes_at - made_at).total_seconds() / span
 
 
 class SqlAlchemyEventScoringGateway:
@@ -145,7 +161,13 @@ class SqlAlchemyEventScoringGateway:
         )
         predictions = (await self._session.execute(stmt)).scalars().all()
         votes = tuple(
-            PredictionVote(user_id=p.user_id, probability=float(p.probability))
+            PredictionVote(
+                user_id=p.user_id,
+                probability=float(p.probability),
+                time_weight=time_weight_from_earliness(
+                    _earliness(p.created_at, event.opens_at, event.closes_at)
+                ),
+            )
             for p in predictions
         )
         return ResolvedEvent(

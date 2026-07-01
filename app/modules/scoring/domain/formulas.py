@@ -23,6 +23,7 @@ from app.modules.scoring.domain.constants import (
     K_SHRINK,
     N_MIN,
     SURPRISE_NORM,
+    TIME_WEIGHT_LAMBDA,
     W_MIN,
 )
 from app.modules.scoring.domain.errors import NotEnoughPredictorsError
@@ -155,6 +156,21 @@ def event_contribution(
     weight = event_weight(probabilities, outcome)
     advantage = crowd_advantage(own, probabilities, outcome)
     return weight, weight * advantage
+
+
+# ── 2.5 Тайм-вейтинг (ранность прогноза) ────────────────────────────────────
+
+
+def time_weight_from_earliness(earliness: float, *, lam: float = TIME_WEIGHT_LAMBDA) -> float:
+    """Множитель веса прогноза по его ранности ``∈ [1, 1 + lam]``.
+
+    ``earliness ∈ [0, 1]``: 1 — прогноз в момент открытия приёма (максимум
+    неопределённости), 0 — у самого закрытия. Значения вне ``[0, 1]``
+    клампятся. Линейный наклон ``1 + lam · earliness`` — ранний прогноз весит
+    больше, но множитель ограничен и не отменяет вклад сложности события.
+    """
+    e = min(1.0, max(0.0, earliness))
+    return 1.0 + lam * e
 
 
 # ── 3.2 Сезонный рейтинг ─────────────────────────────────────────────────────
