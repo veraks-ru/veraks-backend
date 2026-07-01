@@ -45,9 +45,14 @@ from app.modules.scoring.adapters.season_config_gateway import (
 )
 from app.modules.scoring.application.seasons_coordination import (
     FinalizeSeason,
+    RecalibratingLeagueConfigProvider,
     RollSeasons,
 )
-from app.modules.scoring.application.use_cases import RecomputeRatings, ScoreEvent
+from app.modules.scoring.application.use_cases import (
+    RecalibrateSeasonGradations,
+    RecomputeRatings,
+    ScoreEvent,
+)
 from app.modules.resolutions.adapters.clock import SystemClock as ResolutionsClock
 from app.modules.resolutions.adapters.dispute_guard import ResolutionDisputeGuard
 from app.modules.resolutions.adapters.event_gateway import (
@@ -159,11 +164,18 @@ async def season_roll(_ctx: dict[Any, Any]) -> None:
             ratings=ratings,
             clock=clock,
         )
+        config_provider = RecalibratingLeagueConfigProvider(
+            seasons=seasons,
+            recalibrate=RecalibrateSeasonGradations(
+                gateway=SqlAlchemyEventScoringGateway(session, clock)
+            ),
+        )
         roll = RollSeasons(
             seasons=seasons,
             finalize=finalize,
             clock=clock,
             auto_finalize=settings.seasons_auto_finalize,
+            config_provider=config_provider,
         )
         await roll.execute()
 

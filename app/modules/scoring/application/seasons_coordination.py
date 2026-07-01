@@ -19,14 +19,21 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import replace
+from typing import Protocol
 
 from app.modules.scoring.application.dto import FinalizeResult
-from app.modules.scoring.application.use_cases import RecomputeRatings
+from app.modules.scoring.application.use_cases import (
+    RecalibrateSeasonGradations,
+    RecomputeRatings,
+)
+from app.modules.scoring.domain.constants import DEFAULT_GRADATIONS
 from app.modules.scoring.domain.entities import ScopeType
 from app.modules.scoring.ports.clock import Clock
 from app.modules.scoring.ports.repositories import RatingRepository
-from app.modules.seasons.domain.entities import SeasonStatus
+from app.modules.seasons.domain.entities import Season, SeasonStatus
 from app.modules.seasons.domain.errors import (
+    InvalidSeasonDataError,
     InvalidSeasonTransitionError,
     SeasonFinalizationBlockedError,
     SeasonNotFoundError,
@@ -133,6 +140,93 @@ class FinalizeSeason:
         )
 
 
+class LeagueConfigProvider(Protocol):
+    """Источник замороженного ``LeagueConfig`` для активируемого сезона."""
+
+    async def config_for(self, season: Season) -> LeagueConfig:
+        ...
+
+
+class DefaultLeagueConfigProvider:
+    """Нейтральный провайдер: всегда боевые дефолты (``LeagueConfig.default``).
+
+    Обратная совместимость: активация без рекалибровки (как было раньше).
+    """
+
+    async def config_for(self, season: Season) -> LeagueConfig:  # noqa: ARG002
+        return LeagueConfig.default()
+
+
+class RecalibratingLeagueConfigProvider:
+    """Провайдер конфига активации с межсезонной рекалибровкой сетки градаций.
+
+    При активации сезона берёт последний ЗАВЕРШЁННЫЙ сезон, пересчитывает по
+    его популяции сетку «градация → вероятность» изотонической регрессией
+    (``RecalibrateSeasonGradations``) и морозит новую сетку в ``LeagueConfig``
+    нового сезона (пороги/усадка — боевые дефолты). Так рекалибровка применяется
+    строго между сезонами и публикуется на весь сезон вперёд.
+
+    Безопасный фолбэк на ``LeagueConfig.default()``: нет завершённых сезонов,
+    сетка получилась не той длины / неубывающая (ничьи PAV) / вне ``(0, 1)`` —
+    любой из этих случаев отдаёт нейтральную дефолтную сетку без падения.
+    """
+
+    def __init__(
+        self,
+        *,
+        seasons: SeasonRepository,
+        recalibrate: RecalibrateSeasonGradations,
+    ) -> None:
+        self._seasons = seasons
+        self._recalibrate = recalibrate
+
+    async def config_for(self, season: Season) -> LeagueConfig:
+        base = LeagueConfig.default()
+        prev = await self._latest_finished(before=season)
+        if prev is None:
+            return base
+        proposal = await self._recalibrate.execute(season_id=prev.id)
+        grid = tuple(item.fitted for item in proposal)
+        if len(grid) != len(DEFAULT_GRADATIONS):
+            logger.info(
+                "Recalibration for season %s produced %d grades (need %d) — "
+                "using default grid",
+                season.id,
+                len(grid),
+                len(DEFAULT_GRADATIONS),
+            )
+            return base
+        try:
+            config = replace(base, gradation_map=grid)
+        except InvalidSeasonDataError:
+            # Ничьи PAV (нестрогий рост) или значения на границе 0/1 — фолбэк.
+            logger.info(
+                "Recalibrated grid %s for season %s is not a valid grid — "
+                "using default",
+                grid,
+                season.id,
+            )
+            return base
+        logger.info(
+            "Season %s activated with recalibrated grid %s (from season %s)",
+            season.id,
+            grid,
+            prev.id,
+        )
+        return config
+
+    async def _latest_finished(self, *, before: Season) -> Season | None:
+        """Последний завершённый сезон (по ``ends_at``), кроме самого ``before``."""
+        finished = [
+            s
+            for s in await self._seasons.list(status=SeasonStatus.FINISHED)
+            if s.id != before.id
+        ]
+        if not finished:
+            return None
+        return max(finished, key=lambda s: s.ends_at)
+
+
 class RollSeasons:
     """Таймерный переход сезонов: активация наступивших, финализация истёкших.
 
@@ -142,6 +236,10 @@ class RollSeasons:
     (``ResolutionDisputeGuard``) блокирует финализацию поверх открытых споров,
     поэтому таймерное авто-закрытие безопасно (дизайн §6.4/§6.5). Флаг оставлен
     для возможности временно перевести закрытие сезонов в ручной режим.
+
+    ``config_provider`` формирует замороженный ``LeagueConfig`` активируемого
+    сезона (по умолчанию — боевые дефолты; боевой провайдер добавляет
+    межсезонную рекалибровку сетки градаций).
     """
 
     def __init__(
@@ -151,19 +249,22 @@ class RollSeasons:
         finalize: FinalizeSeason,
         clock: Clock,
         auto_finalize: bool = True,
+        config_provider: LeagueConfigProvider | None = None,
     ) -> None:
         self._seasons = seasons
         self._finalize = finalize
         self._clock = clock
         self._auto_finalize = auto_finalize
+        self._config_provider = config_provider or DefaultLeagueConfigProvider()
 
     async def execute(self) -> None:
         now = self._clock.now()
 
         for season in await self._seasons.list(status=SeasonStatus.UPCOMING):
-            if season.starts_at <= now and season.activate(
-                LeagueConfig.default(), now=now
-            ):
+            if season.starts_at > now:
+                continue
+            config = await self._config_provider.config_for(season)
+            if season.activate(config, now=now):
                 await self._seasons.update(season)
                 logger.info("Season %s auto-activated", season.id)
 

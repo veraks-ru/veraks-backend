@@ -14,9 +14,14 @@ import pytest
 from app.modules.scoring.application.dto import SeasonConfigView
 from app.modules.scoring.application.seasons_coordination import (
     FinalizeSeason,
+    RecalibratingLeagueConfigProvider,
     RollSeasons,
 )
-from app.modules.scoring.application.use_cases import RecomputeRatings
+from app.modules.scoring.application.use_cases import (
+    RecalibrateSeasonGradations,
+    RecomputeRatings,
+)
+from app.modules.scoring.domain.constants import DEFAULT_GRADATIONS
 from app.modules.seasons.domain.entities import Season, SeasonStatus
 from app.modules.seasons.domain.errors import (
     SeasonFinalizationBlockedError,
@@ -252,3 +257,176 @@ async def test_roll_auto_finalizes_expired_active_season_by_default() -> None:
     season = await season_repo.get_by_id(season_id)
     assert season is not None and season.status is SeasonStatus.FINISHED
     assert len(season_repo.finalizations) == 1
+
+
+# ── RecalibratingLeagueConfigProvider ────────────────────────────────────────
+
+
+def _finished_season(season_id: uuid.UUID, *, ends_at: datetime) -> Season:
+    return Season(
+        slug=f"fin-{season_id.hex[:6]}",
+        title="Завершён",
+        starts_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ends_at=ends_at,
+        status=SeasonStatus.FINISHED,
+        league_config=EASY_CFG,
+        id=season_id,
+    )
+
+
+def _upcoming(season_id: uuid.UUID) -> Season:
+    return Season(
+        slug="new",
+        title="Новый",
+        starts_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 12, 1, tzinfo=timezone.utc),
+        status=SeasonStatus.UPCOMING,
+        id=season_id,
+    )
+
+
+def _entries(*by_nominal: tuple[float, int, int]) -> list[tuple[float, int]]:
+    """Строит калибровочные записи: (номинал, число «да», число «нет»)."""
+    out: list[tuple[float, int]] = []
+    for nominal, yes, no in by_nominal:
+        out.extend([(nominal, 1)] * yes + [(nominal, 0)] * no)
+    return out
+
+
+def _provider(
+    *, season_repo: InMemorySeasonRepository, season_entries: dict
+) -> RecalibratingLeagueConfigProvider:
+    return RecalibratingLeagueConfigProvider(
+        seasons=season_repo,
+        recalibrate=RecalibrateSeasonGradations(
+            gateway=FakeEventScoringGateway(season_entries=season_entries)
+        ),
+    )
+
+
+async def test_provider_defaults_without_finished_season() -> None:
+    season_repo = InMemorySeasonRepository()
+    provider = _provider(season_repo=season_repo, season_entries={})
+    config = await provider.config_for(_upcoming(uuid.uuid4()))
+    assert config.gradation_map == DEFAULT_GRADATIONS
+
+
+async def test_provider_freezes_recalibrated_grid() -> None:
+    prev_id = uuid.uuid4()
+    season_repo = InMemorySeasonRepository()
+    await season_repo.add(
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+    )
+    # Наблюдаемые частоты строго возрастают и лежат в (0,1) → PAV оставляет их:
+    # сетка (0.2, 0.4, 0.5, 0.6, 0.8) ≠ дефолт.
+    entries = _entries(
+        (0.1, 1, 4),  # freq 0.2
+        (0.3, 2, 3),  # freq 0.4
+        (0.5, 1, 1),  # freq 0.5
+        (0.7, 3, 2),  # freq 0.6
+        (0.9, 4, 1),  # freq 0.8
+    )
+    provider = _provider(season_repo=season_repo, season_entries={prev_id: entries})
+
+    config = await provider.config_for(_upcoming(uuid.uuid4()))
+
+    assert config.gradation_map != DEFAULT_GRADATIONS
+    assert len(config.gradation_map) == 5
+    # Строго возрастает и в (0,1) (иначе LeagueConfig бы упал).
+    assert all(0.0 < p < 1.0 for p in config.gradation_map)
+    assert all(
+        a < b for a, b in zip(config.gradation_map, config.gradation_map[1:])
+    )
+    assert config.gradation_map[0] == pytest.approx(0.2)
+    assert config.gradation_map[-1] == pytest.approx(0.8)
+
+
+async def test_provider_falls_back_when_grid_too_short() -> None:
+    prev_id = uuid.uuid4()
+    season_repo = InMemorySeasonRepository()
+    await season_repo.add(
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+    )
+    # Использованы только 2 градации → сетка длины 2 ≠ 5 → фолбэк на дефолт.
+    entries = _entries((0.3, 2, 3), (0.7, 3, 2))
+    provider = _provider(season_repo=season_repo, season_entries={prev_id: entries})
+
+    config = await provider.config_for(_upcoming(uuid.uuid4()))
+    assert config.gradation_map == DEFAULT_GRADATIONS
+
+
+async def test_provider_falls_back_on_boundary_frequency() -> None:
+    prev_id = uuid.uuid4()
+    season_repo = InMemorySeasonRepository()
+    await season_repo.add(
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+    )
+    # Верхняя градация с частотой 1.0 → точка на границе (0,1) → LeagueConfig
+    # отвергает → безопасный фолбэк на дефолтную сетку.
+    entries = _entries(
+        (0.1, 1, 4),
+        (0.3, 2, 3),
+        (0.5, 1, 1),
+        (0.7, 3, 2),
+        (0.9, 5, 0),  # freq 1.0
+    )
+    provider = _provider(season_repo=season_repo, season_entries={prev_id: entries})
+
+    config = await provider.config_for(_upcoming(uuid.uuid4()))
+    assert config.gradation_map == DEFAULT_GRADATIONS
+
+
+async def test_provider_picks_most_recent_finished_season() -> None:
+    older_id, newer_id = uuid.uuid4(), uuid.uuid4()
+    season_repo = InMemorySeasonRepository()
+    await season_repo.add(
+        _finished_season(older_id, ends_at=datetime(2025, 12, 31, tzinfo=timezone.utc))
+    )
+    await season_repo.add(
+        _finished_season(newer_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+    )
+    # Свежий сезон даёт валидную сетку, старый — нет (короткую). Провайдер должен
+    # взять свежий → получить рекалиброванную сетку, а не фолбэк.
+    valid = _entries(
+        (0.1, 1, 4), (0.3, 2, 3), (0.5, 1, 1), (0.7, 3, 2), (0.9, 4, 1)
+    )
+    provider = _provider(
+        season_repo=season_repo,
+        season_entries={newer_id: valid, older_id: _entries((0.3, 1, 1))},
+    )
+
+    config = await provider.config_for(_upcoming(uuid.uuid4()))
+    assert config.gradation_map != DEFAULT_GRADATIONS
+
+
+async def test_roll_activates_with_provider_config() -> None:
+    prev_id = uuid.uuid4()
+    season_repo = InMemorySeasonRepository()
+    await season_repo.add(
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+    )
+    due = _upcoming(uuid.uuid4())
+    await season_repo.add(due)
+    entries = _entries(
+        (0.1, 1, 4), (0.3, 2, 3), (0.5, 1, 1), (0.7, 3, 2), (0.9, 4, 1)
+    )
+    roll = RollSeasons(
+        seasons=season_repo,
+        finalize=_finalize_uc(
+            season_repo=season_repo,
+            ratings=InMemoryRatingRepository(),
+            season_id=uuid.uuid4(),
+            dispute_guard=FakeDisputeGuard(),
+        ),
+        clock=FakeClock(LATER),
+        auto_finalize=False,
+        config_provider=_provider(
+            season_repo=season_repo, season_entries={prev_id: entries}
+        ),
+    )
+    await roll.execute()
+
+    activated = await season_repo.get_by_id(due.id)
+    assert activated is not None and activated.status is SeasonStatus.ACTIVE
+    assert activated.league_config is not None
+    assert activated.league_config.gradation_map != DEFAULT_GRADATIONS
