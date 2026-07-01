@@ -90,6 +90,16 @@ from app.modules.identity.api.router import router as identity_router
 from app.modules.identity.api.users_router import router as users_router
 from app.modules.notifications.api.router import router as notifications_router
 from app.modules.notifications.api.realtime import router as realtime_router
+from app.modules.social.api.router import router as social_router
+from app.modules.social.domain.errors import (
+    CommentEventNotFoundError,
+    CommentForbiddenError,
+    CommentNotFoundError,
+    CommentTooLongError,
+    FollowTargetNotFoundError,
+    SelfFollowError,
+    SocialError,
+)
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
@@ -169,6 +179,13 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     # Нарушения инвариантов журнала — внутренняя ошибка (не должны достигать API).
     UnbalancedTransactionError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     CrossLedgerEntryError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    # social
+    CommentEventNotFoundError: status.HTTP_404_NOT_FOUND,
+    CommentNotFoundError: status.HTTP_404_NOT_FOUND,
+    FollowTargetNotFoundError: status.HTTP_404_NOT_FOUND,
+    CommentForbiddenError: status.HTTP_403_FORBIDDEN,
+    SelfFollowError: status.HTTP_409_CONFLICT,
+    CommentTooLongError: status.HTTP_400_BAD_REQUEST,
 }
 
 
@@ -272,6 +289,16 @@ def create_app() -> FastAPI:
             content={"detail": str(exc), "error": type(exc).__name__},
         )
 
+    @app.exception_handler(SocialError)
+    async def _social_error_handler(
+        _request: Request, exc: SocialError
+    ) -> JSONResponse:
+        """Единый маппинг доменных ошибок social в JSON-ответ."""
+        return JSONResponse(
+            status_code=_resolve_status(exc),
+            content={"detail": str(exc), "error": type(exc).__name__},
+        )
+
     app.include_router(identity_router)
     app.include_router(users_router)
     app.include_router(events_router)
@@ -282,6 +309,7 @@ def create_app() -> FastAPI:
     app.include_router(billing_router)
     app.include_router(notifications_router)
     app.include_router(realtime_router)
+    app.include_router(social_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
