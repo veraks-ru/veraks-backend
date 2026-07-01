@@ -39,7 +39,9 @@ from app.modules.events.ports.repositories import CategoryRepository, EventRepos
 from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.subscriptions import SubscriptionGate
 from app.modules.identity.api.dependencies import CurrentUser
-from app.modules.notifications.adapters.emitter import DbNotificationEmitter
+from app.config import SettingsDep
+from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
+from app.modules.notifications.adapters.goctopus import GoctopusPusher
 from app.modules.notifications.adapters.repository import (
     SqlAlchemyNotificationRepository,
 )
@@ -131,9 +133,12 @@ def get_propose_event(
     )
 
 
-def get_notifier(session: SessionDep) -> Notifier:
-    """Нотификатор поверх домена notifications (пишет уведомление автору)."""
-    return DbNotificationEmitter(SqlAlchemyNotificationRepository(session))
+def get_notifier(session: SessionDep, settings: SettingsDep) -> Notifier:
+    """Нотификатор: пишет уведомление в БД и пушит через goctopus (если настроен)."""
+    return PushingNotificationEmitter(
+        SqlAlchemyNotificationRepository(session),
+        GoctopusPusher(settings.realtime),
+    )
 
 
 NotifierDep = Annotated[Notifier, Depends(get_notifier)]

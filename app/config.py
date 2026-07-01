@@ -81,6 +81,20 @@ class BillingSettings(BaseSettings):
     annual_price_kopecks: int = Field(default=499_000, ge=1)
 
 
+class RealtimeSettings(BaseSettings):
+    """Пуш in-app уведомлений в реальном времени через goctopus (WS-релей).
+
+    Пустой ``url`` = пуш выключен (уведомления только в БД). Бэкенд шлёт POST на
+    goctopus с ключом = user_id; фронт получает по WebSocket.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="GOCTOPUS_", extra="ignore")
+
+    url: str = ""
+    user: str = ""
+    password: str = ""
+
+
 class WebhookSettings(BaseSettings):
     """Секреты верификации подписи входящих вебхуков провайдеров.
 
@@ -116,6 +130,7 @@ class Settings(BaseSettings):
 
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     esia: EsiaSettings = Field(default_factory=EsiaSettings)
+    realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
     resolutions: ResolutionsSettings = Field(default_factory=ResolutionsSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
     webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
