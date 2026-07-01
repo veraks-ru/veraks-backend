@@ -34,6 +34,7 @@ from app.modules.events.ports.repositories import (
     EventFilter,
     EventRepository,
 )
+from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.subscriptions import SubscriptionGate
 from app.modules.identity.domain.entities import UserRole
 from app.shared.audit.domain.entities import AuditActorType
@@ -320,22 +321,90 @@ class CancelEvent(_TransitionUseCase):
         event.cancel(now=self._clock.now())
 
 
-class ApproveEvent(_TransitionUseCase):
-    """Модерация: ``proposed → draft`` (одобрить предложение, editor/admin)."""
+class ApproveEvent:
+    """Модерация: ``proposed → draft`` (editor/admin) + уведомление автору."""
 
-    _action = "event.approved"
+    def __init__(
+        self,
+        *,
+        events: EventRepository,
+        clock: Clock,
+        audit: AuditTrail,
+        notifier: Notifier,
+    ) -> None:
+        self._events = events
+        self._clock = clock
+        self._audit = audit
+        self._notifier = notifier
 
-    def _apply(self, event: Event) -> None:
+    async def execute(self, *, actor: Actor, event_id: uuid.UUID) -> Event:
+        ensure_can_manage_events(actor.role)
+        event = await _require_event(self._events, event_id)
+        before = _status_value(event)
+        author, title = event.created_by, event.title
         event.approve(now=self._clock.now())
+        saved = await self._events.update(event)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action="event.approved",
+            entity_type="event",
+            entity_id=saved.id,
+            before={"status": before},
+            after={"status": _status_value(saved)},
+        )
+        await self._notifier.emit(
+            user_id=author,
+            kind="event.approved",
+            title="Событие одобрено",
+            body=f"«{title}» одобрено модерацией и будет опубликовано.",
+            entity_type="event",
+            entity_id=saved.id,
+        )
+        return saved
 
 
-class RejectEvent(_TransitionUseCase):
-    """Модерация: ``proposed → cancelled`` (отклонить предложение, editor/admin)."""
+class RejectEvent:
+    """Модерация: ``proposed → cancelled`` (editor/admin) + причина автору."""
 
-    _action = "event.rejected"
+    def __init__(
+        self,
+        *,
+        events: EventRepository,
+        clock: Clock,
+        audit: AuditTrail,
+        notifier: Notifier,
+    ) -> None:
+        self._events = events
+        self._clock = clock
+        self._audit = audit
+        self._notifier = notifier
 
-    def _apply(self, event: Event) -> None:
+    async def execute(self, *, actor: Actor, event_id: uuid.UUID, reason: str) -> Event:
+        ensure_can_manage_events(actor.role)
+        event = await _require_event(self._events, event_id)
+        before = _status_value(event)
+        author, title = event.created_by, event.title
         event.reject(now=self._clock.now())
+        saved = await self._events.update(event)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action="event.rejected",
+            entity_type="event",
+            entity_id=saved.id,
+            before={"status": before},
+            after={"status": _status_value(saved), "reason": reason},
+        )
+        await self._notifier.emit(
+            user_id=author,
+            kind="event.rejected",
+            title="Событие отклонено",
+            body=reason.strip() or "Предложение отклонено модерацией.",
+            entity_type="event",
+            entity_id=saved.id,
+        )
+        return saved
 
 
 class CloseExpiredEvents:

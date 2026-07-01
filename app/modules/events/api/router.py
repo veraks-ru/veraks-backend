@@ -34,6 +34,7 @@ from app.modules.events.api.schemas import (
     CreateCategoryRequest,
     CreateEventRequest,
     EventResponse,
+    RejectEventRequest,
     UpdateEventRequest,
 )
 from app.modules.events.application.use_cases import (
@@ -206,11 +207,12 @@ async def approve_event(
 )
 async def reject_event(
     event_id: uuid.UUID,
+    payload: RejectEventRequest,
     actor: ActorDep,
     uc: Annotated[RejectEvent, Depends(get_reject_event)],
 ) -> EventResponse:
-    """Модерация отклоняет предложение."""
-    event = await uc.execute(actor=actor, event_id=event_id)
+    """Модерация отклоняет предложение; причина уходит автору уведомлением."""
+    event = await uc.execute(actor=actor, event_id=event_id, reason=payload.reason)
     return EventResponse.from_domain(event)
 
 

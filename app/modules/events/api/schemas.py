@@ -20,6 +20,12 @@ from app.modules.events.application.dto import (
 from app.modules.events.domain.entities import Category, Event, EventStatus
 
 
+class RejectEventRequest(BaseModel):
+    """Отклонение предложения события: причина уходит автору уведомлением."""
+
+    reason: str = Field(default="", max_length=1000)
+
+
 class CreateEventRequest(BaseModel):
     """Тело запроса создания события (редакция)."""
 

@@ -36,8 +36,13 @@ from app.modules.events.application.use_cases import (
 )
 from app.modules.events.ports.clock import Clock
 from app.modules.events.ports.repositories import CategoryRepository, EventRepository
+from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.subscriptions import SubscriptionGate
 from app.modules.identity.api.dependencies import CurrentUser
+from app.modules.notifications.adapters.emitter import DbNotificationEmitter
+from app.modules.notifications.adapters.repository import (
+    SqlAlchemyNotificationRepository,
+)
 from app.modules.predictions.adapters.clock import SystemClock as PredictionsClock
 from app.modules.predictions.adapters.repository import SqlAlchemyPredictionRepository
 from app.modules.predictions.adapters.subscription_gate import (
@@ -126,14 +131,26 @@ def get_propose_event(
     )
 
 
-def get_approve_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> ApproveEvent:
+def get_notifier(session: SessionDep) -> Notifier:
+    """Нотификатор поверх домена notifications (пишет уведомление автору)."""
+    return DbNotificationEmitter(SqlAlchemyNotificationRepository(session))
+
+
+NotifierDep = Annotated[Notifier, Depends(get_notifier)]
+
+
+def get_approve_event(
+    events: EventRepoDep, clock: ClockDep, audit: AuditDep, notifier: NotifierDep
+) -> ApproveEvent:
     """Use-case одобрения предложения (модерация)."""
-    return ApproveEvent(events=events, clock=clock, audit=audit)
+    return ApproveEvent(events=events, clock=clock, audit=audit, notifier=notifier)
 
 
-def get_reject_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> RejectEvent:
+def get_reject_event(
+    events: EventRepoDep, clock: ClockDep, audit: AuditDep, notifier: NotifierDep
+) -> RejectEvent:
     """Use-case отклонения предложения (модерация)."""
-    return RejectEvent(events=events, clock=clock, audit=audit)
+    return RejectEvent(events=events, clock=clock, audit=audit, notifier=notifier)
 
 
 def get_update_event(
