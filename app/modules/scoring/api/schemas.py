@@ -97,6 +97,7 @@ class CalibrationResponse(BaseModel):
     reliability: float
     resolution: float
     uncertainty: float
+    brier_check: float
     bins: list[CalibrationBinResponse]
 
     @classmethod
@@ -111,6 +112,9 @@ class CalibrationResponse(BaseModel):
             reliability=report.reliability,
             resolution=report.resolution,
             uncertainty=report.uncertainty,
+            # Тождество Мёрфи: Brier = reliability − resolution + uncertainty.
+            # Отдаём наружу как контроль корректности разложения.
+            brier_check=report.brier_check,
             bins=[
                 CalibrationBinResponse(
                     nominal=b.nominal,
