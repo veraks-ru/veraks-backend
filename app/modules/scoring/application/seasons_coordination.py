@@ -257,8 +257,15 @@ class RollSeasons:
         self._auto_finalize = auto_finalize
         self._config_provider = config_provider or DefaultLeagueConfigProvider()
 
-    async def execute(self) -> None:
+    async def execute(self) -> list[uuid.UUID]:
+        """Прокатывает переходы; возвращает id активированных сезонов.
+
+        Список активированных нужен композит-руту (воркеру), чтобы разнести
+        дивизионы нового сезона по итогам предыдущего — без обратной зависимости
+        scoring→leagues (её делает воркер).
+        """
         now = self._clock.now()
+        activated: list[uuid.UUID] = []
 
         for season in await self._seasons.list(status=SeasonStatus.UPCOMING):
             if season.starts_at > now:
@@ -266,6 +273,7 @@ class RollSeasons:
             config = await self._config_provider.config_for(season)
             if season.activate(config, now=now):
                 await self._seasons.update(season)
+                activated.append(season.id)
                 logger.info("Season %s auto-activated", season.id)
 
         if not self._auto_finalize:
@@ -273,8 +281,9 @@ class RollSeasons:
                 "Auto-finalization disabled by config — skipping timer-based "
                 "season finalization (manual admin finalization only)."
             )
-            return
+            return activated
 
         for season in await self._seasons.list(status=SeasonStatus.ACTIVE):
             if season.ends_at <= now:
                 await self._finalize.execute(season_id=season.id)
+        return activated

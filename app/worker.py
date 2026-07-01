@@ -70,6 +70,15 @@ from app.modules.resolutions.adapters.repositories import (
 )
 from app.modules.resolutions.application.use_cases import CloseDisputeWindows
 from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
+from app.modules.seasons.domain.entities import SeasonStatus
+from app.modules.leagues.adapters.repository import (
+    SqlAlchemyDivisionMembershipRepository,
+    SqlAlchemyDivisionRepository,
+)
+from app.modules.leagues.adapters.standings_gateway import (
+    SqlAlchemyStandingsGateway,
+)
+from app.modules.leagues.application.use_cases import ApplyPromotionRelegation
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 
 logger = logging.getLogger(__name__)
@@ -187,7 +196,35 @@ async def season_roll(_ctx: dict[Any, Any]) -> None:
             auto_finalize=settings.seasons_auto_finalize,
             config_provider=config_provider,
         )
-        await roll.execute()
+        activated = await roll.execute()
+
+        # Разнос дивизионов нового сезона по итогам предыдущего завершённого
+        # (композит-рут связывает scoring↔leagues без обратной зависимости).
+        if activated:
+            divisions = SqlAlchemyDivisionRepository(session)
+            div_members = SqlAlchemyDivisionMembershipRepository(session)
+            standings = SqlAlchemyStandingsGateway(session)
+            finished = [
+                s
+                for s in await seasons.list(status=SeasonStatus.FINISHED)
+            ]
+            apply = ApplyPromotionRelegation(
+                divisions=divisions, memberships=div_members, standings=standings
+            )
+            for season_id in activated:
+                prev = [s for s in finished if s.id != season_id]
+                if not prev:
+                    continue
+                latest = max(prev, key=lambda s: s.ends_at)
+                placed = await apply.execute(
+                    finished_season_id=latest.id, next_season_id=season_id
+                )
+                logger.info(
+                    "divisions: %d placements for season %s from %s",
+                    placed,
+                    season_id,
+                    latest.id,
+                )
 
 
 async def close_dispute_windows(ctx: dict[Any, Any]) -> int:
