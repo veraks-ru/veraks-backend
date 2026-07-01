@@ -194,8 +194,38 @@ class RecomputeRatings:
         self._clock = clock
         self._season_config = season_config
 
-    async def execute(self, *, season_id: uuid.UUID | None = None) -> int:
-        """Полный пересчёт рейтингов; возвращает число сохранённых строк."""
+    @staticmethod
+    def touched_scopes(
+        *, category_id: uuid.UUID, season_id: uuid.UUID | None
+    ) -> set[tuple[ScopeType, uuid.UUID | None]]:
+        """Срезы, чьи рейтинги может сдвинуть разрешение одного события.
+
+        Голос участника разносится в глобальный срез, срез его категории и
+        (если есть) срез сезона — ровно те же три ключа, что фанит
+        :meth:`_accumulate_event`. Используется для инкрементального пересчёта.
+        """
+        scopes: set[tuple[ScopeType, uuid.UUID | None]] = {
+            (ScopeType.GLOBAL, None),
+            (ScopeType.CATEGORY, category_id),
+        }
+        if season_id is not None:
+            scopes.add((ScopeType.SEASON, season_id))
+        return scopes
+
+    async def execute(
+        self,
+        *,
+        season_id: uuid.UUID | None = None,
+        scopes: set[tuple[ScopeType, uuid.UUID | None]] | None = None,
+    ) -> int:
+        """Пересчёт рейтингов; возвращает число сохранённых строк.
+
+        ``scopes`` (опц.) ограничивает *запись* только указанными срезами
+        ``(тип, id)`` — для инкрементального пересчёта после разрешения одного
+        события. События по-прежнему читаются полностью, поэтому ранжирование
+        внутри каждого сохраняемого среза остаётся корректным (участвуют все
+        предсказатели среза, а не только голосовавшие за это событие).
+        """
         events = await self._gateway.list_resolved_events(season_id=season_id)
         acc: dict[
             tuple[ScopeType, uuid.UUID | None, uuid.UUID], _ScopeAccumulator
@@ -205,6 +235,13 @@ class RecomputeRatings:
             if event.predictor_count < MIN_PREDICTORS:
                 continue
             self._accumulate_event(event, acc)
+
+        if scopes is not None:
+            acc = {
+                key: data
+                for key, data in acc.items()
+                if (key[0], key[1]) in scopes
+            }
 
         season_views = await self._load_season_configs(acc)
         now = self._clock.now()

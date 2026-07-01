@@ -79,16 +79,41 @@ class ArqTaskScheduler:
 
 
 async def score_event(_ctx: dict[Any, Any], event_id: str) -> int:
-    """Пер-прогнозный Brier разрешённого события (идемпотентно)."""
+    """Пер-прогнозный Brier разрешённого события + инкрементальный пересчёт.
+
+    В одной транзакции: сначала Brier по прогнозам события, затем пересчёт
+    рейтингов только для затронутых срезов (global + категория + сезон
+    события), а не всех сразу — быстрый апдейт по горячему следу разрешения.
+    Ночной ``recompute_ratings`` остаётся полным бэкстопом корректности.
+    """
+    eid = uuid.UUID(event_id)
     async with session_scope() as session:
         clock = SystemClock()
+        gateway = SqlAlchemyEventScoringGateway(session, clock)
         uc = ScoreEvent(
-            gateway=SqlAlchemyEventScoringGateway(session, clock),
+            gateway=gateway,
             writer=SqlAlchemyPredictionScoreWriter(session),
             clock=clock,
         )
-        scored = await uc.execute(event_id=uuid.UUID(event_id))
-    logger.info("score_event %s: %d predictions scored", event_id, scored)
+        scored = await uc.execute(event_id=eid)
+
+        event = await gateway.get_resolved_event(eid)
+        scopes = RecomputeRatings.touched_scopes(
+            category_id=event.category_id, season_id=event.season_id
+        )
+        recompute = RecomputeRatings(
+            gateway=gateway,
+            ratings=SqlAlchemyRatingRepository(session),
+            clock=clock,
+            season_config=SqlAlchemySeasonConfigGateway(session),
+        )
+        upserted = await recompute.execute(scopes=scopes)
+    logger.info(
+        "score_event %s: %d predictions scored, %d ratings recomputed",
+        event_id,
+        scored,
+        upserted,
+    )
     return scored
 
 

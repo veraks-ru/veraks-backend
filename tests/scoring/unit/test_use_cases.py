@@ -219,6 +219,60 @@ async def test_recompute_ratings_builds_season_scope() -> None:
     assert {r.rank for r in season_board} == {1, 2, 3, 4, 5}
 
 
+def test_touched_scopes_covers_global_category_and_season() -> None:
+    category_id = uuid.uuid4()
+    season_id = uuid.uuid4()
+    assert RecomputeRatings.touched_scopes(
+        category_id=category_id, season_id=None
+    ) == {(ScopeType.GLOBAL, None), (ScopeType.CATEGORY, category_id)}
+    assert RecomputeRatings.touched_scopes(
+        category_id=category_id, season_id=season_id
+    ) == {
+        (ScopeType.GLOBAL, None),
+        (ScopeType.CATEGORY, category_id),
+        (ScopeType.SEASON, season_id),
+    }
+
+
+async def test_recompute_ratings_scope_filter_writes_only_touched_scopes() -> None:
+    """Инкрементальный пересчёт: пишем только срезы события, но ранжируем полно."""
+    category_id = uuid.uuid4()
+    other_category = uuid.uuid4()
+    ids = [uuid.uuid4() for _ in range(5)]
+    # Два события в разных категориях; целимся только в первую.
+    target, _ = make_event(
+        outcome=0,
+        probabilities=[0.9, 0.9, 0.9, 0.9, 0.3],
+        category_id=category_id,
+        user_ids=ids,
+    )
+    other, _ = make_event(
+        outcome=1,
+        probabilities=[0.5, 0.5, 0.5, 0.7, 0.9],
+        category_id=other_category,
+    )
+    gateway = FakeEventScoringGateway(resolved=[target, other])
+    repo = InMemoryRatingRepository()
+    uc = RecomputeRatings(
+        gateway=gateway,
+        ratings=repo,
+        clock=FakeClock(FIXED_NOW),
+        season_config=FakeSeasonConfigGateway(),
+    )
+
+    scopes = RecomputeRatings.touched_scopes(category_id=category_id, season_id=None)
+    await uc.execute(scopes=scopes)
+
+    # Целевая категория записана и полностью проранжирована.
+    cat_board = await repo.leaderboard(ScopeType.CATEGORY, category_id)
+    assert len(cat_board) == 5
+    assert {r.rank for r in cat_board} == {1, 2, 3, 4, 5}
+    # Глобальный срез — тоже (учитывает голоса обоих событий).
+    assert len(await repo.leaderboard(ScopeType.GLOBAL, None)) == 10
+    # Чужая категория НЕ тронута.
+    assert await repo.leaderboard(ScopeType.CATEGORY, other_category) == []
+
+
 # ── GetLeaderboard / GetUserCalibration ─────────────────────────────────────
 
 
