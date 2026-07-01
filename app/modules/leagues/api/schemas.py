@@ -84,6 +84,13 @@ class LeagueStandingsResponse(BaseModel):
         )
 
 
+class ApplyPromotionRequest(BaseModel):
+    finished_season_id: uuid.UUID
+    next_season_id: uuid.UUID
+    promote: int = Field(default=2, ge=0)
+    relegate: int = Field(default=2, ge=0)
+
+
 class DivisionStandingsResponse(BaseModel):
     level: int
     title: str

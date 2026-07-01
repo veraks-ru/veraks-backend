@@ -271,6 +271,12 @@ class ApplyPromotionRelegation:
             relegate=relegate,
         )
 
+        # Новички: у кого есть сезонный рейтинг, но не было дивизиона — в низший.
+        lowest_level = num_levels
+        rated = await self._standings.season_rated_ids(finished_season_id)
+        for user_id in rated:
+            placements.setdefault(user_id, lowest_level)
+
         written = 0
         for user_id, level in placements.items():
             division = by_level.get(level)

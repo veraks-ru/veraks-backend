@@ -9,14 +9,17 @@ from fastapi import APIRouter, Depends, status
 
 from app.modules.identity.api.dependencies import CurrentUser
 from app.modules.leagues.api.dependencies import (
+    get_apply_promotion,
     get_create_league,
     get_division_standings,
     get_join_league,
     get_league_standings,
     get_leave_league,
     get_list_my_leagues,
+    require_admin,
 )
 from app.modules.leagues.api.schemas import (
+    ApplyPromotionRequest,
     DivisionStandingsResponse,
     LeagueCreateRequest,
     LeagueJoinRequest,
@@ -24,6 +27,7 @@ from app.modules.leagues.api.schemas import (
     LeagueStandingsResponse,
 )
 from app.modules.leagues.application.use_cases import (
+    ApplyPromotionRelegation,
     CreateLeague,
     GetDivisionStandings,
     GetLeagueStandings,
@@ -124,3 +128,21 @@ async def division_standings(
 ) -> DivisionStandingsResponse:
     result = await uc.execute(season_id=season_id, level=level)
     return DivisionStandingsResponse.from_result(result)
+
+
+@router.post(
+    "/admin/divisions/apply",
+    summary="Разнести дивизионы на следующий сезон (admin)",
+)
+async def apply_promotion(
+    payload: ApplyPromotionRequest,
+    _role: Annotated[object, Depends(require_admin)],
+    uc: Annotated[ApplyPromotionRelegation, Depends(get_apply_promotion)],
+) -> dict[str, int]:
+    written = await uc.execute(
+        finished_season_id=payload.finished_season_id,
+        next_season_id=payload.next_season_id,
+        promote=payload.promote,
+        relegate=payload.relegate,
+    )
+    return {"placed": written}

@@ -91,6 +91,10 @@ class StandingsGateway(Protocol):
         self, season_id: uuid.UUID, user_ids: list[uuid.UUID]
     ) -> list[uuid.UUID]: ...
 
+    async def season_rated_ids(self, season_id: uuid.UUID) -> list[uuid.UUID]:
+        """Все пользователи с сезонным рейтингом (участники сезона)."""
+        ...
+
 
 @runtime_checkable
 class InviteCodeGenerator(Protocol):

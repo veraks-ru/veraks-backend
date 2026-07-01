@@ -87,3 +87,15 @@ class SqlAlchemyStandingsGateway:
         seen = set(ranked)
         tail = [uid for uid in user_ids if uid not in seen]
         return ranked + tail
+
+    async def season_rated_ids(self, season_id: uuid.UUID) -> list[uuid.UUID]:
+        return list(
+            (
+                await self._session.execute(
+                    select(RatingORM.user_id).where(
+                        RatingORM.scope_type == ScopeType.SEASON,
+                        RatingORM.scope_id == season_id,
+                    )
+                )
+            ).scalars().all()
+        )

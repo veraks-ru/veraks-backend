@@ -198,3 +198,39 @@ async def test_division_promotion_relegation(session: AsyncSession) -> None:
     assert standings.division_level == 2
     assert {r.username for r in standings.rows} == {"d2a", "d2b", "d2c"}
     await session.commit()
+
+
+async def test_new_rated_user_placed_in_lowest_division(
+    session: AsyncSession,
+) -> None:
+    divisions = SqlAlchemyDivisionRepository(session)
+    dmembers = SqlAlchemyDivisionMembershipRepository(session)
+    gateway = SqlAlchemyStandingsGateway(session)
+    seasons = SqlAlchemySeasonRepository(session)
+
+    finished = _season("2026q1", SeasonStatus.FINISHED)
+    upcoming = _season("2026q2", SeasonStatus.UPCOMING)
+    await seasons.add(finished)
+    await seasons.add(upcoming)
+    # Новичок: есть сезонный рейтинг, но не было дивизиона.
+    newbie = await add_user(session, username="newbie1")
+    await session.flush()
+    await _insert_rating(
+        session,
+        user_id=newbie.id,
+        scope="season",
+        scope_id=finished.id,
+        skill=0.20000,
+        rank=1,
+    )
+    await session.flush()
+
+    await ApplyPromotionRelegation(
+        divisions=divisions, memberships=dmembers, standings=gateway
+    ).execute(finished_season_id=finished.id, next_season_id=upcoming.id)
+
+    membership = await dmembers.get_for_user_season(newbie.id, upcoming.id)
+    assert membership is not None
+    div = await divisions.get_by_id(membership.division_id)
+    assert div is not None and div.level == 3  # низший дивизион
+    await session.commit()
