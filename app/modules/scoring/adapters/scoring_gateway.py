@@ -24,9 +24,13 @@ from app.modules.events.adapters.orm import EventORM
 from app.modules.events.domain.entities import EventStatus
 from app.modules.predictions.adapters.orm import PredictionORM
 from app.modules.scoring.application.dto import EventScoringStatus, PredictionScore
-from app.modules.scoring.domain.formulas import time_weight_from_earliness
+from app.modules.scoring.domain.formulas import (
+    remap_probability,
+    time_weight_from_earliness,
+)
 from app.modules.scoring.domain.value_objects import PredictionVote, ResolvedEvent
 from app.modules.scoring.ports.clock import Clock
+from app.modules.seasons.adapters.orm import SeasonORM
 
 
 def _to_outcome(value: bool | None) -> int | None:
@@ -57,6 +61,9 @@ class SqlAlchemyEventScoringGateway:
     def __init__(self, session: AsyncSession, clock: Clock) -> None:
         self._session = session
         self._clock = clock
+        # Кэш замороженных сеток градаций по сезону (на время жизни шлюза),
+        # чтобы не читать таблицу seasons на каждое событие в пересчёте.
+        self._grid_cache: dict[uuid.UUID, tuple[float, ...] | None] = {}
 
     async def get_status(self, event_id: uuid.UUID) -> EventScoringStatus:
         """Готовность события к скорингу (статус + окно оспаривания)."""
@@ -154,16 +161,43 @@ class SqlAlchemyEventScoringGateway:
         """Закрыто ли окно оспаривания (нет окна — считается закрытым)."""
         return ends_at is None or ends_at <= self._clock.now()
 
+    async def _season_grid(
+        self, season_id: uuid.UUID | None
+    ) -> tuple[float, ...] | None:
+        """Замороженная сетка градаций сезона (или ``None``, если без сезона).
+
+        Читается напрямую из ``seasons.league_config`` (jsonb) и кэшируется. У
+        события без сезона или сезона без снапшота сетки перенос не делается.
+        """
+        if season_id is None:
+            return None
+        if season_id in self._grid_cache:
+            return self._grid_cache[season_id]
+        season = await self._session.get(SeasonORM, season_id)
+        cfg = season.league_config if season is not None else None
+        grid: tuple[float, ...] | None = None
+        if cfg:
+            gm = cfg.get("gradation_map")
+            if gm:
+                grid = tuple(float(x) for x in gm)
+        self._grid_cache[season_id] = grid
+        return grid
+
     async def _build_resolved(self, event: EventORM) -> ResolvedEvent:
         stmt = select(PredictionORM).where(
             PredictionORM.event_id == event.id,
             PredictionORM.is_locked.is_(True),
         )
         predictions = (await self._session.execute(stmt)).scalars().all()
+        grid = await self._season_grid(event.season_id)
         votes = tuple(
             PredictionVote(
                 user_id=p.user_id,
-                probability=float(p.probability),
+                probability=(
+                    remap_probability(float(p.probability), grid)
+                    if grid is not None
+                    else float(p.probability)
+                ),
                 time_weight=time_weight_from_earliness(
                     _earliness(p.created_at, event.opens_at, event.closes_at)
                 ),

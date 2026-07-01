@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from app.modules.scoring.domain.constants import (
     BETA,
     C_MIN,
+    DEFAULT_GRADATIONS,
     DISP_NORM,
     K_SHRINK,
     N_MIN,
@@ -156,6 +157,29 @@ def event_contribution(
     weight = event_weight(probabilities, outcome)
     advantage = crowd_advantage(own, probabilities, outcome)
     return weight, weight * advantage
+
+
+# ── 2.4b Сетка градаций сезона (межсезонная рекалибровка) ───────────────────
+
+
+def remap_probability(stored: float, grid: Sequence[float]) -> float:
+    """Переносит сохранённый номинал прогноза на сетку градаций сезона.
+
+    Прогнозы снапшотятся при вводе по дефолтной сетке
+    :data:`DEFAULT_GRADATIONS`. Если у сезона заморожена другая (например,
+    рекалиброванная между сезонами) сетка той же длины, номинал заменяется
+    значением сезона на той же **позиции** градации — так рекалибровка меняет
+    цену градаций, не трогая исторические прогнозы. При несовпадении длины или
+    пустой сетке — возврат без изменений (нейтрально). Дефолтная сетка сезона
+    даёт тождественный перенос.
+    """
+    if len(grid) != len(DEFAULT_GRADATIONS):
+        return stored
+    idx = min(
+        range(len(DEFAULT_GRADATIONS)),
+        key=lambda i: abs(DEFAULT_GRADATIONS[i] - stored),
+    )
+    return grid[idx]
 
 
 # ── 2.5 Тайм-вейтинг (ранность прогноза) ────────────────────────────────────

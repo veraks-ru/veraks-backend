@@ -24,8 +24,10 @@ from app.modules.scoring.domain.formulas import (
     leave_one_out_consensus,
     log_loss,
     qualifies,
+    remap_probability,
     season_rating_from_contributions,
     surprise,
+    time_weight_from_earliness,
 )
 
 APPROX = 1e-4
@@ -227,3 +229,25 @@ def test_season_rating_farming_easy_events_is_neutral() -> None:
 )
 def test_qualifies_requires_all_three_thresholds(n, categories, weight, expected) -> None:
     assert qualifies(n, categories, weight) is expected
+
+
+# ── 2.4b Перенос номинала на сетку сезона ───────────────────────────────────
+
+
+def test_remap_probability_identity_on_default_grid() -> None:
+    default = (0.10, 0.30, 0.50, 0.70, 0.90)
+    for p in default:
+        assert remap_probability(p, default) == p
+
+
+def test_remap_probability_maps_by_grade_position() -> None:
+    # Рекалиброванная сетка: та же длина, значения сдвинуты по позициям.
+    recal = (0.12, 0.28, 0.55, 0.66, 0.94)
+    assert remap_probability(0.10, recal) == 0.12  # позиция 0
+    assert remap_probability(0.50, recal) == 0.55  # позиция 2
+    assert remap_probability(0.90, recal) == 0.94  # позиция 4
+
+
+def test_remap_probability_passthrough_on_length_mismatch() -> None:
+    assert remap_probability(0.70, (0.2, 0.8)) == 0.70
+    assert remap_probability(0.70, ()) == 0.70
