@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, status
 
 from app.modules.billing.api.dependencies import (
     ActorDep,
+    get_list_my_sponsor_funds,
+    get_my_sponsor_fund,
     PlanPricesDep,
     get_announce_prize_fund,
     get_approve_payout,
@@ -44,12 +46,15 @@ from app.modules.billing.api.schemas import (
     PrizeFundResponse,
     RecordDepositRequest,
     SeasonPrizeFundResponse,
+    SponsorFundDetailResponse,
     StartSubscriptionRequest,
     StartSubscriptionResponse,
     SubscriptionResponse,
 )
 from app.modules.billing.application.use_cases import (
     AnnouncePrizeFund,
+    GetMySponsorFund,
+    ListMySponsorFunds,
     ApprovePayout,
     CancelSubscription,
     CreatePayout,
@@ -249,6 +254,83 @@ async def record_sponsor_deposit(
         external_ref=payload.external_ref,
     )
     return PrizeFundResponse.from_domain(fund, balance_kopecks=fund.deposited_kopecks)
+
+
+# ── Кабинет спонсора (self-serve) ─────────────────────────────────────────
+
+
+@router.post(
+    "/sponsor/funds",
+    response_model=PrizeFundResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Спонсор: анонсировать свой фонд",
+)
+async def sponsor_announce_fund(
+    payload: AnnouncePrizeFundRequest,
+    actor: ActorDep,
+    uc: Annotated[AnnouncePrizeFund, Depends(get_announce_prize_fund)],
+) -> PrizeFundResponse:
+    """Спонсор объявляет фонд (без движения денег); становится владельцем."""
+    fund = await uc.execute(
+        actor=actor,
+        sponsor_name=payload.sponsor_name,
+        committed_kopecks=payload.committed_kopecks,
+        season_id=payload.season_id,
+        sponsor_ref=payload.sponsor_ref,
+        sponsor_user_id=actor.user_id,
+    )
+    return PrizeFundResponse.from_domain(fund, balance_kopecks=0)
+
+
+@router.post(
+    "/sponsor/funds/{fund_id}/deposit",
+    response_model=PrizeFundResponse,
+    summary="Спонсор: пополнить свой фонд",
+)
+async def sponsor_deposit(
+    fund_id: uuid.UUID,
+    payload: RecordDepositRequest,
+    actor: ActorDep,
+    uc: Annotated[RecordSponsorDeposit, Depends(get_record_sponsor_deposit)],
+) -> PrizeFundResponse:
+    """Пополнение своего фонда (проводка в кассу PRIZE)."""
+    fund = await uc.execute(
+        actor=actor,
+        fund_id=fund_id,
+        amount_kopecks=payload.amount_kopecks,
+        external_ref=payload.external_ref,
+    )
+    return PrizeFundResponse.from_domain(fund, balance_kopecks=fund.deposited_kopecks)
+
+
+@router.get(
+    "/sponsor/funds",
+    response_model=list[PrizeFundResponse],
+    summary="Спонсор: мои фонды",
+)
+async def sponsor_my_funds(
+    actor: ActorDep,
+    uc: Annotated[ListMySponsorFunds, Depends(get_list_my_sponsor_funds)],
+) -> list[PrizeFundResponse]:
+    views = await uc.execute(sponsor_user_id=actor.user_id)
+    return [
+        PrizeFundResponse.from_domain(v.fund, balance_kopecks=v.available_kopecks)
+        for v in views
+    ]
+
+
+@router.get(
+    "/sponsor/funds/{fund_id}",
+    response_model=SponsorFundDetailResponse,
+    summary="Спонсор: детали фонда и его выплаты",
+)
+async def sponsor_fund_detail(
+    fund_id: uuid.UUID,
+    actor: ActorDep,
+    uc: Annotated[GetMySponsorFund, Depends(get_my_sponsor_fund)],
+) -> SponsorFundDetailResponse:
+    detail = await uc.execute(fund_id=fund_id, sponsor_user_id=actor.user_id)
+    return SponsorFundDetailResponse.from_detail(detail)
 
 
 # ── Выплаты призов (призовая касса, maker-checker) ────────────────────────

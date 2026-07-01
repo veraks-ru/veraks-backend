@@ -8,6 +8,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.modules.billing.application.dto import PrizeFundView, SeasonPrizeFundView
+from app.modules.billing.application.use_cases import SponsorFundDetail
 from app.modules.billing.domain.entities import (
     Payment,
     PaymentProvider,
@@ -243,4 +244,25 @@ class SeasonPrizeFundResponse(BaseModel):
             season_slug=view.season_slug,
             funds=[PrizeFundResponse.from_view(f) for f in view.funds],
             payouts=[PayoutResponse.from_domain(p) for p in view.payouts],
+        )
+
+
+# ── Кабинет спонсора ────────────────────────────────────────────────────────
+
+
+class SponsorFundDetailResponse(BaseModel):
+    """Детали фонда спонсора: проекция фонда, остаток и его выплаты."""
+
+    fund: PrizeFundResponse
+    available_kopecks: int
+    payouts: list[PayoutResponse]
+
+    @classmethod
+    def from_detail(cls, detail: "SponsorFundDetail") -> "SponsorFundDetailResponse":
+        return cls(
+            fund=PrizeFundResponse.from_domain(
+                detail.fund, balance_kopecks=detail.available_kopecks
+            ),
+            available_kopecks=detail.available_kopecks,
+            payouts=[PayoutResponse.from_domain(p) for p in detail.payouts],
         )

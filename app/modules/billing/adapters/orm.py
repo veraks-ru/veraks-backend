@@ -313,6 +313,9 @@ class PrizeFundORM(Base):
     )
     sponsor_name: Mapped[str] = mapped_column(Text, nullable=False)
     sponsor_ref: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sponsor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
     committed_kopecks: Mapped[int] = mapped_column(BigInteger, nullable=False)
     deposited_kopecks: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0
@@ -335,6 +338,7 @@ class PrizeFundORM(Base):
             committed_kopecks=self.committed_kopecks,
             season_id=self.season_id,
             sponsor_ref=self.sponsor_ref,
+            sponsor_user_id=self.sponsor_user_id,
             deposited_kopecks=self.deposited_kopecks,
             status=self.status,
             created_at=self.created_at,
@@ -347,6 +351,7 @@ class PrizeFundORM(Base):
             season_id=fund.season_id,
             sponsor_name=fund.sponsor_name,
             sponsor_ref=fund.sponsor_ref,
+            sponsor_user_id=fund.sponsor_user_id,
             committed_kopecks=fund.committed_kopecks,
             deposited_kopecks=fund.deposited_kopecks,
             ledger_account_id=fund.ledger_account_id,

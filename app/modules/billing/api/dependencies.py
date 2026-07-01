@@ -35,10 +35,12 @@ from app.modules.billing.application.use_cases import (
     CancelSubscription,
     CreatePayout,
     DispatchPayout,
+    GetMySponsorFund,
     GetMySubscription,
     GetPrizeFund,
     GetSeasonPrizeFund,
     ListMyPayouts,
+    ListMySponsorFunds,
     ListPayouts,
     RecordPayoutResult,
     RecordSponsorDeposit,
@@ -228,6 +230,20 @@ def get_record_sponsor_deposit(
 ) -> RecordSponsorDeposit:
     """Use-case регистрации поступления спонсора (→ PRIZE)."""
     return RecordSponsorDeposit(funds=funds, ledger=ledger, audit=audit, clock=clock)
+
+
+def get_list_my_sponsor_funds(
+    funds: PrizeFundRepoDep, ledger: LedgerRepoDep
+) -> ListMySponsorFunds:
+    """Use-case списка фондов спонсора (кабинет)."""
+    return ListMySponsorFunds(funds=funds, ledger=ledger)
+
+
+def get_my_sponsor_fund(
+    funds: PrizeFundRepoDep, ledger: LedgerRepoDep, payouts: PayoutRepoDep
+) -> GetMySponsorFund:
+    """Use-case деталей фонда спонсора (кабинет)."""
+    return GetMySponsorFund(funds=funds, ledger=ledger, payouts=payouts)
 
 
 def get_prize_fund(

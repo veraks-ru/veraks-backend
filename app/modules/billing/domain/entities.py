@@ -162,6 +162,8 @@ class PrizeFund:
     committed_kopecks: int
     season_id: uuid.UUID | None = None
     sponsor_ref: str = ""
+    # Пользователь-спонсор (владелец кабинета); ``None`` — фонд заведён админом.
+    sponsor_user_id: uuid.UUID | None = None
     deposited_kopecks: int = 0
     status: PrizeFundStatus = PrizeFundStatus.ANNOUNCED
     created_at: datetime = field(default_factory=_utcnow)

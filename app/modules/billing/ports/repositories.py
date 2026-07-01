@@ -102,6 +102,10 @@ class PrizeFundRepository(Protocol):
         """Фонды сезона (для публичной прозрачности по сезону)."""
         ...
 
+    async def list_for_sponsor(self, sponsor_user_id: uuid.UUID) -> list[PrizeFund]:
+        """Фонды пользователя-спонсора (для его кабинета)."""
+        ...
+
     async def update(self, fund: PrizeFund) -> PrizeFund:
         """Синхронизировать изменяемые поля (deposited, статус)."""
         ...
@@ -133,6 +137,10 @@ class PayoutRepository(Protocol):
 
     async def list_by_user(self, user_id: uuid.UUID) -> list[Payout]:
         """Выплаты пользователя, новые сверху (для своего профиля)."""
+        ...
+
+    async def list_by_fund(self, prize_fund_id: uuid.UUID) -> list[Payout]:
+        """Выплаты из конкретного фонда, новые сверху (кабинет спонсора)."""
         ...
 
     async def update(self, payout: Payout) -> Payout:

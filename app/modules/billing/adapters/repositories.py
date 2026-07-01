@@ -220,6 +220,17 @@ class SqlAlchemyPrizeFundRepository:
         rows = (await self._session.execute(stmt)).scalars().all()
         return [orm.to_domain() for orm in rows]
 
+    async def list_for_sponsor(
+        self, sponsor_user_id: uuid.UUID
+    ) -> list[PrizeFund]:
+        stmt = (
+            select(PrizeFundORM)
+            .where(PrizeFundORM.sponsor_user_id == sponsor_user_id)
+            .order_by(PrizeFundORM.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [orm.to_domain() for orm in rows]
+
     async def update(self, fund: PrizeFund) -> PrizeFund:
         orm = await self._session.get(PrizeFundORM, fund.id)
         if orm is None:  # pragma: no cover
@@ -267,6 +278,15 @@ class SqlAlchemyPayoutRepository:
         stmt = (
             select(PayoutORM)
             .where(PayoutORM.user_id == user_id)
+            .order_by(PayoutORM.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [orm.to_domain() for orm in rows]
+
+    async def list_by_fund(self, prize_fund_id: uuid.UUID) -> list[Payout]:
+        stmt = (
+            select(PayoutORM)
+            .where(PayoutORM.prize_fund_id == prize_fund_id)
             .order_by(PayoutORM.created_at.desc())
         )
         rows = (await self._session.execute(stmt)).scalars().all()

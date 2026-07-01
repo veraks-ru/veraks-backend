@@ -12,6 +12,7 @@ FastAPI/SQLAlchemy. Любое движение денег идёт строго
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass as _sponsor_dataclass
 from collections.abc import Mapping
 from datetime import timedelta
 
@@ -51,8 +52,10 @@ from app.modules.billing.domain.ledger import (
     TransactionKind,
 )
 from app.modules.billing.domain.policies import (
+    ensure_can_announce_fund,
     ensure_can_approve_payout,
     ensure_can_create_payout,
+    ensure_can_deposit_to_fund,
     ensure_can_manage_prize_funds,
     ensure_distinct_approver,
 )
@@ -328,9 +331,14 @@ class AnnouncePrizeFund:
         committed_kopecks: int,
         season_id: uuid.UUID | None = None,
         sponsor_ref: str = "",
+        sponsor_user_id: uuid.UUID | None = None,
     ) -> PrizeFund:
         """Создать фонд (announced) и привязанный счёт PRIZE."""
-        ensure_can_manage_prize_funds(actor.role)
+        ensure_can_announce_fund(
+            role=actor.role,
+            actor_user_id=actor.user_id,
+            sponsor_user_id=sponsor_user_id,
+        )
 
         fund_id = uuid.uuid4()
         account = LedgerAccount(
@@ -347,6 +355,7 @@ class AnnouncePrizeFund:
             committed_kopecks=committed_kopecks,
             season_id=season_id,
             sponsor_ref=sponsor_ref,
+            sponsor_user_id=sponsor_user_id,
         )
         saved = await self._funds.add(fund)
         await self._audit.record(
@@ -390,11 +399,14 @@ class RecordSponsorDeposit:
         external_ref: str | None = None,
     ) -> PrizeFund:
         """Провести депозит спонсора и обновить зеркало фонда."""
-        ensure_can_manage_prize_funds(actor.role)
-
         fund = await self._funds.get_by_id(fund_id)
         if fund is None:
             raise PrizeFundNotFoundError(str(fund_id))
+        ensure_can_deposit_to_fund(
+            role=actor.role,
+            actor_user_id=actor.user_id,
+            fund_sponsor_user_id=fund.sponsor_user_id,
+        )
 
         now = self._clock.now()
         sponsor_cash = await self._ledger.account(chart.PRIZE_CASH_SPONSOR)
@@ -813,3 +825,69 @@ class RecordPayoutResult:
             metadata={"provider": provider.value, "provider_payout_id": provider_payout_id},
         )
         return saved
+
+
+# ── Кабинет спонсора (read) ──────────────────────────────────────────────────
+
+
+@_sponsor_dataclass(frozen=True, slots=True)
+class SponsorFundView:
+    """Фонд спонсора + доступный остаток (депозиты минус выплаты)."""
+
+    fund: PrizeFund
+    available_kopecks: int
+
+
+@_sponsor_dataclass(frozen=True, slots=True)
+class SponsorFundDetail:
+    fund: PrizeFund
+    available_kopecks: int
+    payouts: list[Payout]
+
+
+class ListMySponsorFunds:
+    """Фонды пользователя-спонсора с доступным остатком (его кабинет)."""
+
+    def __init__(
+        self, *, funds: PrizeFundRepository, ledger: LedgerRepository
+    ) -> None:
+        self._funds = funds
+        self._ledger = ledger
+
+    async def execute(
+        self, *, sponsor_user_id: uuid.UUID
+    ) -> list[SponsorFundView]:
+        out: list[SponsorFundView] = []
+        for fund in await self._funds.list_for_sponsor(sponsor_user_id):
+            # balance = debit − credit; фонд держит кредит → доступно = −balance.
+            balance = await self._ledger.balance(fund.ledger_account_id)
+            out.append(SponsorFundView(fund=fund, available_kopecks=-balance))
+        return out
+
+
+class GetMySponsorFund:
+    """Детали фонда спонсора: остаток + выплаты (только владельцу)."""
+
+    def __init__(
+        self,
+        *,
+        funds: PrizeFundRepository,
+        ledger: LedgerRepository,
+        payouts: PayoutRepository,
+    ) -> None:
+        self._funds = funds
+        self._ledger = ledger
+        self._payouts = payouts
+
+    async def execute(
+        self, *, fund_id: uuid.UUID, sponsor_user_id: uuid.UUID
+    ) -> SponsorFundDetail:
+        fund = await self._funds.get_by_id(fund_id)
+        # Чужие фонды не раскрываем (404, а не 403 — не палим существование).
+        if fund is None or fund.sponsor_user_id != sponsor_user_id:
+            raise PrizeFundNotFoundError(str(fund_id))
+        balance = await self._ledger.balance(fund.ledger_account_id)
+        payouts = await self._payouts.list_by_fund(fund_id)
+        return SponsorFundDetail(
+            fund=fund, available_kopecks=-balance, payouts=payouts
+        )
