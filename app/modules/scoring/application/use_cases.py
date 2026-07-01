@@ -46,6 +46,7 @@ from app.modules.scoring.domain.formulas import (
 )
 from app.modules.scoring.domain.value_objects import ResolvedEvent, quantize_score
 from app.modules.scoring.ports.clock import Clock
+from app.modules.scoring.ports.notifications import Notifier
 from app.modules.scoring.ports.gateways import (
     EventScoringGateway,
     PredictionScoreWriter,
@@ -83,10 +84,12 @@ class ScoreEvent:
         gateway: EventScoringGateway,
         writer: PredictionScoreWriter,
         clock: Clock,
+        notifier: Notifier | None = None,
     ) -> None:
         self._gateway = gateway
         self._writer = writer
         self._clock = clock
+        self._notifier = notifier
 
     async def execute(self, *, event_id: uuid.UUID) -> int:
         """Считает и записывает Brier по всем прогнозам события.
@@ -115,9 +118,20 @@ class ScoreEvent:
             )
             for vote in event.votes
         ]
-        return await self._writer.save_event_scores(
+        saved = await self._writer.save_event_scores(
             event_id, scores, now=self._clock.now()
         )
+        if self._notifier is not None:
+            for score in scores:
+                await self._notifier.emit(
+                    user_id=score.user_id,
+                    kind="prediction.scored",
+                    title="Ваш прогноз засчитан",
+                    body=f"Brier {score.brier}",
+                    entity_type="event",
+                    entity_id=event_id,
+                )
+        return saved
 
 
 @dataclass(slots=True)

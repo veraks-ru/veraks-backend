@@ -182,6 +182,7 @@ async def feed(
     current_user: CurrentUser,
     uc: Annotated[GetFeed, Depends(get_feed)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[FeedItemResponse]:
-    items = await uc.execute(user_id=current_user.id, limit=limit)
+    items = await uc.execute(user_id=current_user.id, limit=limit, offset=offset)
     return [FeedItemResponse.from_item(it) for it in items]

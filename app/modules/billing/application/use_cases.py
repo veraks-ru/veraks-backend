@@ -51,6 +51,7 @@ from app.modules.billing.domain.ledger import (
     PostingLeg,
     TransactionKind,
 )
+from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.domain.policies import (
     ensure_can_announce_fund,
     ensure_can_approve_payout,
@@ -643,6 +644,7 @@ class ApprovePayout:
         ledger: LedgerRepository,
         audit: AuditTrail,
         clock: Clock,
+        notifier: Notifier | None = None,
     ) -> None:
         self._payouts = payouts
         self._funds = funds
@@ -650,6 +652,7 @@ class ApprovePayout:
         self._ledger_repo = ledger
         self._audit = audit
         self._clock = clock
+        self._notifier = notifier
 
     async def execute(self, *, actor: Actor, payout_id: uuid.UUID) -> Payout:
         """Подтвердить выплату и записать проводку призовой кассы."""
@@ -717,6 +720,15 @@ class ApprovePayout:
                 "ledger_type": LedgerType.PRIZE.value,
             },
         )
+        if self._notifier is not None:
+            await self._notifier.emit(
+                user_id=saved.user_id,
+                kind="payout.approved",
+                title="Выплата подтверждена",
+                body=f"Приз {saved.amount_kopecks / 100:.0f} ₽ подтверждён к выплате",
+                entity_type="payout",
+                entity_id=saved.id,
+            )
         return saved
 
 

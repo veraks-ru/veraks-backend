@@ -12,9 +12,15 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db.session import get_session
 from app.modules.identity.api.dependencies import CurrentUser
 from app.modules.identity.domain.entities import UserRole
+from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
+from app.modules.notifications.adapters.goctopus import GoctopusPusher
+from app.modules.notifications.adapters.repository import (
+    SqlAlchemyNotificationRepository,
+)
 from app.modules.scoring.adapters.clock import SystemClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
 from app.modules.scoring.adapters.scoring_gateway import (
@@ -143,10 +149,22 @@ def require_season_transition_role(current_user: CurrentUser) -> UserRole:
 
 
 def get_score_event(
-    gateway: GatewayDep, writer: ScoreWriterDep, clock: ClockDep
+    gateway: GatewayDep,
+    writer: ScoreWriterDep,
+    clock: ClockDep,
+    session: SessionDep,
 ) -> ScoreEvent:
-    """Use-case скоринга события (пер-прогнозный Brier)."""
-    return ScoreEvent(gateway=gateway, writer=writer, clock=clock)
+    """Use-case скоринга события (пер-прогнозный Brier) с уведомлениями."""
+    settings = get_settings()
+    return ScoreEvent(
+        gateway=gateway,
+        writer=writer,
+        clock=clock,
+        notifier=PushingNotificationEmitter(
+            SqlAlchemyNotificationRepository(session),
+            GoctopusPusher(settings.realtime),
+        ),
+    )
 
 
 def get_recompute_ratings(

@@ -17,6 +17,7 @@ from app.modules.social.domain.errors import (
     FollowTargetNotFoundError,
 )
 from app.modules.social.ports.clock import Clock
+from app.modules.social.ports.notifications import Notifier
 from app.modules.social.ports.repositories import (
     CommentRepository,
     EventExistsGateway,
@@ -25,6 +26,8 @@ from app.modules.social.ports.repositories import (
     UserLookup,
     UserRef,
 )
+
+_COMMENT_PREVIEW = 120
 
 _MODERATOR_ROLES = {UserRole.EDITOR, UserRole.ARBITER, UserRole.ADMIN}
 
@@ -46,15 +49,18 @@ class PostComment:
         comments: CommentRepository,
         events: EventExistsGateway,
         clock: Clock,
+        notifier: Notifier | None = None,
     ) -> None:
         self._comments = comments
         self._events = events
         self._clock = clock
+        self._notifier = notifier
 
     async def execute(
         self, *, event_id: uuid.UUID, author_id: uuid.UUID, body: str
     ) -> Comment:
-        if not await self._events.exists(event_id):
+        creator_id = await self._events.creator_id(event_id)
+        if creator_id is None:
             raise CommentEventNotFoundError("Событие не найдено")
         comment = Comment.create(
             event_id=event_id,
@@ -62,7 +68,18 @@ class PostComment:
             body=body,
             now=self._clock.now(),
         )
-        return await self._comments.add(comment)
+        saved = await self._comments.add(comment)
+        # Уведомляем автора события о новом комментарии (кроме своих же).
+        if self._notifier is not None and creator_id != author_id:
+            await self._notifier.emit(
+                user_id=creator_id,
+                kind="comment.created",
+                title="Новый комментарий к вашему событию",
+                body=saved.body[:_COMMENT_PREVIEW],
+                entity_type="event",
+                entity_id=event_id,
+            )
+        return saved
 
 
 class DeleteComment:
@@ -108,10 +125,15 @@ class FollowUser:
     """Подписаться на предсказателя по хэндлу."""
 
     def __init__(
-        self, *, follows: FollowRepository, users: UserLookup
+        self,
+        *,
+        follows: FollowRepository,
+        users: UserLookup,
+        notifier: Notifier | None = None,
     ) -> None:
         self._follows = follows
         self._users = users
+        self._notifier = notifier
 
     async def execute(self, *, follower_id: uuid.UUID, username: str) -> None:
         target = await self._users.resolve_username(username)
@@ -119,12 +141,23 @@ class FollowUser:
             raise FollowTargetNotFoundError("Пользователь не найден")
         from app.modules.social.domain.entities import Follow
 
-        # Идемпотентно: повторная подписка — no-op.
+        # Идемпотентно: повторная подписка — no-op (и без повторного уведомления).
         if await self._follows.is_following(follower_id, target.id):
             return
         await self._follows.add(
             Follow(follower_id=follower_id, followee_id=target.id)
         )
+        if self._notifier is not None:
+            refs = await self._users.refs_by_ids([follower_id])
+            who = refs[follower_id].display_name if follower_id in refs else "Кто-то"
+            await self._notifier.emit(
+                user_id=target.id,
+                kind="follow.created",
+                title="Новый читатель",
+                body=f"{who} подписался на ваши прогнозы",
+                entity_type="user",
+                entity_id=follower_id,
+            )
 
 
 class UnfollowUser:
@@ -219,9 +252,11 @@ class GetFeed:
         self._feed = feed
 
     async def execute(
-        self, *, user_id: uuid.UUID, limit: int = 50
+        self, *, user_id: uuid.UUID, limit: int = 50, offset: int = 0
     ) -> list[FeedItem]:
         author_ids = await self._follows.following_ids(user_id)
         if not author_ids:
             return []
-        return await self._feed.recent_for_authors(author_ids, limit=limit)
+        return await self._feed.recent_for_authors(
+            author_ids, limit=limit, offset=offset
+        )

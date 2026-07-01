@@ -202,3 +202,67 @@ async def test_feed_shows_followee_activity(session: AsyncSession) -> None:
     assert kinds == {"comment", "score"}
     assert all(it.actor_username == "bob3" for it in feed)
     await session.commit()
+
+
+async def test_feed_pagination(session: AsyncSession) -> None:
+    admin = await add_user(session, username="mod_pg", role=UserRole.ADMIN)
+    a = await add_user(session, username="alice_pg")
+    b = await add_user(session, username="bob_pg")
+    event = await _open_event(session, admin.id)
+    follows = SqlAlchemyFollowRepository(session)
+    users = SqlAlchemyUserLookup(session)
+    await FollowUser(follows=follows, users=users).execute(
+        follower_id=a.id, username="bob_pg"
+    )
+    for i in range(5):
+        await _post_uc(session).execute(
+            event_id=event.id, author_id=b.id, body=f"коммент {i}"
+        )
+    await session.flush()
+
+    feed = GetFeed(follows=follows, feed=SqlAlchemyFeedGateway(session))
+    page1 = await feed.execute(user_id=a.id, limit=2, offset=0)
+    page2 = await feed.execute(user_id=a.id, limit=2, offset=2)
+    page3 = await feed.execute(user_id=a.id, limit=2, offset=4)
+    assert len(page1) == 2 and len(page2) == 2 and len(page3) == 1
+    bodies = {it.body for it in page1 + page2 + page3}
+    assert len(bodies) == 5  # без дублей между страницами
+    await session.commit()
+
+
+async def test_notifications_fire_on_follow_and_comment(
+    session: AsyncSession,
+) -> None:
+    from app.modules.notifications.adapters.emitter import DbNotificationEmitter
+    from app.modules.notifications.adapters.repository import (
+        SqlAlchemyNotificationRepository,
+    )
+
+    admin = await add_user(session, username="mod_nt", role=UserRole.ADMIN)
+    author = await add_user(session, username="author_nt")
+    fan = await add_user(session, username="fan_nt")
+    event = await _open_event(session, admin.id)
+    notifier = DbNotificationEmitter(SqlAlchemyNotificationRepository(session))
+
+    # Комментарий постороннего → уведомление автору события (admin).
+    await PostComment(
+        comments=SqlAlchemyCommentRepository(session),
+        events=SqlAlchemyEventExistsGateway(session),
+        clock=SystemClock(),
+        notifier=notifier,
+    ).execute(event_id=event.id, author_id=author.id, body="ну как вам?")
+
+    # Подписка → уведомление тому, на кого подписались.
+    await FollowUser(
+        follows=SqlAlchemyFollowRepository(session),
+        users=SqlAlchemyUserLookup(session),
+        notifier=notifier,
+    ).execute(follower_id=fan.id, username="author_nt")
+    await session.flush()
+
+    repo = SqlAlchemyNotificationRepository(session)
+    admin_notes = await repo.list_for_user(admin.id)
+    author_notes = await repo.list_for_user(author.id)
+    assert any(n.kind == "comment.created" for n in admin_notes)
+    assert any(n.kind == "follow.created" for n in author_notes)
+    await session.commit()

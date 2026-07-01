@@ -7,7 +7,13 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings, get_settings
 from app.db.session import get_session
+from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
+from app.modules.notifications.adapters.goctopus import GoctopusPusher
+from app.modules.notifications.adapters.repository import (
+    SqlAlchemyNotificationRepository,
+)
 from app.modules.social.adapters.clock import SystemClock
 from app.modules.social.adapters.event_gateway import (
     SqlAlchemyEventExistsGateway,
@@ -31,13 +37,22 @@ from app.modules.social.application.use_cases import (
 )
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-def get_post_comment(session: SessionDep) -> PostComment:
+def _notifier(session: AsyncSession, settings: Settings) -> PushingNotificationEmitter:
+    return PushingNotificationEmitter(
+        SqlAlchemyNotificationRepository(session),
+        GoctopusPusher(settings.realtime),
+    )
+
+
+def get_post_comment(session: SessionDep, settings: SettingsDep) -> PostComment:
     return PostComment(
         comments=SqlAlchemyCommentRepository(session),
         events=SqlAlchemyEventExistsGateway(session),
         clock=SystemClock(),
+        notifier=_notifier(session, settings),
     )
 
 
@@ -54,10 +69,11 @@ def get_list_event_comments(session: SessionDep) -> ListEventComments:
     )
 
 
-def get_follow_user(session: SessionDep) -> FollowUser:
+def get_follow_user(session: SessionDep, settings: SettingsDep) -> FollowUser:
     return FollowUser(
         follows=SqlAlchemyFollowRepository(session),
         users=SqlAlchemyUserLookup(session),
+        notifier=_notifier(session, settings),
     )
 
 

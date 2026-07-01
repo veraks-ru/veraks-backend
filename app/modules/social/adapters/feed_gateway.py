@@ -23,11 +23,14 @@ class SqlAlchemyFeedGateway:
         self._session = session
 
     async def recent_for_authors(
-        self, author_ids: list[uuid.UUID], *, limit: int = 50
+        self, author_ids: list[uuid.UUID], *, limit: int = 50, offset: int = 0
     ) -> list[FeedItem]:
         if not author_ids:
             return []
         ids = set(author_ids)
+        # Тянем из каждого источника окно до offset+limit, затем сливаем и режем
+        # общий срез — так пагинация корректна поверх двух отсортированных потоков.
+        window = offset + limit
         items: list[FeedItem] = []
 
         # Комментарии отслеживаемых авторов.
@@ -41,7 +44,7 @@ class SqlAlchemyFeedGateway:
                     CommentORM.deleted_at.is_(None),
                 )
                 .order_by(CommentORM.created_at.desc())
-                .limit(limit)
+                .limit(window)
             )
         ).all()
         for comment, title, username, display_name in comments:
@@ -76,7 +79,7 @@ class SqlAlchemyFeedGateway:
                     PredictionORM.brier_score.is_not(None),
                 )
                 .order_by(PredictionORM.scored_at.desc())
-                .limit(limit)
+                .limit(window)
             )
         ).all()
         for prediction, title, outcome, username, display_name in scored:
@@ -95,4 +98,4 @@ class SqlAlchemyFeedGateway:
             )
 
         items.sort(key=lambda it: it.occurred_at, reverse=True)
-        return items[:limit]
+        return items[offset : offset + limit]

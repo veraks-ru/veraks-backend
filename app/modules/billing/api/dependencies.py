@@ -13,6 +13,11 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import SettingsDep
+from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
+from app.modules.notifications.adapters.goctopus import GoctopusPusher
+from app.modules.notifications.adapters.repository import (
+    SqlAlchemyNotificationRepository,
+)
 from app.db.session import get_session
 from app.modules.billing.adapters.clock import SystemClock
 from app.modules.billing.adapters.gateways import (
@@ -307,9 +312,15 @@ def get_approve_payout(
     ledger: LedgerRepoDep,
     audit: AuditDep,
     clock: ClockDep,
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> ApprovePayout:
-    """Use-case подтверждения выплаты (checker, → PRIZE)."""
+    """Use-case подтверждения выплаты (checker, → PRIZE) с уведомлением."""
     return ApprovePayout(
+        notifier=PushingNotificationEmitter(
+            SqlAlchemyNotificationRepository(session),
+            GoctopusPusher(settings.realtime),
+        ),
         payouts=payouts, funds=funds, ledger=ledger, audit=audit, clock=clock
     )
 

@@ -57,9 +57,13 @@ class UserLookup(Protocol):
 
 @runtime_checkable
 class EventExistsGateway(Protocol):
-    """Проверка существования события (шов к домену events)."""
+    """Проверка существования события и его автора (шов к домену events)."""
 
     async def exists(self, event_id: uuid.UUID) -> bool: ...
+
+    async def creator_id(self, event_id: uuid.UUID) -> uuid.UUID | None:
+        """Автор события (для уведомления о комментарии) или ``None``, если нет."""
+        ...
 
 
 @runtime_checkable
@@ -67,5 +71,5 @@ class FeedGateway(Protocol):
     """Сбор ленты активности по множеству отслеживаемых предсказателей."""
 
     async def recent_for_authors(
-        self, author_ids: list[uuid.UUID], *, limit: int = 50
+        self, author_ids: list[uuid.UUID], *, limit: int = 50, offset: int = 0
     ) -> list[FeedItem]: ...

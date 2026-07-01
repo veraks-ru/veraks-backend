@@ -24,6 +24,11 @@ from arq.connections import ArqRedis, RedisSettings
 
 from app.config import get_settings
 from app.db.session import session_scope
+from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
+from app.modules.notifications.adapters.goctopus import GoctopusPusher
+from app.modules.notifications.adapters.repository import (
+    SqlAlchemyNotificationRepository,
+)
 from app.modules.events.adapters.clock import SystemClock as EventsClock
 from app.modules.events.adapters.repository import SqlAlchemyEventRepository
 from app.modules.events.application.use_cases import CloseExpiredEvents
@@ -95,10 +100,15 @@ async def score_event(_ctx: dict[Any, Any], event_id: str) -> int:
     async with session_scope() as session:
         clock = SystemClock()
         gateway = SqlAlchemyEventScoringGateway(session, clock)
+        settings = get_settings()
         uc = ScoreEvent(
             gateway=gateway,
             writer=SqlAlchemyPredictionScoreWriter(session),
             clock=clock,
+            notifier=PushingNotificationEmitter(
+                SqlAlchemyNotificationRepository(session),
+                GoctopusPusher(settings.realtime),
+            ),
         )
         scored = await uc.execute(event_id=eid)
 
