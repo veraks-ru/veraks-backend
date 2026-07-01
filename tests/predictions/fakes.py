@@ -30,6 +30,18 @@ class FakeClock:
         self._now = now
 
 
+class FakeSubscriptionGate:
+    """Подписочный гейт: управляемый флаг активной подписки (по умолчанию есть)."""
+
+    def __init__(self, active: bool = True) -> None:
+        self._active = active
+
+    async def has_active_subscription(
+        self, user_id: uuid.UUID, now: datetime
+    ) -> bool:
+        return self._active
+
+
 class FakeEventGateway:
     """Шлюз событий, отдающий заранее заданные снимки."""
 
