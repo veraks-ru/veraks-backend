@@ -25,6 +25,9 @@ from app.modules.seasons.adapters import orm as _seasons_orm  # noqa: F401
 from app.modules.resolutions.adapters import orm as _resolutions_orm  # noqa: F401
 from app.modules.billing.adapters import orm as _billing_orm  # noqa: F401
 from app.modules.notifications.adapters import orm as _notifications_orm  # noqa: F401
+from app.modules.social.adapters import orm as _social_orm  # noqa: F401
+from app.modules.leagues.adapters import orm as _leagues_orm  # noqa: F401
+from app.modules.b2b.adapters import orm as _b2b_orm  # noqa: F401
 from app.shared.audit.adapters import orm as _audit_orm  # noqa: F401
 
 config = context.config

@@ -109,6 +109,15 @@ from app.modules.leagues.domain.errors import (
     LeaguePermissionError,
     NotLeagueMemberError,
 )
+from app.modules.b2b.api.router import router as b2b_router
+from app.modules.b2b.domain.errors import (
+    ApiKeyNotFoundError,
+    B2bError,
+    InvalidApiKeyError,
+    InvalidB2bDataError,
+    QuotaExceededError,
+    SignalTargetNotFoundError,
+)
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
@@ -201,6 +210,12 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     NotLeagueMemberError: status.HTTP_403_FORBIDDEN,
     LeaguePermissionError: status.HTTP_403_FORBIDDEN,
     InvalidLeagueDataError: status.HTTP_400_BAD_REQUEST,
+    # b2b
+    InvalidApiKeyError: status.HTTP_401_UNAUTHORIZED,
+    QuotaExceededError: status.HTTP_429_TOO_MANY_REQUESTS,
+    ApiKeyNotFoundError: status.HTTP_404_NOT_FOUND,
+    SignalTargetNotFoundError: status.HTTP_404_NOT_FOUND,
+    InvalidB2bDataError: status.HTTP_400_BAD_REQUEST,
 }
 
 
@@ -324,6 +339,16 @@ def create_app() -> FastAPI:
             content={"detail": str(exc), "error": type(exc).__name__},
         )
 
+    @app.exception_handler(B2bError)
+    async def _b2b_error_handler(
+        _request: Request, exc: B2bError
+    ) -> JSONResponse:
+        """Единый маппинг доменных ошибок b2b в JSON-ответ."""
+        return JSONResponse(
+            status_code=_resolve_status(exc),
+            content={"detail": str(exc), "error": type(exc).__name__},
+        )
+
     app.include_router(identity_router)
     app.include_router(users_router)
     app.include_router(events_router)
@@ -336,6 +361,7 @@ def create_app() -> FastAPI:
     app.include_router(realtime_router)
     app.include_router(social_router)
     app.include_router(leagues_router)
+    app.include_router(b2b_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:

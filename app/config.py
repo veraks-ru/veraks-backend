@@ -109,6 +109,20 @@ class WebhookSettings(BaseSettings):
     yookassa_payout_secret: str = ""
 
 
+class B2bSettings(BaseSettings):
+    """Параметры B2B signal API: квоты и цена выдачи ключа.
+
+    ``default_daily_quota`` — суточный лимит запросов на ключ (если у ключа нет
+    своего). ``key_price_kopecks`` — разовая выручка при выдаче ключа (проводка
+    ``b2b_invoice`` в операционную кассу).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="B2B_", extra="ignore")
+
+    default_daily_quota: int = Field(default=1_000, ge=1)
+    key_price_kopecks: int = Field(default=490_000, ge=1)
+
+
 class Settings(BaseSettings):
     """Корневые настройки приложения."""
 
@@ -134,6 +148,7 @@ class Settings(BaseSettings):
     resolutions: ResolutionsSettings = Field(default_factory=ResolutionsSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
     webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
+    b2b: B2bSettings = Field(default_factory=B2bSettings)
 
 
 @lru_cache
