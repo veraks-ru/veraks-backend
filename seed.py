@@ -274,6 +274,58 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
                     )
                 )
 
+        # ── Разрешённое событие с ОТКРЫТЫМ окном оспаривания (для демо споров) ──
+        disp = EventORM(
+            id=uuid.uuid4(),
+            title="Инфляция за месяц оказалась ниже прогноза аналитиков",
+            description="Демо-событие с открытым окном оспаривания.",
+            category_id=cats["economy"],
+            created_by=editor_id,
+            season_id=season.id,
+            status=EventStatus.RESOLVED,
+            opens_at=now - 20 * DAY,
+            closes_at=now - 2 * DAY,
+            resolves_at=now - 1 * DAY,
+            resolution_source="Публикация Росстата (демо)",
+            resolution_criteria="Засчитывается ДА при подтверждении по источнику.",
+            outcome=True,
+            resolved_at=now - 1 * DAY,
+            dispute_window_ends_at=now + 7 * DAY,  # окно ОТКРЫТО → можно оспорить
+            created_at=now - 20 * DAY,
+            updated_at=now - 1 * DAY,
+        )
+        session.add(disp)
+        await session.flush()
+        session.add(
+            ResolutionORM(
+                id=uuid.uuid4(),
+                event_id=disp.id,
+                outcome=True,
+                status=ResolutionStatus.FINAL,
+                resolved_by=editor_id,
+                source_reference="https://example.org/rosstat",
+                supersedes_id=None,
+                notes="",
+                resolved_at=now - 1 * DAY,
+            )
+        )
+        for u in users:  # все — участники (locked), чтобы могли оспорить
+            gi = grade_for(True, skills[u.id])
+            session.add(
+                PredictionORM(
+                    id=uuid.uuid4(),
+                    user_id=u.id,
+                    event_id=disp.id,
+                    confidence_grade=GRADES[gi],
+                    probability=Decimal(PROB[gi]),
+                    is_locked=True,
+                    brier_score=None,
+                    scored_at=None,
+                    created_at=now - 15 * DAY,
+                    updated_at=now - 2 * DAY,
+                )
+            )
+
         # ── Открытые события + прогнозы (unlocked) ──
         for idx, (slug, title) in enumerate(OPEN):
             closes = now + timedelta(hours=8) if idx == 0 else now + (idx + 1) * DAY
