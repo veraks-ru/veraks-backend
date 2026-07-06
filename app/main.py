@@ -249,6 +249,21 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Rate limiting (§6): включаем вне local (в тестах общий Redis, чтобы лимитер
+    # не копил счётчик между тестами — держим выключенным в local/деве).
+    from app.config import get_settings
+    from app.redis import get_redis
+
+    _settings = get_settings()
+    if _settings.app_env != "local" and _settings.rate_limit_per_minute > 0:
+        from app.middleware.rate_limit import RateLimitMiddleware
+
+        app.add_middleware(
+            RateLimitMiddleware,
+            redis_factory=get_redis,
+            limit=_settings.rate_limit_per_minute,
+        )
+
     @app.exception_handler(IdentityError)
     async def _identity_error_handler(
         _request: Request, exc: IdentityError

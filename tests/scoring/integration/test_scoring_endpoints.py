@@ -24,6 +24,7 @@ from app.modules.scoring.api.dependencies import (
     get_event_scoring_gateway,
     get_prediction_score_writer,
     get_rating_repository,
+    get_scoring_notifier,
     get_season_config_gateway,
     get_season_repository,
     get_user_directory,
@@ -37,6 +38,7 @@ from tests.scoring.conftest import FIXED_NOW, make_event
 from tests.scoring.fakes import (
     FakeClock,
     FakeEventScoringGateway,
+    FakeNotifier,
     FakePredictionScoreWriter,
     FakeSeasonConfigGateway,
     FakeUserDirectory,
@@ -88,6 +90,7 @@ def make_client():
         app.dependency_overrides[get_season_repository] = lambda: season_repo
         app.dependency_overrides[get_dispute_guard] = lambda: dispute_guard
         app.dependency_overrides[get_user_directory] = lambda: users
+        app.dependency_overrides[get_scoring_notifier] = lambda: FakeNotifier()
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
         if role is not None:
             app.dependency_overrides[get_current_user] = lambda: _user(role)
@@ -252,9 +255,11 @@ def test_season_recalibration_endpoint(make_client) -> None:
     resp = client.get(f"/admin/seasons/{season_id}/recalibration")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body[0]["nominal"] == pytest.approx(0.70)
-    assert body[0]["observed_freq"] == pytest.approx(0.80, abs=1e-9)
-    assert body[0]["fitted"] == pytest.approx(0.80, abs=1e-9)
+    # Все 5 слотов присутствуют (дыры заполнены их номиналом — M-RECAL1).
+    assert len(body) == 5
+    row = next(r for r in body if r["nominal"] == pytest.approx(0.70))
+    assert row["observed_freq"] == pytest.approx(0.80, abs=1e-9)
+    assert row["fitted"] == pytest.approx(0.80, abs=1e-9)
 
 
 def test_season_recalibration_requires_admin(make_client) -> None:

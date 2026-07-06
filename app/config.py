@@ -11,7 +11,7 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -136,6 +136,10 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str = "redis://localhost:6379/0"
 
+    # Rate limiting (ARCHITECTURE.md §6): лимит запросов с одного IP в минуту.
+    # Включается вне ``local`` (в тестах/деве не мешает). 0 — выключено.
+    rate_limit_per_minute: int = Field(default=300, ge=0)
+
     # Авто-финализация сезонов в таймерном ``season_roll``. Включена: боевой
     # ``ResolutionDisputeGuard`` (домен resolutions) блокирует финализацию сезона
     # с открытыми спорами, поэтому таймерное авто-закрытие безопасно (§6.4/§6.5).
@@ -149,6 +153,31 @@ class Settings(BaseSettings):
     billing: BillingSettings = Field(default_factory=BillingSettings)
     webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
     b2b: B2bSettings = Field(default_factory=B2bSettings)
+
+    @model_validator(mode="after")
+    def _require_webhook_secrets_in_prod(self) -> "Settings":
+        """Вне ``local`` секреты вебхуков обязательны (fail-closed).
+
+        Пустой секрет отключает проверку подписи (``verify_signature`` вернёт
+        ``True`` на что угодно) — в проде это открывает подделку платежей и
+        выплат. Поэтому при ``app_env != local`` приложение не поднимется без них.
+        """
+        if self.app_env != "local":
+            missing = [
+                name
+                for name, value in (
+                    ("WEBHOOK_YOOKASSA_PAYMENT_SECRET", self.webhooks.yookassa_payment_secret),
+                    ("WEBHOOK_YOOKASSA_PAYOUT_SECRET", self.webhooks.yookassa_payout_secret),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    f"В окружении '{self.app_env}' обязательны секреты вебхуков: "
+                    f"{', '.join(missing)} (пустой секрет отключает проверку подписи "
+                    "и открывает подделку платежей/выплат)."
+                )
+        return self
 
 
 @lru_cache

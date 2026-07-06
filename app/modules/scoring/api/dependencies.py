@@ -47,6 +47,7 @@ from app.modules.scoring.ports.gateways import (
     EventScoringGateway,
     PredictionScoreWriter,
 )
+from app.modules.scoring.ports.notifications import Notifier
 from app.modules.scoring.ports.repositories import RatingRepository
 from app.modules.scoring.ports.season_config import SeasonConfigGateway
 from app.modules.scoring.ports.users import UserDirectory
@@ -148,22 +149,34 @@ def require_season_transition_role(current_user: CurrentUser) -> UserRole:
 # ── Use-cases ─────────────────────────────────────────────────────────────
 
 
+def get_scoring_notifier(session: SessionDep) -> Notifier:
+    """Нотификатор скоринга (уведомление о результате).
+
+    Отдельный провайдер, чтобы интеграционные тесты подменяли его фейком (иначе
+    ``ScoreEvent`` писал бы уведомления в реальную БД).
+    """
+    settings = get_settings()
+    return PushingNotificationEmitter(
+        SqlAlchemyNotificationRepository(session),
+        GoctopusPusher(settings.realtime),
+    )
+
+
+ScoringNotifierDep = Annotated[Notifier, Depends(get_scoring_notifier)]
+
+
 def get_score_event(
     gateway: GatewayDep,
     writer: ScoreWriterDep,
     clock: ClockDep,
-    session: SessionDep,
+    notifier: ScoringNotifierDep,
 ) -> ScoreEvent:
     """Use-case скоринга события (пер-прогнозный Brier) с уведомлениями."""
-    settings = get_settings()
     return ScoreEvent(
         gateway=gateway,
         writer=writer,
         clock=clock,
-        notifier=PushingNotificationEmitter(
-            SqlAlchemyNotificationRepository(session),
-            GoctopusPusher(settings.realtime),
-        ),
+        notifier=notifier,
     )
 
 

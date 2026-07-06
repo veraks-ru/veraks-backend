@@ -24,7 +24,7 @@ from app.modules.predictions.domain.entities import ConfidenceGrade
 from app.modules.predictions.domain.errors import (
     PredictionNotFoundError,
     PredictionsClosedError,
-    PredictionSubscriptionRequiredError,
+    PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
     ProfileUserNotFoundError,
 )
@@ -33,7 +33,6 @@ from tests.predictions.fakes import (
     FakeAuditRecorder,
     FakeClock,
     FakeEventGateway,
-    FakeSubscriptionGate,
     FakeUserDirectory,
     InMemoryPredictionRepository,
 )
@@ -54,13 +53,12 @@ def audit() -> FakeAuditRecorder:
     return FakeAuditRecorder()
 
 
-def _place_uc(predictions, events, clock, audit, *, subscribed=True) -> PlacePrediction:
+def _place_uc(predictions, events, clock, audit) -> PlacePrediction:
     return PlacePrediction(
         predictions=predictions,
         events=events,
         clock=clock,
         audit=audit,
-        subscriptions=FakeSubscriptionGate(active=subscribed),
     )
 
 
@@ -122,20 +120,19 @@ async def test_place_same_grade_is_idempotent(
     assert [e.action for e in audit.entries] == ["prediction.created"]
 
 
-async def test_place_rejected_without_active_subscription(
+async def test_place_allowed_without_subscription(
     predictions, clock, audit, open_snapshot, user_id, event_id
 ) -> None:
+    """Участие бесплатное: голосовать можно без подписки (H-LEGAL-1, PRD §7.4)."""
     events = FakeEventGateway([open_snapshot])
-    uc = _place_uc(predictions, events, clock, audit, subscribed=False)
+    uc = _place_uc(predictions, events, clock, audit)
 
-    with pytest.raises(PredictionSubscriptionRequiredError):
-        await uc.execute(
-            user_id=user_id, event_id=event_id, grade=ConfidenceGrade.FIFTY_FIFTY
-        )
+    result = await uc.execute(
+        user_id=user_id, event_id=event_id, grade=ConfidenceGrade.FIFTY_FIFTY
+    )
 
-    # Прогноз не создан, в аудит ничего не записано.
-    assert await predictions.get_for_user_event(user_id, event_id) is None
-    assert audit.entries == []
+    assert result is not None
+    assert await predictions.get_for_user_event(user_id, event_id) is not None
 
 
 async def test_place_rejected_when_event_closed(
@@ -240,11 +237,12 @@ async def test_summary_aggregates_distribution_after_close(
     assert summary.mean_probability == Decimal("0.65")
 
 
-async def test_summary_visible_while_event_open(
+async def test_summary_hidden_while_event_open(
     predictions, clock, open_snapshot, event_id
 ) -> None:
-    # Консенсус толпы виден и на открытом событии (Polymarket-style): смотреть
-    # площадку бесплатно, гейт стоит только на голосовании.
+    # Пока приём открыт, сводка толпы скрыта (анти-якорение, H-ANCHOR): средний
+    # прогноз — бенчмарк LOO-скоринга, его раскрытие до закрытия позволяло бы
+    # якориться. Прогнозы редактируемы до закрытия → рубеж = закрытие приёма.
     from app.modules.predictions.domain.entities import Prediction
 
     for grade in (ConfidenceGrade.DEFINITELY_YES, ConfidenceGrade.PROBABLY_NO):
@@ -253,11 +251,8 @@ async def test_summary_visible_while_event_open(
         )
     events = FakeEventGateway([open_snapshot])
 
-    summary = await _summary_uc(predictions, events, clock).execute(event_id=event_id)
-
-    assert summary.total_count == 2
-    # (0.90 + 0.30) / 2 = 0.60.
-    assert summary.mean_probability == Decimal("0.60")
+    with pytest.raises(PredictionSummaryHiddenError):
+        await _summary_uc(predictions, events, clock).execute(event_id=event_id)
 
 
 async def test_summary_empty_after_close(

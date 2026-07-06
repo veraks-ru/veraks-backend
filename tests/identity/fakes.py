@@ -117,16 +117,29 @@ class FakeStateStore:
 
 
 class FakeRefreshTokenStore:
-    """Allow-list действительных refresh-jti."""
+    """Allow-list refresh-jti с детектом повторного использования (семейство = user_id)."""
 
     def __init__(self) -> None:
-        self._active: set[str] = set()
+        self._active: dict[str, str] = {}  # jti -> user_id
+        self._rotated: set[str] = set()
+        self._family: dict[str, set[str]] = {}  # user_id -> {jti}
 
-    async def register(self, jti: str, ttl_seconds: int) -> None:
-        self._active.add(jti)
+    async def register(self, jti: str, ttl_seconds: int, user_id: str) -> None:
+        self._active[jti] = user_id
+        self._family.setdefault(user_id, set()).add(jti)
 
     async def is_active(self, jti: str) -> bool:
         return jti in self._active
 
     async def revoke(self, jti: str) -> None:
-        self._active.discard(jti)
+        self._active.pop(jti, None)
+
+    async def mark_rotated(self, jti: str, ttl_seconds: int) -> None:
+        self._rotated.add(jti)
+
+    async def was_rotated(self, jti: str) -> bool:
+        return jti in self._rotated
+
+    async def revoke_all_for_user(self, user_id: str) -> None:
+        for jti in self._family.pop(user_id, set()):
+            self._active.pop(jti, None)

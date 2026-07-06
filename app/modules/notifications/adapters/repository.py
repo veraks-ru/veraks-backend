@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.notifications.adapters.orm import NotificationORM
@@ -52,7 +53,7 @@ class SqlAlchemyNotificationRepository:
             )
             .values(is_read=True)
         )
-        return result.rowcount or 0
+        return cast("CursorResult[Any]", result).rowcount or 0
 
     async def count_unread(self, user_id: uuid.UUID) -> int:
         stmt = select(func.count()).where(

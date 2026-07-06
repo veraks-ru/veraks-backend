@@ -102,7 +102,7 @@ def test_full_flow_login_me_refresh_logout(context) -> None:
     # /auth/me по Bearer-токену.
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {access}"})
     assert me.status_code == 200
-    assert me.json()["username"] == "predictor"
+    assert me.json()["username"].startswith("predictor-")  # псевдоним (H-PII)
     assert me.json()["role"] == "user"
 
     # refresh по cookie (TestClient переносит cookie автоматически).

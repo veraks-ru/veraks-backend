@@ -211,6 +211,16 @@ class SqlAlchemyPrizeFundRepository:
         orm = await self._session.get(PrizeFundORM, fund_id)
         return orm.to_domain() if orm else None
 
+    async def get_for_update(self, fund_id: uuid.UUID) -> PrizeFund | None:
+        """Как ``get_by_id``, но с ``SELECT ... FOR UPDATE``.
+
+        Блокировка строки фонда сериализует конкурентные подтверждения выплат
+        из одного фонда: их проверки остатка не могут чередоваться, значит
+        овердрафт призового фонда гонкой невозможен.
+        """
+        orm = await self._session.get(PrizeFundORM, fund_id, with_for_update=True)
+        return orm.to_domain() if orm else None
+
     async def list_by_season(self, season_id: uuid.UUID) -> list[PrizeFund]:
         stmt = (
             select(PrizeFundORM)
@@ -255,6 +265,16 @@ class SqlAlchemyPayoutRepository:
 
     async def get_by_id(self, payout_id: uuid.UUID) -> Payout | None:
         orm = await self._session.get(PayoutORM, payout_id)
+        return orm.to_domain() if orm else None
+
+    async def get_for_update(self, payout_id: uuid.UUID) -> Payout | None:
+        """Как ``get_by_id``, но с ``SELECT ... FOR UPDATE``.
+
+        Блокировка строки выплаты сериализует конкурентные approve/dispatch:
+        второй войдёт лишь после коммита первого и увидит уже не-``pending``
+        статус — двойное списание выплаты становится невозможным.
+        """
+        orm = await self._session.get(PayoutORM, payout_id, with_for_update=True)
         return orm.to_domain() if orm else None
 
     async def get_by_provider_ref(

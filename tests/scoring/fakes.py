@@ -21,6 +21,16 @@ from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.value_objects import ResolvedEvent
 
 
+class FakeNotifier:
+    """Нотификатор-заглушка: ничего не пишет в БД/сеть."""
+
+    def __init__(self) -> None:
+        self.emitted: list[dict] = []
+
+    async def emit(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        self.emitted.append(kwargs)
+
+
 class FakeClock:
     """Часы с фиксированным временем."""
 
@@ -133,11 +143,30 @@ class InMemoryRatingRepository:
     def __init__(self) -> None:
         self._by_key: dict[tuple[uuid.UUID, ScopeType, uuid.UUID | None], Rating] = {}
 
+    async def acquire_recompute_lock(self) -> None:
+        # In-memory фейк однопоточный — сериализация не нужна.
+        return None
+
     async def upsert_many(self, ratings: Sequence[Rating]) -> int:
         for rating in ratings:
             key = (rating.user_id, rating.scope_type, rating.scope_id)
             self._by_key[key] = rating
         return len(ratings)
+
+    async def prune_scopes(self, scopes, *, keep) -> int:  # type: ignore[no-untyped-def]
+        keep_users: dict[tuple, set] = {}
+        for r in keep:
+            keep_users.setdefault((r.scope_type, r.scope_id), set()).add(r.user_id)
+        scope_set = set(scopes)
+        deleted = 0
+        for key in list(self._by_key):
+            user_id, scope_type, scope_id = key
+            if (scope_type, scope_id) in scope_set and user_id not in keep_users.get(
+                (scope_type, scope_id), set()
+            ):
+                del self._by_key[key]
+                deleted += 1
+        return deleted
 
     async def leaderboard(
         self,

@@ -42,8 +42,13 @@ class EventRepository(Protocol):
         """Сохраняет изменения существующего события."""
         ...
 
-    async def list(self, criteria: EventFilter) -> list[Event]:
-        """Возвращает события по фильтру (сортировка — по ``closes_at``)."""
+    async def list(
+        self, criteria: EventFilter, *, include_unlisted: bool = False
+    ) -> list[Event]:
+        """События по фильтру (сортировка — ``closes_at``, tie-break ``id``).
+
+        ``include_unlisted=False`` скрывает черновики и предложения на модерации.
+        """
         ...
 
     async def list_open_due(self, now: datetime) -> Sequence[Event]:

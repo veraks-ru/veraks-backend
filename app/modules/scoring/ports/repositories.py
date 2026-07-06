@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Protocol, runtime_checkable
 
 from app.modules.scoring.domain.entities import Rating, ScopeType
@@ -18,8 +18,21 @@ from app.modules.scoring.domain.entities import Rating, ScopeType
 class RatingRepository(Protocol):
     """Хранилище рейтингов (ключ — ``UNIQUE(user_id, scope_type, scope_id)``)."""
 
+    async def acquire_recompute_lock(self) -> None:
+        """Сериализует конкурентные пересчёты рейтингов (advisory-лок транзакции)."""
+        ...
+
     async def upsert_many(self, ratings: Sequence[Rating]) -> int:
         """Идемпотентно сохраняет/обновляет рейтинги; возвращает их число."""
+        ...
+
+    async def prune_scopes(
+        self,
+        scopes: Iterable[tuple[ScopeType, uuid.UUID | None]],
+        *,
+        keep: Sequence[Rating],
+    ) -> int:
+        """Удаляет из пересчитанных срезов строки пользователей вне ``keep``."""
         ...
 
     async def leaderboard(

@@ -38,6 +38,27 @@ class FakeClock:
         return self._now
 
 
+class FakeNotifier:
+    """Нотификатор-заглушка: копит эмиссии, ничего не пишет в БД/сеть."""
+
+    def __init__(self) -> None:
+        self.emitted: list[dict[str, Any]] = []
+
+    async def emit(
+        self,
+        *,
+        user_id: uuid.UUID,
+        kind: str,
+        title: str,
+        body: str = "",
+        entity_type: str | None = None,
+        entity_id: uuid.UUID | None = None,
+    ) -> None:
+        self.emitted.append(
+            {"user_id": user_id, "kind": kind, "title": title, "body": body}
+        )
+
+
 class InMemoryLedgerRepository:
     """План счетов и журнал проводок в памяти."""
 
@@ -149,6 +170,10 @@ class InMemoryPrizeFundRepository:
     async def get_by_id(self, fund_id: uuid.UUID) -> PrizeFund | None:
         return self.items.get(fund_id)
 
+    async def get_for_update(self, fund_id: uuid.UUID) -> PrizeFund | None:
+        # In-memory фейк однопоточный — блокировка строки не нужна.
+        return self.items.get(fund_id)
+
     async def list_by_season(self, season_id: uuid.UUID) -> list[PrizeFund]:
         return [f for f in self.items.values() if f.season_id == season_id]
 
@@ -181,6 +206,10 @@ class InMemoryPayoutRepository:
         return payout
 
     async def get_by_id(self, payout_id: uuid.UUID) -> Payout | None:
+        return self.items.get(payout_id)
+
+    async def get_for_update(self, payout_id: uuid.UUID) -> Payout | None:
+        # In-memory фейк однопоточный — блокировка строки не нужна.
         return self.items.get(payout_id)
 
     async def get_by_provider_ref(

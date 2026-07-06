@@ -61,6 +61,36 @@ def isotonic_increasing(
     return result
 
 
+def enforce_strict_grid(
+    values: Sequence[float], *, eps: float = 1e-3
+) -> tuple[float, ...]:
+    """Приводит монотонную (неубывающую) последовательность к СТРОГО возрастающей в ``(0, 1)``.
+
+    Изотоническая регрессия может дать ничьи (равные соседние уровни) и значения
+    на границе ``0/1`` (частота 0.0 или 1.0). ``LeagueConfig`` требует строгого
+    роста в открытом интервале, иначе рекалибровка целиком откатывалась на дефолт.
+    Здесь значения минимально раздвигаются на ``eps`` (не растягивая шкалу и не
+    искажая калибровку сверх необходимого): прямой проход поднимает вверх, если
+    упёрлись в потолок — обратный проход опускает вниз от ``1 − eps``.
+    """
+    n = len(values)
+    if n == 0:
+        return ()
+    lo, hi = eps, 1.0 - eps
+    out = [min(max(float(v), lo), hi) for v in values]
+    # Прямой проход: строгий рост слева направо.
+    for i in range(1, n):
+        if out[i] <= out[i - 1]:
+            out[i] = out[i - 1] + eps
+    # Если упёрлись в потолок — обратный проход от 1 − eps.
+    if out[-1] > hi:
+        out[-1] = hi
+        for i in range(n - 2, -1, -1):
+            if out[i] >= out[i + 1]:
+                out[i] = out[i + 1] - eps
+    return tuple(out)
+
+
 def recalibrate(
     observed: Sequence[tuple[str, float, int]],
 ) -> list[tuple[str, float]]:

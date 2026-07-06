@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.social.adapters.orm import CommentORM, FollowORM
@@ -67,7 +68,7 @@ class SqlAlchemyFollowRepository:
                 FollowORM.followee_id == followee_id,
             )
         )
-        return (result.rowcount or 0) > 0
+        return (cast("CursorResult[Any]", result).rowcount or 0) > 0
 
     async def is_following(
         self, follower_id: uuid.UUID, followee_id: uuid.UUID

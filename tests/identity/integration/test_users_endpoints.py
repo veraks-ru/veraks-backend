@@ -55,12 +55,14 @@ def _login(client: TestClient) -> None:
 
 def test_public_profile_returns_pseudonymous_view(context) -> None:
     client, _ = context
-    _login(client)  # создаёт пользователя predictor
+    _login(client)  # создаёт пользователя с псевдонимным хэндлом
+    username = client.get("/auth/me").json()["username"]
 
-    resp = client.get("/users/predictor")
+    resp = client.get(f"/users/{username}")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["username"] == "predictor"
+    assert body["username"] == username
+    assert username.startswith("predictor-")  # псевдоним, не ФИО (H-PII)
     assert "display_name" in body
     # ФИО/ПДн в публичный профиль не утекают.
     assert "real_name" not in body and "snils" not in body
@@ -75,12 +77,13 @@ def test_patch_me_updates_display_name(context) -> None:
     client, _ = context
     _login(client)
 
+    username = client.get("/auth/me").json()["username"]
     resp = client.patch("/users/me", json={"display_name": "Оракул"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["display_name"] == "Оракул"
 
     # Изменение видно в публичном профиле.
-    public = client.get("/users/predictor")
+    public = client.get(f"/users/{username}")
     assert public.json()["display_name"] == "Оракул"
 
 

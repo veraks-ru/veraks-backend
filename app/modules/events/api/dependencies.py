@@ -38,7 +38,7 @@ from app.modules.events.ports.clock import Clock
 from app.modules.events.ports.repositories import CategoryRepository, EventRepository
 from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.subscriptions import SubscriptionGate
-from app.modules.identity.api.dependencies import CurrentUser
+from app.modules.identity.api.dependencies import CurrentUser, OptionalCurrentUser
 from app.config import SettingsDep
 from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
 from app.modules.notifications.adapters.goctopus import GoctopusPusher
@@ -87,6 +87,16 @@ AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
 
 
 # ── Актор (RBAC) ──────────────────────────────────────────────────────────
+
+
+def get_optional_actor(current_user: OptionalCurrentUser) -> Actor | None:
+    """Actor для публичных эндпоинтов: ``None`` у анонима, иначе из сессии."""
+    if current_user is None:
+        return None
+    return Actor(user_id=current_user.id, role=current_user.role)
+
+
+OptionalActorDep = Annotated[Actor | None, Depends(get_optional_actor)]
 
 
 def get_actor(current_user: CurrentUser) -> Actor:

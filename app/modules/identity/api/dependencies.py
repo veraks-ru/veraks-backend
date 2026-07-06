@@ -231,6 +231,25 @@ async def get_current_user(
         ) from exc
 
 
+async def get_current_user_optional(
+    uc: Annotated[GetCurrentUser, Depends(get_current_user_uc)],
+    authorization: Annotated[str | None, Header()] = None,
+    access_token: Annotated[str | None, Cookie()] = None,
+) -> User | None:
+    """Как :func:`get_current_user`, но возвращает ``None`` вместо 401.
+
+    Для публичных эндпоинтов с опциональной авторизацией: анонимному зрителю
+    показываем только публичное, авторизованному — с учётом его прав.
+    """
+    token = _extract_bearer(authorization) or access_token
+    if not token:
+        return None
+    try:
+        return await uc.from_access_token(token)
+    except IdentityError:
+        return None
+
+
 def _extract_bearer(header: str | None) -> str | None:
     """Достаёт токен из заголовка ``Authorization: Bearer <token>``."""
     if header and header.lower().startswith("bearer "):
@@ -239,3 +258,4 @@ def _extract_bearer(header: str | None) -> str | None:
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+OptionalCurrentUser = Annotated[User | None, Depends(get_current_user_optional)]

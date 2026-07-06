@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,7 +62,7 @@ class SqlAlchemyLeagueMembershipRepository:
                 LeagueMembershipORM.user_id == user_id,
             )
         )
-        return (result.rowcount or 0) > 0
+        return (cast("CursorResult[Any]", result).rowcount or 0) > 0
 
     async def is_member(
         self, league_id: uuid.UUID, user_id: uuid.UUID

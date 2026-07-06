@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Бэкенд платформы прогнозов «Биржа репутации предсказателей» — **модульный
 монолит на FastAPI** с гексагональной нарезкой по доменам, единой
-PostgreSQL и фоновыми воркерами (ARQ/Celery). Полная архитектура и модель
-данных — в задании команды (см. историю/доки проекта).
+PostgreSQL и фоновым воркером (ARQ). Архитектура и модель данных —
+`../ARCHITECTURE.md`, формулы скоринга — `../scoring_system_design.md`,
+дизайн-спеки фич — `docs/superpowers/specs/`, обзор монорепо — `../CLAUDE.md`.
 
 ## Команды
 
@@ -18,10 +19,12 @@ pip install -e ".[dev]"
 cp .env.example .env            # затем заполнить секреты (ключи >= 32 байт)
 
 # тесты
-pytest                          # весь набор
+pytest                          # весь набор (e2e без спец-БД скипаются)
 pytest tests/identity/unit      # только юнит (бизнес-логика)
 pytest -k snils                 # один тест по подстроке
 pytest path::test_name          # один конкретный тест
+# e2e против реального Postgres — только выделенная БД с «e2e» в имени:
+DATABASE_URL=postgresql+asyncpg://orakul:orakul@localhost:5432/orakul_e2e pytest tests/e2e
 
 # качество
 mypy app                        # строгая типизация (strict)
@@ -32,7 +35,9 @@ alembic upgrade head
 alembic revision -m "msg" --autogenerate
 
 # запуск
+python seed.py                  # демо-данные (kalibr/mediana/baseline) + скоринг
 uvicorn app.main:app --reload
+arq app.worker.WorkerSettings   # фоновый воркер: скоринг, roll сезонов
 ```
 
 ## Архитектура (важно для продуктивности)
@@ -59,8 +64,9 @@ uvicorn app.main:app --reload
 **Тестирование портов фейками.** Юнит-тесты гоняют use-cases с in-memory
 фейками портов (`tests/<domain>/fakes.py`); интеграционные тесты поднимают
 приложение и подменяют I/O-порты через `app.dependency_overrides`, оставляя
-крипто и настройки реальными. БД-зависимые проверки (UNIQUE, enum) — отдельным
-e2e против Postgres (помечено TODO, ещё не реализовано).
+крипто и настройки реальными. БД-зависимые проверки (UNIQUE, enum, append-only
+триггеры) — e2e в `tests/e2e` против реального Postgres: настоящие миграции,
+обязательна выделенная БД с «e2e» в имени (иначе тесты скипаются).
 
 **Конфигурация** — `app/config.py`: вложенные `BaseSettings` по группам
 (`SecuritySettings`, `EsiaSettings`), читаются из env с префиксами
@@ -80,8 +86,13 @@ e2e против Postgres (помечено TODO, ещё не реализова
 
 ## Текущее состояние
 
-Реализован домен **identity** (`app/modules/identity/`): аутентификация через
-ЕСИА (OIDC), регистрация find-or-create, сессии (JWT access + ротируемый
-refresh), гарантия «один человек = один аккаунт» по `UNIQUE(snils_hash)`.
-Интеграция с реальной ЕСИА идёт через сертифицированный шлюз — точки стыка
-помечены `TODO(identity-infra)`.
+Реализованы все домены MVP (`app/modules/`): **identity** (ЕСИА OIDC, сессии
+JWT access + ротируемый refresh, «один человек = один аккаунт» по
+`UNIQUE(snils_hash)`), **events**, **predictions**, **scoring** (Brier,
+рейтинги, калибровка), **seasons**, **resolutions** (разрешение + споры),
+**billing** (две кассы, подписки, выплаты maker-checker), **notifications**
+(+ реал-тайм через goctopus), **social**, **leagues**, **b2b** (API-ключи,
+сигнал). Фон — `app/worker.py` (композит-рут воркера, единственное место,
+которому можно знать несколько доменов). Демо-данные — `seed.py`. Интеграция
+с реальной ЕСИА идёт через сертифицированный шлюз — точки стыка помечены
+`TODO(identity-infra)`.

@@ -25,7 +25,6 @@ from app.modules.events.application.use_cases import (
 )
 from app.modules.events.domain.entities import EventStatus
 from app.modules.identity.domain.entities import UserRole
-from app.modules.resolutions.adapters.clock import SystemClock as ResolutionsClock
 from app.modules.resolutions.adapters.event_gateway import (
     SqlAlchemyEventResolutionGateway,
 )

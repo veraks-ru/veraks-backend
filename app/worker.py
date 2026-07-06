@@ -122,6 +122,11 @@ async def score_event(_ctx: dict[Any, Any], event_id: str) -> int:
         scored = await uc.execute(event_id=eid)
 
         event = await gateway.get_resolved_event(eid)
+        if event is None:
+            logger.warning(
+                "score_event %s: разрешённое событие исчезло после скоринга", eid
+            )
+            return scored
         scopes = RecomputeRatings.touched_scopes(
             category_id=event.category_id, season_id=event.season_id
         )

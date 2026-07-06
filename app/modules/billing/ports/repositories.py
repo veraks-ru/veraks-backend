@@ -98,6 +98,10 @@ class PrizeFundRepository(Protocol):
         """Фонд по идентификатору или ``None``."""
         ...
 
+    async def get_for_update(self, fund_id: uuid.UUID) -> PrizeFund | None:
+        """Фонд с блокировкой строки (``FOR UPDATE``) — против гонки выплат."""
+        ...
+
     async def list_by_season(self, season_id: uuid.UUID) -> list[PrizeFund]:
         """Фонды сезона (для публичной прозрачности по сезону)."""
         ...
@@ -121,6 +125,10 @@ class PayoutRepository(Protocol):
 
     async def get_by_id(self, payout_id: uuid.UUID) -> Payout | None:
         """Выплата по идентификатору или ``None``."""
+        ...
+
+    async def get_for_update(self, payout_id: uuid.UUID) -> Payout | None:
+        """Выплата с блокировкой строки (``FOR UPDATE``) — против двойного approve/dispatch."""
         ...
 
     async def get_by_provider_ref(

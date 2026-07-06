@@ -24,10 +24,15 @@ from app.modules.events.api.dependencies import (
     get_category_repository,
     get_clock,
     get_event_repository,
+    get_lock_event_predictions,
+    get_notifier,
+    get_optional_actor,
 )
+from app.modules.events.application.dto import Actor
 from app.modules.events.domain.entities import Category
 from app.modules.identity.api.dependencies import get_current_user
 from app.modules.identity.domain.entities import User, UserRole
+from app.modules.predictions.application.use_cases import LockEventPredictions
 from tests.events.conftest import FIXED_NOW
 from tests.events.fakes import (
     FakeAuditTrail,
@@ -35,6 +40,14 @@ from tests.events.fakes import (
     InMemoryCategoryRepository,
     InMemoryEventRepository,
 )
+from tests.predictions.fakes import InMemoryPredictionRepository
+
+
+class _NullNotifier:
+    """Нотификатор-заглушка для интеграционных тестов events (без БД/сети)."""
+
+    async def emit(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        return None
 
 
 def _fake_user(role: UserRole) -> User:
@@ -68,9 +81,20 @@ def make_client(category: Category):
         app.dependency_overrides[get_category_repository] = lambda: category_repo
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
         app.dependency_overrides[get_audit_trail] = lambda: FakeAuditTrail()
+        app.dependency_overrides[get_notifier] = lambda: _NullNotifier()
+        app.dependency_overrides[get_lock_event_predictions] = (
+            lambda: LockEventPredictions(
+                predictions=InMemoryPredictionRepository(),
+                clock=FakeClock(FIXED_NOW),
+            )
+        )
         if role is not None:
             user = _fake_user(role)
             app.dependency_overrides[get_current_user] = lambda: user
+            # Публичные GET используют опциональную авторизацию — тот же актор.
+            app.dependency_overrides[get_optional_actor] = lambda: Actor(
+                user_id=user.id, role=user.role
+            )
 
         client = TestClient(app)
         created.append(client)

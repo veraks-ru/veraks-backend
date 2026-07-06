@@ -3,26 +3,41 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import CursorResult, delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.scoring.adapters.orm import RatingORM
 from app.modules.scoring.domain.entities import Rating, ScopeType
 
+# Ключ транзакционного advisory-лока, сериализующего пересчёты рейтингов.
+_RECOMPUTE_LOCK_KEY = 704_235_911
+
 
 class SqlAlchemyRatingRepository:
     """Хранилище рейтингов поверх асинхронной сессии SQLAlchemy.
 
-    ``upsert_many`` вызывается единственным фоновым пересчётом (без гонок),
-    поэтому реализован как «обновить-или-вставить» по ключу области — это не
-    зависит от версии Postgres (``ON CONFLICT`` с ``NULL`` в ключе требует
-    ``NULLS NOT DISTINCT``/PG15+).
+    ``upsert_many`` реализован как «обновить-или-вставить» по ключу области — это
+    не зависит от версии Postgres (``ON CONFLICT`` с ``NULL`` в ключе требует
+    ``NULLS NOT DISTINCT``/PG15+). Конкурентные пересчёты сериализуются
+    транзакционным advisory-локом (:meth:`acquire_recompute_lock`).
     """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def acquire_recompute_lock(self) -> None:
+        """Берёт транзакционный advisory-лок на пересчёт рейтингов.
+
+        Два конкурентных ``score_event`` (или score + ночной full) иначе гоняли
+        бы UPDATE/INSERT одних строк ratings → ``IntegrityError`` по
+        ``uq_ratings_user_scope`` или рассинхрон рангов. Лок снимается на коммите.
+        """
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:k)"), {"k": _RECOMPUTE_LOCK_KEY}
+        )
 
     async def upsert_many(self, ratings: Sequence[Rating]) -> int:
         """Идемпотентно сохраняет рейтинги (latest-wins по ключу области)."""
@@ -42,6 +57,39 @@ class SqlAlchemyRatingRepository:
             existing.updated_at = rating.updated_at
         await self._session.flush()
         return len(ratings)
+
+    async def prune_scopes(
+        self,
+        scopes: Iterable[tuple[ScopeType, uuid.UUID | None]],
+        *,
+        keep: Sequence[Rating],
+    ) -> int:
+        """Удаляет из пересчитанных срезов строки пользователей вне ``keep``.
+
+        После полного пересчёта среза пользователь мог выбыть из рейтинга
+        (overturn исхода, падение ниже порога) — его прежняя строка с рангом
+        осталась бы «призраком». Здесь такие строки удаляются; строки из
+        ``keep`` не трогаются (их обновит ``upsert_many``). Вызывать ДО upsert.
+        """
+        keep_users: dict[tuple[ScopeType, uuid.UUID | None], set[uuid.UUID]] = {}
+        for rating in keep:
+            keep_users.setdefault(
+                (rating.scope_type, rating.scope_id), set()
+            ).add(rating.user_id)
+
+        deleted = 0
+        for scope_type, scope_id in scopes:
+            users = keep_users.get((scope_type, scope_id), set())
+            stmt = delete(RatingORM).where(
+                RatingORM.scope_type == scope_type,
+                self._scope_match(scope_id),
+            )
+            if users:
+                stmt = stmt.where(RatingORM.user_id.not_in(users))
+            result = await self._session.execute(stmt)
+            deleted += cast("CursorResult[Any]", result).rowcount or 0
+        await self._session.flush()
+        return deleted
 
     async def leaderboard(
         self,

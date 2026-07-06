@@ -37,7 +37,9 @@ from app.modules.billing.domain.entities import (
 from app.modules.billing.domain.errors import (
     BillingPermissionError,
     InsufficientPrizeFundError,
+    InvalidAmountError,
     LedgerAccountNotFoundError,
+    PayoutAlreadyDecidedError,
     PayoutNotFoundError,
     PrizeFundNotFoundError,
     SeasonNotFoundError,
@@ -249,6 +251,21 @@ class RecordSubscriptionPayment:
         if existing is not None:
             return existing  # идемпотентность: вебхук повторился
 
+        # Сумму вебхука сверяем с ценой подписки ДО проводки: провайдер не может
+        # активировать подписку платежом на произвольную (заниженную) сумму.
+        user_id: uuid.UUID | None = None
+        subscription = None
+        if subscription_id is not None:
+            subscription = await self._subscriptions.get_by_id(subscription_id)
+            if subscription is None:
+                raise SubscriptionNotFoundError(str(subscription_id))
+            if amount_kopecks != subscription.price_kopecks:
+                raise InvalidAmountError(
+                    f"Сумма платежа {amount_kopecks} коп. не совпадает с ценой "
+                    f"подписки {subscription.price_kopecks} коп."
+                )
+            user_id = subscription.user_id
+
         now = self._clock.now()
         cash = await self._ledger.account(chart.OPS_CASH_YOOKASSA)
         revenue = await self._ledger.account(chart.OPS_REVENUE_SUBSCRIPTIONS)
@@ -265,12 +282,7 @@ class RecordSubscriptionPayment:
         )
         saved_txn = await self._ledger_repo.add_transaction(transaction)
 
-        user_id: uuid.UUID | None = None
-        if subscription_id is not None:
-            subscription = await self._subscriptions.get_by_id(subscription_id)
-            if subscription is None:
-                raise SubscriptionNotFoundError(str(subscription_id))
-            user_id = subscription.user_id
+        if subscription is not None:
             subscription.activate(
                 period_start=now,
                 period_end=now + _PLAN_PERIOD[subscription.plan],
@@ -398,8 +410,8 @@ class RecordSponsorDeposit:
         fund_id: uuid.UUID,
         amount_kopecks: int,
         external_ref: str | None = None,
-    ) -> PrizeFund:
-        """Провести депозит спонсора и обновить зеркало фонда."""
+    ) -> PrizeFundView:
+        """Провести депозит спонсора и вернуть фонд с доступным остатком."""
         fund = await self._funds.get_by_id(fund_id)
         if fund is None:
             raise PrizeFundNotFoundError(str(fund_id))
@@ -442,7 +454,9 @@ class RecordSponsorDeposit:
                 "ledger_type": LedgerType.PRIZE.value,
             },
         )
-        return saved
+        # Доступный остаток (депозиты − выплаты) = −сальдо кредит-нормального счёта.
+        available = -await self._ledger_repo.balance(saved.ledger_account_id)
+        return PrizeFundView(fund=saved, balance_kopecks=available)
 
 
 class GetPrizeFund:
@@ -655,17 +669,29 @@ class ApprovePayout:
         self._notifier = notifier
 
     async def execute(self, *, actor: Actor, payout_id: uuid.UUID) -> Payout:
-        """Подтвердить выплату и записать проводку призовой кассы."""
+        """Подтвердить выплату и записать проводку призовой кассы.
+
+        Порядок операций критичен для безопасности денег:
+        1) строка выплаты берётся ``FOR UPDATE`` — конкурентный второй approve
+           блокируется до нашего коммита;
+        2) ``approve()`` вызывается ДО проводки — если выплата уже не ``pending``
+           (второй approve увидит ``approved``), поднимается ошибка и деньги не
+           двигаются;
+        3) строка фонда берётся ``FOR UPDATE`` до чтения остатка — две выплаты из
+           одного фонда не могут «увидеть» один и тот же остаток и увести фонд в минус.
+        """
         ensure_can_approve_payout(actor.role)
 
-        payout = await self._payouts.get_by_id(payout_id)
+        payout = await self._payouts.get_for_update(payout_id)
         if payout is None:
             raise PayoutNotFoundError(str(payout_id))
         ensure_distinct_approver(
             created_by=payout.created_by, approver_id=actor.user_id
         )
+        # Проверка «можно ли подтвердить» — ДО любого движения денег.
+        payout.approve(approver_id=actor.user_id)
 
-        fund = await self._funds.get_by_id(payout.prize_fund_id)
+        fund = await self._funds.get_for_update(payout.prize_fund_id)
         if fund is None:
             raise PrizeFundNotFoundError(str(payout.prize_fund_id))
 
@@ -703,7 +729,6 @@ class ApprovePayout:
         )
         saved_txn = await self._ledger_repo.add_transaction(transaction)
 
-        payout.approve(approver_id=actor.user_id)
         payout.ledger_transaction_id = saved_txn.id
         saved = await self._payouts.update(payout)
         await self._audit.record(
@@ -756,10 +781,19 @@ class DispatchPayout:
     async def execute(self, *, actor: Actor, payout_id: uuid.UUID) -> Payout:
         """Отправляет выплату провайдеру и переводит её в ``processing``."""
         ensure_can_approve_payout(actor.role)
-        payout = await self._payouts.get_by_id(payout_id)
+        payout = await self._payouts.get_for_update(payout_id)
         if payout is None:
             raise PayoutNotFoundError(str(payout_id))
+        # Статус проверяем ДО внешнего вызова: нельзя отправить не-approved
+        # выплату (обход maker-checker), а FOR UPDATE не даёт двум dispatch
+        # отправить одну выплату провайдеру дважды.
+        if payout.status is not PayoutStatus.APPROVED:
+            raise PayoutAlreadyDecidedError(
+                f"Выплата в статусе {payout.status.value}, ожидался approved"
+            )
 
+        # payout.id — идемпотентный ключ на стороне провайдера: повтор отправки
+        # той же выплаты не создаёт второй перевод.
         instruction = await self._gateway.send_payout(
             payout_id=payout.id,
             user_id=payout.user_id,

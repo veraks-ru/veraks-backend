@@ -134,14 +134,26 @@ def grade_for(outcome: bool, skill: float) -> int:
 
 
 async def reset(session) -> None:
-    # TRUNCATE (а не DELETE): resolutions/ledger/audit — append-only, на DELETE
-    # стоит блокирующий триггер. TRUNCATE его не задевает; CASCADE подчищает
-    # зависимые таблицы (подписки/платежи/выплаты/диспуты и т.п.).
+    # TRUNCATE (а не DELETE): resolutions/ledger/audit/финализации — append-only,
+    # на DELETE стоит блокирующий триггер, но TRUNCATE его не задевает. Чистим ВСЕ
+    # рантайм-таблицы, включая денежные и аудит, чтобы повторный сид был идемпотентным
+    # (иначе оставались проводки/аудит/финализации от прежних сущностей — L2).
+    # НЕ трогаем сид-справочники из миграций: дивизионы (0016) и базовый план счетов
+    # (0010); рантайм-счета фондов удаляем отдельно ниже.
     await session.execute(
         text(
             "TRUNCATE TABLE users, categories, seasons, events, predictions, "
-            "resolutions, disputes, ratings RESTART IDENTITY CASCADE"
+            "resolutions, disputes, ratings, ledger_entries, ledger_transactions, "
+            "audit_log, season_finalizations, season_finalization_entries, "
+            "resolution_scoring_dispatches, notifications, comments, follows, "
+            "subscriptions, payments, prize_funds, payouts, api_keys, leagues, "
+            "league_memberships, division_memberships RESTART IDENTITY CASCADE"
         )
+    )
+    # Рантайм-счета призовых фондов (создаются при анонсе фонда); базовый план
+    # счетов ops:/prize: из миграции 0010 сохраняем.
+    await session.execute(
+        text("DELETE FROM ledger_accounts WHERE account_code LIKE 'prize:fund:%'")
     )
 
 

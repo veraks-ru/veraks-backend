@@ -56,21 +56,34 @@ class SqlAlchemyEventRepository:
         await self._session.flush()
         return orm.to_domain()
 
-    async def list(self, criteria: EventFilter) -> list[Event]:
-        """Выборка по фильтру; сортировка по ``closes_at`` (ближайшие выше)."""
+    async def list(
+        self, criteria: EventFilter, *, include_unlisted: bool = False
+    ) -> list[Event]:
+        """Выборка по фильтру; сортировка по ``closes_at`` (ближайшие выше).
+
+        ``include_unlisted=False`` (аноним/обычный пользователь) полностью
+        скрывает черновики и предложения на модерации — даже при явном фильтре
+        ``status=draft``/``proposed`` (защита от IDOR). Редакции передаётся
+        ``True`` и статусы видны как есть.
+        """
         stmt = select(EventORM)
         if criteria.status is not None:
             stmt = stmt.where(EventORM.status == criteria.status)
-        else:
-            # Пользовательские предложения на модерации не светятся в общем
-            # каталоге — их видно только по явному фильтру status=proposed.
-            stmt = stmt.where(EventORM.status != EventStatus.PROPOSED)
+        if not include_unlisted:
+            stmt = stmt.where(
+                EventORM.status.not_in(
+                    [EventStatus.DRAFT, EventStatus.PROPOSED]
+                )
+            )
         if criteria.category_id is not None:
             stmt = stmt.where(EventORM.category_id == criteria.category_id)
         if criteria.season_id is not None:
             stmt = stmt.where(EventORM.season_id == criteria.season_id)
         stmt = (
-            stmt.order_by(EventORM.closes_at.asc())
+            # Вторичный ключ ``id`` — детерминированный tie-breaker: при равных
+            # ``closes_at`` (частый кейс пакетно созданных событий) страницы не
+            # дублируются и не теряют строки между limit/offset-запросами.
+            stmt.order_by(EventORM.closes_at.asc(), EventORM.id.asc())
             .limit(criteria.limit)
             .offset(criteria.offset)
         )

@@ -28,6 +28,7 @@ from app.modules.scoring.application.use_cases import (
     RecomputeRatings,
 )
 from app.modules.scoring.domain.constants import DEFAULT_GRADATIONS
+from app.modules.scoring.domain.recalibration import enforce_strict_grid
 from app.modules.scoring.domain.entities import ScopeType
 from app.modules.scoring.ports.clock import Clock
 from app.modules.scoring.ports.repositories import RatingRepository
@@ -98,8 +99,12 @@ class FinalizeSeason:
                 "Нельзя финализировать сезон с открытыми спорами по его событиям"
             )
 
-        # Финальный пересчёт рейтингов сезона (та же транзакция).
-        await self._recompute.execute(season_id=season_id)
+        # Финальный пересчёт ТОЛЬКО сезонного среза (та же транзакция): без
+        # ограничения scopes пересчёт по подмножеству событий сезона затёр бы
+        # глобальный и категорийные лидерборды агрегатами одного сезона.
+        await self._recompute.execute(
+            season_id=season_id, scopes={(ScopeType.SEASON, season_id)}
+        )
         standings = await self._ratings.leaderboard(
             ScopeType.SEASON, season_id, limit=_SNAPSHOT_LIMIT
         )
@@ -186,7 +191,10 @@ class RecalibratingLeagueConfigProvider:
         if prev is None:
             return base
         proposal = await self._recalibrate.execute(season_id=prev.id)
-        grid = tuple(item.fitted for item in proposal)
+        # enforce_strict_grid раздвигает ничьи PAV и границы 0/1 до валидной
+        # строго возрастающей сетки в (0,1) — рекалибровка применяется, а не
+        # откатывается на дефолт из-за одной ничьей (M-RECAL2).
+        grid = enforce_strict_grid(tuple(item.fitted for item in proposal))
         if len(grid) != len(DEFAULT_GRADATIONS):
             logger.info(
                 "Recalibration for season %s produced %d grades (need %d) — "
@@ -199,7 +207,7 @@ class RecalibratingLeagueConfigProvider:
         try:
             config = replace(base, gradation_map=grid)
         except InvalidSeasonDataError:
-            # Ничьи PAV (нестрогий рост) или значения на границе 0/1 — фолбэк.
+            # Страховка: если сетка всё же невалидна — безопасный фолбэк.
             logger.info(
                 "Recalibrated grid %s for season %s is not a valid grid — "
                 "using default",
@@ -285,5 +293,14 @@ class RollSeasons:
 
         for season in await self._seasons.list(status=SeasonStatus.ACTIVE):
             if season.ends_at <= now:
-                await self._finalize.execute(season_id=season.id)
+                try:
+                    await self._finalize.execute(season_id=season.id)
+                except SeasonFinalizationBlockedError:
+                    # Открытые споры блокируют финализацию ЭТОГО сезона — не
+                    # роняем весь roll (иначе откатились бы уже сделанные
+                    # активации и финализации других сезонов). Досчитается на
+                    # следующем тике, когда споры закроются.
+                    logger.info(
+                        "Season %s finalization deferred: open disputes", season.id
+                    )
         return activated

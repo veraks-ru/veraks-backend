@@ -21,9 +21,10 @@ from app.modules.b2b.ports.repositories import (
     ApiKeyRepository,
     KeyGenerator,
     QuotaCounter,
-    RevenueRecorder,
     SignalGateway,
 )
+from app.shared.audit.domain.entities import AuditActorType
+from app.shared.audit.ports.audit_trail import AuditTrail
 
 
 # ── Управление ключами ───────────────────────────────────────────────────────
@@ -38,22 +39,25 @@ class IssuedApiKey:
 
 
 class IssueApiKey:
-    """Выдать API-ключ B2B-потребителю (+ проводка выручки)."""
+    """Выдать API-ключ B2B-потребителю (операция администратора).
+
+    Выдача ключа — не денежное событие: проводки выручки здесь НЕ делается
+    (выручка B2B проводится только по факту оплаты — вебхуком провайдера, вне
+    этого use-case). Факт выдачи фиксируется в неизменяемом аудите.
+    """
 
     def __init__(
         self,
         *,
         keys: ApiKeyRepository,
         generator: KeyGenerator,
-        revenue: RevenueRecorder,
+        audit: AuditTrail,
         default_quota: int,
-        price_kopecks: int,
     ) -> None:
         self._keys = keys
         self._generator = generator
-        self._revenue = revenue
+        self._audit = audit
         self._default_quota = default_quota
-        self._price_kopecks = price_kopecks
 
     async def execute(
         self,
@@ -71,10 +75,21 @@ class IssueApiKey:
             daily_quota=daily_quota or self._default_quota,
         )
         saved = await self._keys.add(key)
-        await self._revenue.record_key_issued(
-            actor_user_id=owner_user_id,
-            amount_kopecks=self._price_kopecks,
-            key_id=saved.id,
+        # Выдачу ключа выполняет администратор (гард роутера), поэтому actor —
+        # владелец/админ, actor_type — ADMIN.
+        await self._audit.record(
+            actor_id=owner_user_id,
+            actor_type=AuditActorType.ADMIN,
+            action="b2b.key.issued",
+            entity_type="api_key",
+            entity_id=saved.id,
+            after={
+                "name": saved.name,
+                "key_prefix": saved.key_prefix,
+                "daily_quota": saved.daily_quota,
+                "is_active": saved.is_active,
+            },
+            metadata={"owner_user_id": str(owner_user_id)},
         )
         return IssuedApiKey(key=saved, plaintext=plaintext)
 
@@ -90,10 +105,11 @@ class ListMyApiKeys:
 
 
 class RevokeApiKey:
-    """Отозвать свой ключ (идемпотентно)."""
+    """Отозвать свой ключ (идемпотентно) с записью в аудит."""
 
-    def __init__(self, *, keys: ApiKeyRepository) -> None:
+    def __init__(self, *, keys: ApiKeyRepository, audit: AuditTrail) -> None:
         self._keys = keys
+        self._audit = audit
 
     async def execute(
         self, *, owner_user_id: uuid.UUID, key_id: uuid.UUID
@@ -104,6 +120,18 @@ class RevokeApiKey:
         if key.is_active:
             key.revoke()
             await self._keys.update(key)
+            # Аудит пишется только при реальном изменении состояния (первый
+            # отзыв); повторный вызов идемпотентен и ничего не логирует.
+            await self._audit.record(
+                actor_id=owner_user_id,
+                actor_type=AuditActorType.ADMIN,
+                action="b2b.key.revoked",
+                entity_type="api_key",
+                entity_id=key.id,
+                before={"is_active": True},
+                after={"is_active": False},
+                metadata={"owner_user_id": str(owner_user_id)},
+            )
 
 
 @dataclass(frozen=True, slots=True)

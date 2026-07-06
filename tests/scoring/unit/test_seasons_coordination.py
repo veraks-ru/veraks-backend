@@ -341,28 +341,33 @@ async def test_provider_freezes_recalibrated_grid() -> None:
     assert config.gradation_map[-1] == pytest.approx(0.8)
 
 
-async def test_provider_falls_back_when_grid_too_short() -> None:
+async def test_provider_fills_holes_for_unused_gradations() -> None:
     prev_id = uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
         _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
     )
-    # Использованы только 2 градации → сетка длины 2 ≠ 5 → фолбэк на дефолт.
+    # Использованы только 2 градации: пропущенные заполняются их номиналом
+    # (M-RECAL1) → сетка длины 5, рекалибровка применяется, а не откатывается.
     entries = _entries((0.3, 2, 3), (0.7, 3, 2))
     provider = _provider(season_repo=season_repo, season_entries={prev_id: entries})
 
     config = await provider.config_for(_upcoming(uuid.uuid4()))
-    assert config.gradation_map == DEFAULT_GRADATIONS
+    grid = config.gradation_map
+    assert len(grid) == len(DEFAULT_GRADATIONS)
+    assert grid != DEFAULT_GRADATIONS  # рекалибровка применилась
+    assert all(0.0 < x < 1.0 for x in grid)
+    assert all(grid[i] < grid[i + 1] for i in range(len(grid) - 1))  # строго растёт
 
 
-async def test_provider_falls_back_on_boundary_frequency() -> None:
+async def test_provider_clamps_boundary_frequency() -> None:
     prev_id = uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
         _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
     )
-    # Верхняя градация с частотой 1.0 → точка на границе (0,1) → LeagueConfig
-    # отвергает → безопасный фолбэк на дефолтную сетку.
+    # Верхняя градация с частотой 1.0 клампится в (0,1) (M-RECAL2) → рекалибровка
+    # применяется, а не откатывается на дефолт из-за граничного значения.
     entries = _entries(
         (0.1, 1, 4),
         (0.3, 2, 3),
@@ -373,7 +378,11 @@ async def test_provider_falls_back_on_boundary_frequency() -> None:
     provider = _provider(season_repo=season_repo, season_entries={prev_id: entries})
 
     config = await provider.config_for(_upcoming(uuid.uuid4()))
-    assert config.gradation_map == DEFAULT_GRADATIONS
+    grid = config.gradation_map
+    assert len(grid) == len(DEFAULT_GRADATIONS)
+    assert all(0.0 < x < 1.0 for x in grid)  # ничего на границе 0/1
+    assert all(grid[i] < grid[i + 1] for i in range(len(grid) - 1))
+    assert grid[-1] < 1.0  # частота 1.0 клампнута внутрь интервала
 
 
 async def test_provider_picks_most_recent_finished_season() -> None:

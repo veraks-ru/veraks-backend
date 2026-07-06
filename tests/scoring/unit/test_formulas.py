@@ -27,7 +27,6 @@ from app.modules.scoring.domain.formulas import (
     remap_probability,
     season_rating_from_contributions,
     surprise,
-    time_weight_from_earliness,
 )
 
 APPROX = 1e-4

@@ -19,6 +19,7 @@ from app.modules.billing.domain.entities import (
 from app.modules.billing.domain.errors import (
     BillingPermissionError,
     InsufficientPrizeFundError,
+    InvalidAmountError,
     PayoutAlreadyDecidedError,
     PayoutNotFoundError,
     SelfApprovalError,
@@ -92,6 +93,25 @@ async def test_record_payment_is_idempotent(stand: Stand, user) -> None:
     assert len(stand.ledger.transactions) == 1  # вторая проводка не создана
 
 
+async def test_record_payment_rejects_amount_mismatch(stand: Stand, user) -> None:
+    """Платёж на сумму ≠ цене подписки отвергается без проводки (M-WEBAMOUNT)."""
+    sub, _ = await stand.start_subscription.execute(
+        user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
+    )
+    with pytest.raises(InvalidAmountError):
+        await stand.record_payment.execute(
+            provider=PaymentProvider.YOOKASSA,
+            provider_payment_id="pay-wrong",
+            amount_kopecks=1_000,  # занижено против цены подписки
+            subscription_id=sub.id,
+        )
+    # ни платежа, ни проводки, подписка не активирована
+    assert len(stand.payments.items) == 0
+    assert len(stand.ledger.transactions) == 0
+    refreshed = await stand.subscriptions.get_by_id(sub.id)
+    assert refreshed.status is not SubscriptionStatus.ACTIVE
+
+
 # ── Призовой фонд (PRIZE) ─────────────────────────────────────────────────
 
 
@@ -126,8 +146,9 @@ async def test_sponsor_deposit_posts_prize_and_updates_fund(
         actor=admin, fund_id=fund.id, amount_kopecks=500_000
     )
 
-    assert updated.status is PrizeFundStatus.FUNDED
-    assert updated.deposited_kopecks == 500_000
+    assert updated.fund.status is PrizeFundStatus.FUNDED
+    assert updated.fund.deposited_kopecks == 500_000
+    assert updated.balance_kopecks == 500_000  # доступный остаток из проводки
     view = await stand.get_fund.execute(fund_id=fund.id)
     assert view.balance_kopecks == 500_000  # кредит на счёте фонда
 

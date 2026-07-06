@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
-from app.modules.events.domain.entities import Category, Event
+from app.modules.events.domain.entities import Category, Event, EventStatus
 from app.modules.events.domain.errors import CategorySlugTakenError
 from app.modules.events.ports.repositories import EventFilter
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
@@ -49,15 +49,23 @@ class InMemoryEventRepository:
         self._by_id[event.id] = self._clone(event)
         return self._clone(event)
 
-    async def list(self, criteria: EventFilter) -> list[Event]:
+    async def list(
+        self, criteria: EventFilter, *, include_unlisted: bool = False
+    ) -> list[Event]:
         items = [self._clone(e) for e in self._by_id.values()]
         if criteria.status is not None:
             items = [e for e in items if e.status is criteria.status]
+        if not include_unlisted:
+            items = [
+                e
+                for e in items
+                if e.status not in (EventStatus.DRAFT, EventStatus.PROPOSED)
+            ]
         if criteria.category_id is not None:
             items = [e for e in items if e.category_id == criteria.category_id]
         if criteria.season_id is not None:
             items = [e for e in items if e.season_id == criteria.season_id]
-        items.sort(key=lambda e: e.window.closes_at)
+        items.sort(key=lambda e: (e.window.closes_at, str(e.id)))
         return items[criteria.offset : criteria.offset + criteria.limit]
 
     async def list_open_due(self, now: datetime) -> Sequence[Event]:

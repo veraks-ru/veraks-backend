@@ -29,6 +29,7 @@ from app.modules.billing.api.dependencies import (
     get_ledger_repository,
     get_payment_repository,
     get_payout_gateway,
+    get_payout_notifier,
     get_payout_repository,
     get_prize_fund_repository,
     get_season_directory,
@@ -43,6 +44,7 @@ from tests.billing.fakes import (
     FakeAuditTrail,
     FakeCheckoutGateway,
     FakeClock,
+    FakeNotifier,
     FakePayoutGateway,
     FakeSeasonDirectory,
     InMemoryLedgerRepository,
@@ -105,6 +107,7 @@ def ctx():
     app.dependency_overrides[get_audit_trail] = lambda: audit
     app.dependency_overrides[get_checkout_gateway] = lambda: FakeCheckoutGateway()
     app.dependency_overrides[get_payout_gateway] = lambda: FakePayoutGateway()
+    app.dependency_overrides[get_payout_notifier] = lambda: FakeNotifier()
     app.dependency_overrides[get_season_directory] = lambda: seasons
     app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
 
@@ -130,8 +133,9 @@ def test_list_plans_returns_priced_tariffs(ctx: Ctx) -> None:
     resp = ctx.client.get("/billing/plans")
     assert resp.status_code == 200, resp.text
     by_plan = {p["plan"]: p["price_kopecks"] for p in resp.json()["plans"]}
-    assert by_plan["monthly"] == 49_000
-    assert by_plan["annual"] == 490_000
+    # Совпадает с дефолтами BillingSettings и статикой фронта (lib/pricing.ts).
+    assert by_plan["monthly"] == 99_000
+    assert by_plan["annual"] == 499_000
 
 
 def test_my_subscription_returns_latest(ctx: Ctx) -> None:

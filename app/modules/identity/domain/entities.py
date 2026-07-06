@@ -8,14 +8,12 @@ dataclass. ORM-модель (adapters/orm.py) и API-схемы (api/schemas.py)
 from __future__ import annotations
 
 import enum
-import re
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.modules.identity.domain.value_objects import EsiaIdentity
-
-_USERNAME_SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 
 
 class UserRole(str, enum.Enum):
@@ -40,15 +38,16 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def generate_username_seed(identity: EsiaIdentity) -> str:
-    """Базовый хэндл из ФИО ЕСИА (без гарантии уникальности).
+def generate_username_seed() -> str:
+    """Псевдонимный хэндл, НЕ производный от ФИО (приватность, PRD §4.1/§7.6).
 
-    Уникальность обеспечивается на уровне БД (``UNIQUE(username)``);
-    use-case при коллизии добавляет числовой суффикс.
+    Реальное имя не попадает в публичный идентификатор (раньше хэндл строился из
+    ФИО, а для кириллических имён вырождался в ``predictor``, деанонимизируя через
+    display_name). Уникальность — на уровне БД (``UNIQUE(username)``); случайный
+    хвост делает коллизии крайне маловероятными, но use-case всё равно
+    переаллоцирует при UNIQUE-гонке.
     """
-    raw = f"{identity.first_name}{identity.last_name}".lower()
-    seed = _USERNAME_SANITIZE_RE.sub("", raw)
-    return seed or "predictor"
+    return f"predictor-{secrets.token_hex(3)}"
 
 
 @dataclass(slots=True)
@@ -78,12 +77,17 @@ class User:
         username: str,
         real_name_enc: bytes | None,
     ) -> User:
-        """Фабрика нового аккаунта по данным ЕСИА (find-or-create: ветка create)."""
+        """Фабрика нового аккаунта по данным ЕСИА (find-or-create: ветка create).
+
+        ``display_name`` по умолчанию = псевдонимный ``username``: реальное ФИО
+        (``real_name_enc``) публично не раскрывается (PRD §4.1/§7.6). Пользователь
+        может задать отображаемое имя сам через ``PATCH /users/me``.
+        """
         return cls(
             esia_oid=identity.oid,
             snils_hash=snils_hash,
             username=username,
-            display_name=f"{identity.first_name} {identity.last_name}".strip(),
+            display_name=username,
             real_name_enc=real_name_enc,
         )
 

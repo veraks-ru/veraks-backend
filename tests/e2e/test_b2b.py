@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.b2b.adapters.keygen import SecretsKeyGenerator
 from app.modules.b2b.adapters.repository import SqlAlchemyApiKeyRepository
-from app.modules.b2b.adapters.revenue import BillingRevenueRecorder
 from app.modules.b2b.adapters.signal_gateway import SqlAlchemyB2bSignalGateway
 from app.modules.b2b.application.use_cases import (
     AuthenticateApiKey,
@@ -26,6 +25,7 @@ from app.modules.b2b.domain.errors import (
 )
 from app.modules.billing.adapters.repositories import SqlAlchemyLedgerRepository
 from app.modules.billing.domain import chart
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from tests.e2e.helpers import (
     add_active_season,
     add_category,
@@ -55,13 +55,24 @@ def _issue_uc(session):  # noqa: ANN001
     return IssueApiKey(
         keys=SqlAlchemyApiKeyRepository(session),
         generator=SecretsKeyGenerator(),
-        revenue=BillingRevenueRecorder(ledger=SqlAlchemyLedgerRepository(session)),
+        audit=SqlAlchemyAuditTrail(session),
         default_quota=1000,
-        price_kopecks=490_000,
     )
 
 
-async def test_issue_authenticate_revoke_and_revenue(
+async def _audit_actions(session: AsyncSession, entity_id) -> list[str]:  # noqa: ANN001
+    rows = await session.execute(
+        text(
+            "SELECT action FROM audit_log "
+            "WHERE entity_type = 'api_key' AND entity_id = :eid "
+            "ORDER BY id"
+        ),
+        {"eid": str(entity_id)},
+    )
+    return list(rows.scalars().all())
+
+
+async def test_issue_authenticate_revoke_and_audit(
     session: AsyncSession,
 ) -> None:
     owner = await add_user(session, username="b2b_owner")
@@ -73,11 +84,14 @@ async def test_issue_authenticate_revoke_and_revenue(
     assert issued.plaintext.startswith("vk_")
     assert issued.key.key_prefix == issued.plaintext[:11]
 
-    # Проводка выручки b2b ушла в операционную кассу (кредит revenue).
+    # Выдача ключа — НЕ денежное событие: выручка b2b НЕ проводится (H-B2B).
     ledger = SqlAlchemyLedgerRepository(session)
     revenue_acc = await ledger.get_account_by_code(chart.OPS_REVENUE_B2B)
     assert revenue_acc is not None
-    assert await ledger.balance(revenue_acc.id) == -490_000
+    assert await ledger.balance(revenue_acc.id) == 0
+
+    # Зато факт выдачи попал в неизменяемый аудит (M-AUDITGAP).
+    assert await _audit_actions(session, issued.key.id) == ["b2b.key.issued"]
 
     keys = SqlAlchemyApiKeyRepository(session)
     quota = _FakeQuota()
@@ -91,12 +105,16 @@ async def test_issue_authenticate_revoke_and_revenue(
     with pytest.raises(InvalidApiKeyError):
         await auth.execute(plaintext="vk_wrong")
 
-    # Отзыв → ключ больше не аутентифицируется.
-    await RevokeApiKey(keys=keys).execute(
+    # Отзыв → ключ больше не аутентифицируется + запись в аудит.
+    await RevokeApiKey(keys=keys, audit=SqlAlchemyAuditTrail(session)).execute(
         owner_user_id=owner.id, key_id=issued.key.id
     )
     with pytest.raises(InvalidApiKeyError):
         await auth.execute(plaintext=issued.plaintext)
+    assert await _audit_actions(session, issued.key.id) == [
+        "b2b.key.issued",
+        "b2b.key.revoked",
+    ]
     await session.commit()
 
 

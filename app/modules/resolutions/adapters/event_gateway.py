@@ -32,9 +32,18 @@ class SqlAlchemyEventResolutionGateway:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_lifecycle(self, event_id: uuid.UUID) -> EventLifecycle | None:
-        """Срез жизненного цикла события или ``None``."""
-        orm = await self._session.get(EventORM, event_id)
+    async def get_lifecycle(
+        self, event_id: uuid.UUID, *, for_update: bool = False
+    ) -> EventLifecycle | None:
+        """Срез жизненного цикла события или ``None`` (опц. с блокировкой строки).
+
+        ``for_update=True`` берёт ``SELECT … FOR UPDATE`` на строку события:
+        конкурентная фиксация исхода/подача спора ждёт коммита первой транзакции
+        и затем видит уже изменённый статус (гонка M-RESRACE закрыта).
+        """
+        orm = await self._session.get(
+            EventORM, event_id, with_for_update=True if for_update else None
+        )
         if orm is None:
             return None
         return EventLifecycle(

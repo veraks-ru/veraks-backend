@@ -18,7 +18,10 @@ from app.modules.b2b.domain.entities import ApiKey
 
 class ApiKeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    daily_quota: int | None = Field(default=None, ge=1)
+    # Верхняя граница защищает от абсурдных/вредительских квот (переполнение
+    # счётчиков, обход тарифа). 1e6 запросов/сутки — заведомо выше легитимного
+    # B2B-потребления.
+    daily_quota: int | None = Field(default=None, ge=1, le=1_000_000)
 
 
 class ApiKeyResponse(BaseModel):

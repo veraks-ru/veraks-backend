@@ -122,7 +122,7 @@ async def test_comment_delete_forbidden_for_stranger(
 
 async def test_follow_unfollow_and_stats(session: AsyncSession) -> None:
     a = await add_user(session, username="alice")
-    b = await add_user(session, username="bob")
+    await add_user(session, username="bob")
     await session.flush()
 
     follows = SqlAlchemyFollowRepository(session)

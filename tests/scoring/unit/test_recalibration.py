@@ -10,11 +10,34 @@ from __future__ import annotations
 import pytest
 
 from app.modules.scoring.domain.recalibration import (
+    enforce_strict_grid,
     isotonic_increasing,
     recalibrate,
 )
 
 APPROX = 1e-6
+
+
+def test_enforce_strict_grid_separates_ties() -> None:
+    # Ничьи PAV (равные соседние уровни) → строго возрастающая сетка.
+    grid = enforce_strict_grid([0.4, 0.4, 0.4, 0.6, 0.6])
+    assert all(grid[i] < grid[i + 1] for i in range(len(grid) - 1))
+    assert all(0.0 < x < 1.0 for x in grid)
+
+
+def test_enforce_strict_grid_clamps_boundaries() -> None:
+    # Частоты 0.0 и 1.0 на границах → внутрь открытого интервала (0,1).
+    grid = enforce_strict_grid([0.0, 0.2, 0.5, 0.8, 1.0])
+    assert grid[0] > 0.0
+    assert grid[-1] < 1.0
+    assert all(grid[i] < grid[i + 1] for i in range(len(grid) - 1))
+
+
+def test_enforce_strict_grid_all_equal_at_ceiling() -> None:
+    # Вырожденный случай: все значения = 1.0 → обратный проход раздвигает вниз.
+    grid = enforce_strict_grid([1.0, 1.0, 1.0, 1.0, 1.0])
+    assert all(0.0 < x < 1.0 for x in grid)
+    assert all(grid[i] < grid[i + 1] for i in range(len(grid) - 1))
 
 
 def test_isotonic_keeps_monotonic_input_unchanged() -> None:

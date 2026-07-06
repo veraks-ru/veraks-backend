@@ -36,6 +36,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 _REFRESH_COOKIE = "refresh_token"
 _ACCESS_COOKIE = "access_token"
+_STATE_COOKIE = "oidc_state"
+_STATE_COOKIE_TTL = 600  # синхронно с TTL state в сторе (10 минут)
 
 
 def _set_session_cookies(
@@ -74,13 +76,30 @@ def _clear_session_cookies(response: Response) -> None:
 
 @router.get("/esia/login", summary="Редирект на страницу авторизации ЕСИА")
 async def esia_login(
+    settings: SettingsDep,
     uc: Annotated[InitiateEsiaLogin, Depends(get_initiate_login)],
 ) -> RedirectResponse:
-    """Генерирует анти-CSRF state и редиректит пользователя в ЕСИА."""
+    """Генерирует анти-CSRF state и редиректит пользователя в ЕСИА.
+
+    ``state`` дополнительно кладётся в httpOnly-cookie: на callback он сверяется
+    с параметром запроса, привязывая OIDC-поток к ИНИЦИИРОВАВШЕМУ его браузеру
+    (защита от login-CSRF / фиксации сессии — M-OIDC).
+    """
     redirect = await uc.execute()
-    return RedirectResponse(
+    resp = RedirectResponse(
         redirect.authorization_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT
     )
+    resp.set_cookie(
+        _STATE_COOKIE,
+        redirect.state,
+        max_age=_STATE_COOKIE_TTL,
+        path="/auth",
+        httponly=True,
+        secure=settings.security.cookie_secure,
+        samesite="lax",
+        domain=settings.security.cookie_domain or None,
+    )
+    return resp
 
 
 @router.get(
@@ -93,9 +112,20 @@ async def esia_callback(
     response: Response,
     settings: SettingsDep,
     uc: Annotated[CompleteEsiaLogin, Depends(get_complete_login)],
+    oidc_state: Annotated[str | None, Cookie()] = None,
 ) -> AccessTokenResponse:
-    """Завершает OIDC-поток, ставит cookie и отдаёт access-токен."""
+    """Завершает OIDC-поток, ставит cookie и отдаёт access-токен.
+
+    Сверяет ``state`` из запроса с ``oidc_state``-cookie (привязка к браузеру):
+    несовпадение/отсутствие → 400, поток не продолжается.
+    """
+    if not oidc_state or oidc_state != params.state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Недействительный state (не совпадает с cookie браузера)",
+        )
     result = await uc.execute(code=params.code, state=params.state)
+    response.delete_cookie(_STATE_COOKIE, path="/auth")
     _set_session_cookies(response, result.tokens, settings)
     if result.is_new_user:
         response.status_code = status.HTTP_201_CREATED

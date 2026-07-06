@@ -100,8 +100,10 @@ async def test_first_login_creates_account(
     assert result.is_new_user is True
     stored = await repo.get_by_id(result.user_id)
     assert stored is not None
-    # Кириллица в seed'е не остаётся → безопасный фолбэк-хэндл.
-    assert stored.username == "predictor"
+    # Псевдонимный хэндл, НЕ производный от ФИО (H-PII).
+    assert stored.username.startswith("predictor-")
+    # display_name по умолчанию = псевдоним, а не реальное ФИО.
+    assert stored.display_name == stored.username
     # ФИО хранится зашифрованным, не открытым текстом.
     assert stored.real_name_enc is not None
     assert b"Petrov" not in stored.real_name_enc
@@ -143,7 +145,7 @@ async def test_login_retries_on_username_race(
 
     assert result.is_new_user is True
     stored = await repo.get_by_id(result.user_id)
-    assert stored is not None and stored.username == "predictor"
+    assert stored is not None and stored.username.startswith("predictor-")
 
 
 async def test_second_login_same_citizen_reuses_account(
@@ -293,6 +295,41 @@ async def test_refresh_rotates_and_revokes_old(
     # Старый refresh отозван — повторное использование запрещено.
     with pytest.raises(InvalidTokenError):
         await refresh_uc.execute(refresh_token=old_refresh)
+
+
+async def test_refresh_reuse_revokes_whole_family(
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+) -> None:
+    """Детект кражи (M-REFRESH): повтор украденного токена рвёт всё семейство."""
+    login = _build_complete_login(
+        identity=confirmed_identity,
+        repo=repo,
+        state_store=state_store,
+        refresh_store=refresh_store,
+        hasher=snils_hasher,
+        encryptor=encryptor,
+        token_issuer=token_issuer,
+    )
+    result = await login.execute(code="abc", state="valid-state")
+    old_refresh = result.tokens.refresh_token
+
+    refresh_uc = RefreshSession(
+        users=repo,
+        tokens=token_issuer,
+        refresh_store=refresh_store,
+        access_ttl_seconds=900,
+        refresh_ttl_seconds=3600,
+    )
+    rotated = await refresh_uc.execute(refresh_token=old_refresh)
+    new_refresh = rotated.refresh_token
+
+    # Повтор уже ротированного (украденного) токена детектится...
+    with pytest.raises(InvalidTokenError):
+        await refresh_uc.execute(refresh_token=old_refresh)
+    # ...и рвёт всё семейство: даже «легитимный» новый токен больше не работает
+    # (обе сессии — атакующая и жертвенная — принудительно завершены).
+    with pytest.raises(InvalidTokenError):
+        await refresh_uc.execute(refresh_token=new_refresh)
 
 
 async def test_logout_revokes_refresh(

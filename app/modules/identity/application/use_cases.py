@@ -130,7 +130,7 @@ class CompleteEsiaLogin:
         user = User.register_from_esia(
             identity=identity,
             snils_hash=snils_hash,
-            username=await self._allocate_username(identity),
+            username=await self._allocate_username(),
             real_name_enc=self._encrypt_name(identity),
         )
         # Регистрация с защитой от двух гонок на UNIQUE-индексах:
@@ -147,7 +147,7 @@ class CompleteEsiaLogin:
                 ensure_account_can_authenticate(winner)
                 return winner, False
             except UsernameTakenError:
-                user.username = await self._allocate_username(identity)
+                user.username = await self._allocate_username()
                 continue
             return created, True
         # Исчерпали попытки переаллокации хэндла — крайне маловероятно.
@@ -160,9 +160,9 @@ class CompleteEsiaLogin:
         full = identity.full_name()
         return self._encryptor.encrypt(full) if full else None
 
-    async def _allocate_username(self, identity: EsiaIdentity) -> str:
-        """Подбирает свободный хэндл (seed + числовой суффикс при коллизии)."""
-        seed = generate_username_seed(identity)
+    async def _allocate_username(self) -> str:
+        """Подбирает свободный псевдонимный хэндл (seed + суффикс при коллизии)."""
+        seed = generate_username_seed()
         if not await self._users.username_exists(seed):
             return seed
         for suffix in range(1, _MAX_USERNAME_ATTEMPTS):
@@ -177,7 +177,7 @@ class CompleteEsiaLogin:
         claims = SessionClaims(user_id=user.id, role=user.role)
         access = self._tokens.issue_access(claims)
         refresh, jti = self._tokens.issue_refresh(claims)
-        await self._refresh_store.register(jti, self._refresh_ttl)
+        await self._refresh_store.register(jti, self._refresh_ttl, str(user.id))
         return SessionTokens(
             access_token=access,
             refresh_token=refresh,
@@ -205,9 +205,17 @@ class RefreshSession:
         self._refresh_ttl = refresh_ttl_seconds
 
     async def execute(self, *, refresh_token: str) -> SessionTokens:
-        """Проверяет refresh, отзывает старый jti, выпускает новую пару."""
+        """Проверяет refresh, отзывает старый jti, выпускает новую пару.
+
+        Детект кражи (M-REFRESH): если предъявлен уже ротированный (отозванный)
+        токен — это повторное использование, и все refresh-токены пользователя
+        отзываются (требуется повторный вход на всех устройствах).
+        """
         claims, jti = self._tokens.verify_refresh(refresh_token)
         if not await self._refresh_store.is_active(jti):
+            if await self._refresh_store.was_rotated(jti):
+                # Уже использованный токен предъявлен снова → вероятная кража.
+                await self._refresh_store.revoke_all_for_user(str(claims.user_id))
             raise InvalidTokenError("Refresh-токен отозван")
 
         user = await self._users.get_by_id(claims.user_id)
@@ -215,11 +223,13 @@ class RefreshSession:
             raise UserNotFoundError("Пользователь не найден")
         ensure_account_can_authenticate(user)
 
-        await self._refresh_store.revoke(jti)  # ротация: старый токен инвалидируем
+        # Ротация: старый токен инвалидируем и ЗАПОМИНАЕМ (для детекта повтора).
+        await self._refresh_store.revoke(jti)
+        await self._refresh_store.mark_rotated(jti, self._refresh_ttl)
         new_claims = SessionClaims(user_id=user.id, role=user.role)
         access = self._tokens.issue_access(new_claims)
         refresh, new_jti = self._tokens.issue_refresh(new_claims)
-        await self._refresh_store.register(new_jti, self._refresh_ttl)
+        await self._refresh_store.register(new_jti, self._refresh_ttl, str(user.id))
         return SessionTokens(
             access_token=access,
             refresh_token=refresh,

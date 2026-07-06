@@ -50,15 +50,6 @@ class QuotaCounter(Protocol):
 
 
 @runtime_checkable
-class RevenueRecorder(Protocol):
-    async def record_key_issued(
-        self, *, actor_user_id: uuid.UUID, amount_kopecks: int, key_id: uuid.UUID
-    ) -> None:
-        """Проводка выручки ``b2b_invoice`` при выдаче ключа (best-effort)."""
-        ...
-
-
-@runtime_checkable
 class SignalGateway(Protocol):
     async def consensus(self, event_id: uuid.UUID) -> ConsensusSignal | None: ...
     async def leaderboard(

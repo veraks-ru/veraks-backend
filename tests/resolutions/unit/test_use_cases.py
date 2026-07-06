@@ -320,3 +320,31 @@ async def test_close_windows_skips_open_window(stand, editor) -> None:
     dispatched = await stand.close_windows.execute()
     assert dispatched == 0
     assert stand.tasks.enqueued == []
+
+
+# ── M-RESRACE: блокировка строки события (FOR UPDATE) ─────────────────────────
+
+
+async def test_fix_resolution_locks_event_row(stand, editor) -> None:
+    # Фиксация исхода должна читать событие с блокировкой строки, чтобы две
+    # конкурентные фиксации не создали двойную резолюцию.
+    event_id = _new_event()
+    stand.events.seed(event_id, status=EventStatus.CLOSED)
+    await stand.fix.execute(
+        event_id=event_id,
+        actor=editor,
+        outcome=True,
+        source_reference="https://source.example",
+    )
+    assert event_id in stand.events.locked_reads
+
+
+async def test_raise_dispute_locks_event_row(stand, editor, participant) -> None:
+    # Подача спора должна читать событие с блокировкой строки, чтобы две
+    # конкурентные подачи не открыли два спора по одному событию.
+    event_id = await _resolve(stand, editor)
+    stand.participation.allow(participant.user_id, event_id)
+    await stand.raise_dispute.execute(
+        event_id=event_id, actor=participant, reason="Источник противоречит исходу"
+    )
+    assert event_id in stand.events.locked_reads

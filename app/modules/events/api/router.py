@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query, status
 
 from app.modules.events.api.dependencies import (
     ActorDep,
+    OptionalActorDep,
     get_approve_event,
     get_cancel_event,
     get_close_event,
@@ -92,6 +93,7 @@ async def create_category(
 @router.get("/events", response_model=list[EventResponse], summary="Список событий")
 async def list_events(
     uc: Annotated[ListEvents, Depends(get_list_events)],
+    viewer: OptionalActorDep,
     status_filter: Annotated[EventStatus | None, Query(alias="status")] = None,
     category_id: uuid.UUID | None = None,
     season_id: uuid.UUID | None = None,
@@ -106,7 +108,7 @@ async def list_events(
         limit=limit,
         offset=offset,
     )
-    events = await uc.execute(criteria=criteria)
+    events = await uc.execute(criteria=criteria, viewer=viewer)
     return [EventResponse.from_domain(e) for e in events]
 
 
@@ -114,9 +116,10 @@ async def list_events(
 async def get_event(
     event_id: uuid.UUID,
     uc: Annotated[GetEvent, Depends(get_get_event)],
+    viewer: OptionalActorDep,
 ) -> EventResponse:
-    """Возвращает событие по id (404, если не найдено)."""
-    event = await uc.execute(event_id=event_id)
+    """Возвращает событие по id (404, если не найдено или недоступно зрителю)."""
+    event = await uc.execute(event_id=event_id, viewer=viewer)
     return EventResponse.from_domain(event)
 
 

@@ -28,7 +28,6 @@ from app.modules.leagues.ports.repositories import (
     LeagueRepository,
     StandingRow,
     StandingsGateway,
-    UserLookup,
 )
 
 
@@ -279,14 +278,14 @@ class ApplyPromotionRelegation:
 
         written = 0
         for user_id, level in placements.items():
-            division = by_level.get(level)
-            if division is None:
+            target = by_level.get(level)
+            if target is None:
                 continue
             await self._memberships.upsert(
                 DivisionMembership(
                     user_id=user_id,
                     season_id=next_season_id,
-                    division_id=division.id,
+                    division_id=target.id,
                 )
             )
             written += 1

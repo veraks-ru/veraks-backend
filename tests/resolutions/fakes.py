@@ -52,6 +52,9 @@ class FakeEventResolutionGateway:
 
     def __init__(self) -> None:
         self._events: dict[uuid.UUID, _EventState] = {}
+        # Событие, прочитанные с блокировкой строки (for_update=True) — для
+        # ассертов в тестах гонок (M-RESRACE).
+        self.locked_reads: list[uuid.UUID] = []
 
     def seed(
         self,
@@ -74,7 +77,11 @@ class FakeEventResolutionGateway:
         """Текущий статус события (для ассертов)."""
         return self._events[event_id].status
 
-    async def get_lifecycle(self, event_id: uuid.UUID) -> EventLifecycle | None:
+    async def get_lifecycle(
+        self, event_id: uuid.UUID, *, for_update: bool = False
+    ) -> EventLifecycle | None:
+        if for_update:
+            self.locked_reads.append(event_id)
         state = self._events.get(event_id)
         if state is None:
             return None

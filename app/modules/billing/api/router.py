@@ -247,13 +247,13 @@ async def record_sponsor_deposit(
     uc: Annotated[RecordSponsorDeposit, Depends(get_record_sponsor_deposit)],
 ) -> PrizeFundResponse:
     """Провести депозит спонсора в фонд (касса PRIZE)."""
-    fund = await uc.execute(
+    view = await uc.execute(
         actor=actor,
         fund_id=fund_id,
         amount_kopecks=payload.amount_kopecks,
         external_ref=payload.external_ref,
     )
-    return PrizeFundResponse.from_domain(fund, balance_kopecks=fund.deposited_kopecks)
+    return PrizeFundResponse.from_view(view)
 
 
 # ── Кабинет спонсора (self-serve) ─────────────────────────────────────────
@@ -294,13 +294,13 @@ async def sponsor_deposit(
     uc: Annotated[RecordSponsorDeposit, Depends(get_record_sponsor_deposit)],
 ) -> PrizeFundResponse:
     """Пополнение своего фонда (проводка в кассу PRIZE)."""
-    fund = await uc.execute(
+    view = await uc.execute(
         actor=actor,
         fund_id=fund_id,
         amount_kopecks=payload.amount_kopecks,
         external_ref=payload.external_ref,
     )
-    return PrizeFundResponse.from_domain(fund, balance_kopecks=fund.deposited_kopecks)
+    return PrizeFundResponse.from_view(view)
 
 
 @router.get(

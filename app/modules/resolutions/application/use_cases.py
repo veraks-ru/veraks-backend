@@ -96,7 +96,10 @@ class FixResolution:
         """Фиксирует исход; возвращает сохранённое финальное решение."""
         ensure_can_resolve(actor.role)
 
-        lifecycle = await self._events.get_lifecycle(event_id)
+        # FOR UPDATE: блокируем строку события на всё время транзакции, чтобы
+        # проверка «closed» и переход closed→resolved были атомарны и две
+        # конкурентные фиксации не создали двойную резолюцию (M-RESRACE).
+        lifecycle = await self._events.get_lifecycle(event_id, for_update=True)
         if lifecycle is None:
             raise ResolutionTargetEventNotFoundError("Событие не найдено")
         if lifecycle.status is not EventStatus.CLOSED:
@@ -198,7 +201,11 @@ class RaiseDispute:
         """Регистрирует спор и переводит событие в ``disputed``."""
         ensure_can_raise_dispute(actor.role)
 
-        lifecycle = await self._events.get_lifecycle(event_id)
+        # FOR UPDATE: блокируем строку события, чтобы проверка «resolved + окно
+        # открыто» и переход resolved→disputed были атомарны. Иначе две
+        # конкурентные подачи могли бы открыть два спора по одному событию
+        # (M-RESRACE); партнёрская защита — частичный UNIQUE-индекс из 0020.
+        lifecycle = await self._events.get_lifecycle(event_id, for_update=True)
         if lifecycle is None:
             raise ResolutionTargetEventNotFoundError("Событие не найдено")
         if lifecycle.status is not EventStatus.RESOLVED:

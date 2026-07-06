@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 
 from app.modules.b2b.api.dependencies import (
+    AdminUser,
     ApiKeyDep,
     get_consensus_signal,
     get_issue_api_key,
@@ -50,11 +51,11 @@ router = APIRouter(tags=["b2b"])
 )
 async def create_api_key(
     payload: ApiKeyCreateRequest,
-    current_user: CurrentUser,
+    admin: AdminUser,
     uc: Annotated[IssueApiKey, Depends(get_issue_api_key)],
 ) -> IssuedApiKeyResponse:
     issued = await uc.execute(
-        owner_user_id=current_user.id,
+        owner_user_id=admin.id,
         name=payload.name,
         daily_quota=payload.daily_quota,
     )

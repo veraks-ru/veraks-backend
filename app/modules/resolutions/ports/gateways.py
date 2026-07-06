@@ -19,8 +19,15 @@ from app.modules.resolutions.application.dto import EventLifecycle
 class EventResolutionGateway(Protocol):
     """Чтение статуса события и драйв разрешённых переходов автомата events."""
 
-    async def get_lifecycle(self, event_id: uuid.UUID) -> EventLifecycle | None:
-        """Срез жизненного цикла события (статус, исход, окно, сезон) или ``None``."""
+    async def get_lifecycle(
+        self, event_id: uuid.UUID, *, for_update: bool = False
+    ) -> EventLifecycle | None:
+        """Срез жизненного цикла события (статус, исход, окно, сезон) или ``None``.
+
+        При ``for_update=True`` строка события блокируется ``SELECT … FOR
+        UPDATE`` до конца транзакции — так проверка статуса и последующий
+        переход выполняются атомарно, без гонки конкурентных резолюций/споров.
+        """
         ...
 
     async def fix_outcome(

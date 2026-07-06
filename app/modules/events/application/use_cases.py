@@ -19,7 +19,7 @@ from app.modules.events.application.dto import (
     NewCategoryInput,
     NewEventInput,
 )
-from app.modules.events.domain.entities import Category, Event
+from app.modules.events.domain.entities import Category, Event, EventStatus
 from app.modules.events.domain.errors import (
     CategoryNotFoundError,
     EventNotFoundError,
@@ -384,7 +384,7 @@ class RejectEvent:
         ensure_can_manage_events(actor.role)
         event = await _require_event(self._events, event_id)
         before = _status_value(event)
-        author, title = event.created_by, event.title
+        author = event.created_by
         event.reject(now=self._clock.now())
         saved = await self._events.update(event)
         await self._audit.record(
@@ -444,26 +444,57 @@ class CloseExpiredEvents:
         return closed
 
 
+_UNLISTED_STATUSES = frozenset({EventStatus.DRAFT, EventStatus.PROPOSED})
+
+
+def _can_see_unlisted(viewer: Actor | None) -> bool:
+    """Может ли зритель видеть черновики/предложения (редакция), кроме своих."""
+    return viewer is not None and viewer.role in {
+        UserRole.EDITOR,
+        UserRole.ARBITER,
+        UserRole.ADMIN,
+    }
+
+
 class GetEvent:
-    """Чтение деталей события (публично)."""
+    """Чтение деталей события (публично; черновики/предложения — ограничены)."""
 
     def __init__(self, *, events: EventRepository) -> None:
         self._events = events
 
-    async def execute(self, *, event_id: uuid.UUID) -> Event:
-        """Возвращает событие или поднимает :class:`EventNotFoundError`."""
-        return await _require_event(self._events, event_id)
+    async def execute(
+        self, *, event_id: uuid.UUID, viewer: Actor | None = None
+    ) -> Event:
+        """Возвращает событие или :class:`EventNotFoundError`.
+
+        Черновик/предложение на модерации видны только редакции и автору; всем
+        остальным (включая анонимов) отдаём 404, не раскрывая факт существования.
+        """
+        event = await _require_event(self._events, event_id)
+        if event.status in _UNLISTED_STATUSES and not _can_see_unlisted(viewer):
+            is_author = viewer is not None and viewer.user_id == event.created_by
+            if not is_author:
+                raise EventNotFoundError(str(event_id))
+        return event
 
 
 class ListEvents:
-    """Чтение каталога событий по фильтрам (публично)."""
+    """Чтение каталога событий по фильтрам (публично; unlisted — только редакции)."""
 
     def __init__(self, *, events: EventRepository) -> None:
         self._events = events
 
-    async def execute(self, *, criteria: EventFilter) -> list[Event]:
-        """Возвращает страницу событий, отсортированных по ``closes_at``."""
-        return await self._events.list(criteria)
+    async def execute(
+        self, *, criteria: EventFilter, viewer: Actor | None = None
+    ) -> list[Event]:
+        """Страница событий по ``closes_at``.
+
+        Непривилегированному зрителю черновики и предложения на модерации не
+        отдаются ни при каком фильтре статуса (защита от IDOR-раскрытия).
+        """
+        return await self._events.list(
+            criteria, include_unlisted=_can_see_unlisted(viewer)
+        )
 
 
 class CreateCategory:

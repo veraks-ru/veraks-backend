@@ -55,6 +55,7 @@ from app.modules.billing.application.use_cases import (
 from app.modules.billing.domain.entities import SubscriptionPlan
 from app.modules.billing.domain.webhooks import verify_signature
 from app.modules.billing.ports.clock import Clock
+from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.ports.gateways import (
     PayoutGateway,
     SeasonDirectory,
@@ -306,21 +307,35 @@ def get_season_prize_fund(
     )
 
 
+def get_payout_notifier(
+    session: SessionDep,
+    settings: SettingsDep,
+) -> Notifier:
+    """Нотификатор уведомления о подтверждённой выплате.
+
+    Вынесен в отдельный провайдер, чтобы интеграционные тесты подменяли его
+    фейком (иначе ``ApprovePayout`` писал бы уведомление в реальную БД).
+    """
+    return PushingNotificationEmitter(
+        SqlAlchemyNotificationRepository(session),
+        GoctopusPusher(settings.realtime),
+    )
+
+
+PayoutNotifierDep = Annotated[Notifier, Depends(get_payout_notifier)]
+
+
 def get_approve_payout(
     payouts: PayoutRepoDep,
     funds: PrizeFundRepoDep,
     ledger: LedgerRepoDep,
     audit: AuditDep,
     clock: ClockDep,
-    session: SessionDep,
-    settings: SettingsDep,
+    notifier: PayoutNotifierDep,
 ) -> ApprovePayout:
     """Use-case подтверждения выплаты (checker, → PRIZE) с уведомлением."""
     return ApprovePayout(
-        notifier=PushingNotificationEmitter(
-            SqlAlchemyNotificationRepository(session),
-            GoctopusPusher(settings.realtime),
-        ),
+        notifier=notifier,
         payouts=payouts, funds=funds, ledger=ledger, audit=audit, clock=clock
     )
 

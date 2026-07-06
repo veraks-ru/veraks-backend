@@ -29,7 +29,11 @@ from app.modules.scoring.application.dto import (
     SeasonConfigView,
 )
 from app.modules.scoring.domain.calibration import CalibrationReport, calibrate
-from app.modules.scoring.domain.constants import MIN_PREDICTORS
+from app.modules.scoring.domain.constants import (
+    DEFAULT_GRADATIONS,
+    K_SHRINK,
+    MIN_PREDICTORS,
+)
 from app.modules.scoring.domain.recalibration import recalibrate
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.errors import (
@@ -245,15 +249,38 @@ class RecomputeRatings:
         внутри каждого сохраняемого среза остаётся корректным (участвуют все
         предсказатели среза, а не только голосовавшие за это событие).
         """
+        # Сериализуем конкурентные пересчёты (score_event ↔ ночной full ↔
+        # финализация сезона), чтобы не гонять записи одних строк ratings.
+        await self._ratings.acquire_recompute_lock()
+
         events = await self._gateway.list_resolved_events(season_id=season_id)
+
+        # Конфиги сезонов загружаем ДО накопления: из замороженного LeagueConfig
+        # берём порог «рейтинговости» события (min_predictors) и константу усадки
+        # (k_shrink) для сезонного среза — как обещано опубликованными правилами.
+        event_season_ids = {e.season_id for e in events if e.season_id is not None}
+        season_views: dict[uuid.UUID, SeasonConfigView | None] = {
+            sid: await self._season_config.get_config(sid)
+            for sid in event_season_ids
+        }
+
+        def _season_min_predictors(sid: uuid.UUID) -> int:
+            view = season_views.get(sid)
+            cfg = view.config if view is not None else None
+            return cfg.min_predictors if cfg is not None else MIN_PREDICTORS
+
         acc: dict[
             tuple[ScopeType, uuid.UUID | None, uuid.UUID], _ScopeAccumulator
         ] = {}
-
         for event in events:
-            if event.predictor_count < MIN_PREDICTORS:
+            base_ok = event.predictor_count >= MIN_PREDICTORS
+            season_ok = (
+                event.season_id is not None
+                and event.predictor_count >= _season_min_predictors(event.season_id)
+            )
+            if not base_ok and not season_ok:
                 continue
-            self._accumulate_event(event, acc)
+            self._accumulate_event(event, acc, base_ok=base_ok, season_ok=season_ok)
 
         if scopes is not None:
             acc = {
@@ -262,15 +289,19 @@ class RecomputeRatings:
                 if (key[0], key[1]) in scopes
             }
 
-        season_views = await self._load_season_configs(acc)
         now = self._clock.now()
         by_scope: dict[tuple[ScopeType, uuid.UUID | None], list[Rating]] = {}
         for (scope_type, scope_id, user_id), data in acc.items():
-            qualified = (
-                self._evaluate_qualified(scope_id, season_views.get(scope_id), data)
+            is_season = scope_type is ScopeType.SEASON and scope_id is not None
+            view = (
+                season_views.get(scope_id)
                 if scope_type is ScopeType.SEASON and scope_id is not None
                 else None
             )
+            cfg = view.config if view is not None else None
+            # k усадки — из конфига сезона (иначе глобальная константа).
+            k_shrink = cfg.k_shrink if cfg is not None else K_SHRINK
+            qualified = self._evaluate_qualified(scope_id, view, data) if is_season else None
             rating = Rating(
                 user_id=user_id,
                 scope_type=scope_type,
@@ -278,7 +309,7 @@ class RecomputeRatings:
                 mean_brier=quantize_score(data.mean_brier()),
                 skill_score=quantize_score(
                     season_rating_from_contributions(
-                        data.rating_weights, data.advantages
+                        data.rating_weights, data.advantages, k=k_shrink
                     )
                 ),
                 calibration_error=quantize_score(calibrate(data.entries).ece),
@@ -290,11 +321,20 @@ class RecomputeRatings:
 
         all_ratings: list[Rating] = []
         for ratings in by_scope.values():
-            # Ранжирование «больше skill_score = лучше» (превышение над толпой).
-            ratings.sort(key=lambda r: r.skill_score, reverse=True)
+            # Ранжирование «больше skill_score = лучше» (превышение над толпой);
+            # тай-брейк — меньший mean_brier, затем больший n_resolved, затем id.
+            ratings.sort(
+                key=lambda r: (-r.skill_score, r.mean_brier, -r.n_resolved, str(r.user_id))
+            )
             for position, rating in enumerate(ratings, start=1):
                 rating.assign_rank(position, now=now)
             all_ratings.extend(ratings)
+
+        # Устаревшие строки среза (пользователь выбыл из рейтинга — напр. после
+        # overturn или падения ниже порога) удаляем, чтобы не оставались «призраки»
+        # с прежним рангом. Только для пересчитанных срезов.
+        recomputed_scopes = scopes if scopes is not None else set(by_scope.keys())
+        await self._ratings.prune_scopes(recomputed_scopes, keep=all_ratings)
 
         if not all_ratings:
             return 0
@@ -304,22 +344,32 @@ class RecomputeRatings:
     def _accumulate_event(
         event: ResolvedEvent,
         acc: dict[tuple[ScopeType, uuid.UUID | None, uuid.UUID], _ScopeAccumulator],
+        *,
+        base_ok: bool,
+        season_ok: bool,
     ) -> None:
-        """Раскладывает вклад каждого голоса по областям (global/category/season)."""
+        """Раскладывает вклад каждого голоса по областям (global/category/season).
+
+        ``base_ok`` — событие проходит базовый порог MIN_PREDICTORS (global/category);
+        ``season_ok`` — проходит сезонный порог (min_predictors из конфига сезона).
+        Событие может считаться для сезона, но не для global/category (или наоборот).
+        """
         probabilities = event.probabilities()
         weight = event_weight(probabilities, event.outcome)
-        scopes: list[tuple[ScopeType, uuid.UUID | None]] = [
-            (ScopeType.GLOBAL, None),
-            (ScopeType.CATEGORY, event.category_id),
-        ]
-        if event.season_id is not None:
+        scopes: list[tuple[ScopeType, uuid.UUID | None]] = []
+        if base_ok:
+            scopes.append((ScopeType.GLOBAL, None))
+            scopes.append((ScopeType.CATEGORY, event.category_id))
+        if season_ok and event.season_id is not None:
             scopes.append((ScopeType.SEASON, event.season_id))
+        if not scopes:
+            return
 
         for vote in event.votes:
             advantage = crowd_advantage(vote.probability, probabilities, event.outcome)
             brier_score = brier(vote.probability, event.outcome)
-            # Тайм-вейтинг: ранний прогноз получает больший вес в рейтинге, но
-            # «сырой» вес сложности идёт в охват/квалификацию без надбавки.
+            # Тайм-вейтинг в рейтинг не вкладывается (см. scoring_gateway):
+            # rating_weight = «сырой» вес сложности события.
             rating_weight = weight * vote.time_weight
             for scope_type, scope_id in scopes:
                 bucket = acc.setdefault(
@@ -334,21 +384,6 @@ class RecomputeRatings:
                     event.outcome,
                     event.category_id,
                 )
-
-    async def _load_season_configs(
-        self,
-        acc: dict[tuple[ScopeType, uuid.UUID | None, uuid.UUID], _ScopeAccumulator],
-    ) -> dict[uuid.UUID, SeasonConfigView | None]:
-        """Подгружает конфиги всех сезонов, встретившихся в пересчёте (по одному разу)."""
-        season_ids = {
-            scope_id
-            for (scope_type, scope_id, _user) in acc
-            if scope_type is ScopeType.SEASON and scope_id is not None
-        }
-        views: dict[uuid.UUID, SeasonConfigView | None] = {}
-        for sid in season_ids:
-            views[sid] = await self._season_config.get_config(sid)
-        return views
 
     @staticmethod
     def _evaluate_qualified(
@@ -489,7 +524,9 @@ class GetSeasonQualification:
         weights: list[float] = []
         categories: list[uuid.UUID] = []
         for event in events:
-            if event.predictor_count < MIN_PREDICTORS:
+            # Порог «рейтинговости» — из замороженного конфига сезона (как в
+            # RecomputeRatings), а не глобальная константа.
+            if event.predictor_count < cfg.min_predictors:
                 continue
             if not any(vote.user_id == user_id for vote in event.votes):
                 continue
@@ -549,17 +586,29 @@ class RecalibrateSeasonGradations:
     async def execute(
         self, *, season_id: uuid.UUID
     ) -> list[GradationRecalibration]:
-        """Считает предложение нового маппинга по прогнозам сезона."""
+        """Считает предложение нового маппинга по прогнозам сезона.
+
+        Прогнозы снапшотятся дефолтной сеткой, поэтому все слоты — из
+        ``DEFAULT_GRADATIONS``. Градацию без наблюдений («дыру») заполняем её
+        текущим номиналом с нулевым весом: одна неиспользованная градация больше
+        не рушит всю рекалибровку до сетки из &lt;5 значений (M-RECAL1).
+        """
         entries = await self._gateway.list_season_calibration_entries(season_id)
         grouped: dict[float, list[int]] = {}
         for nominal, outcome in entries:
             grouped.setdefault(nominal, []).append(outcome)
 
+        nominals = sorted(set(grouped) | set(DEFAULT_GRADATIONS))
         observed: list[tuple[float, float, int]] = []
-        for nominal in sorted(grouped):
-            outcomes = grouped[nominal]
-            n = len(outcomes)
-            observed.append((nominal, math.fsum(outcomes) / n, n))
+        for nominal in nominals:
+            outcomes = grouped.get(nominal, [])
+            if outcomes:
+                observed.append(
+                    (nominal, math.fsum(outcomes) / len(outcomes), len(outcomes))
+                )
+            else:
+                # Дыра: держим номинал на месте (частота = сам номинал, вес 0→1).
+                observed.append((nominal, nominal, 0))
 
         fitted = recalibrate(
             [(f"{nominal:.2f}", freq, n) for nominal, freq, n in observed]
