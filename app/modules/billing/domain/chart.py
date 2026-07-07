@@ -12,6 +12,7 @@ import uuid
 
 # ── Операционная касса ────────────────────────────────────────────────────
 OPS_CASH_YOOKASSA = "ops:cash:yookassa"
+OPS_CASH_TBANK = "ops:cash:tbank"
 OPS_REVENUE_SUBSCRIPTIONS = "ops:revenue:subscriptions"
 OPS_REVENUE_B2B = "ops:revenue:b2b"
 OPS_FEE_PROVIDER = "ops:fee:provider"
