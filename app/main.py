@@ -77,6 +77,7 @@ from app.modules.billing.domain.errors import (
     InsufficientPrizeFundError,
     InvalidAmountError,
     LedgerAccountNotFoundError,
+    PaymentGatewayError,
     PayoutAlreadyDecidedError,
     PayoutNotFoundError,
     PrizeFundNotFoundError,
@@ -194,6 +195,8 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     PayoutAlreadyDecidedError: status.HTTP_409_CONFLICT,
     InsufficientPrizeFundError: status.HTTP_409_CONFLICT,
     InvalidAmountError: status.HTTP_400_BAD_REQUEST,
+    # Отказ/сбой внешнего платёжного шлюза — 502.
+    PaymentGatewayError: status.HTTP_502_BAD_GATEWAY,
     # Нарушения инвариантов журнала — внутренняя ошибка (не должны достигать API).
     UnbalancedTransactionError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     CrossLedgerEntryError: status.HTTP_500_INTERNAL_SERVER_ERROR,
