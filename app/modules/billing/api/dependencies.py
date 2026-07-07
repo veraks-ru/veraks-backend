@@ -131,8 +131,8 @@ def _tbank_gateway(settings: Settings, client: httpx.AsyncClient) -> TBankGatewa
         settings.tbank,
         client,
         notification_url=f"{settings.public_api_base}/webhooks/payments/tbank",
-        success_url=f"{settings.public_web_base}/account",
-        fail_url=f"{settings.public_web_base}/account",
+        success_url=f"{settings.public_web_base}/account?paid=1",
+        fail_url=f"{settings.public_web_base}/account?paid=0",
     )
 
 
