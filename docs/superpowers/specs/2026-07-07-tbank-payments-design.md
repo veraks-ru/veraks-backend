@@ -48,6 +48,29 @@
 
 ## 4. Компоненты этапа 1
 
+### 4.0. Платёжная форма и методы API (сверено по developer.tbank.ru)
+
+**Форма: «Платёжная форма банка» (nonPCI, hosted).** Backend вызывает `Init` → получает
+`PaymentURL` → фронт JS-редиректом уводит пользователя на форму, которую отрисовывает банк.
+**PCI DSS не требуется**, карточные данные к нам не попадают. «Свою платёжную форму»
+(PCI_DSS) не используем. Флоу совпадает с текущим фронтом (`confirmation_url` → редирект).
+
+**Методы API этапа 1:** `Init` (создать платёж), `Cancel` (возврат/отмена), нотификация
+(вебхук статуса), `GetState` (фолбэк-опрос). `Charge` — этап 2 (рекуррент); `Confirm` не
+нужен (одностадийная оплата `PayType=O`).
+
+**Тело `Init`** (`POST {api_base}/Init`, сверено по `/eacq/api/init`):
+- Обязательные: `TerminalKey` (≤20), `Amount` (копейки, число ≤10 цифр), `OrderId` (≤36 —
+  UUID подписки ровно влезает), `Token`.
+- Наши опц./условные: `Description` (≤140), `NotificationURL`, `SuccessURL`, `FailURL`,
+  `Receipt` (объект, обязателен при подключённой онлайн-кассе), `PayType=O`. На этапе 2 —
+  `Recurrent=Y` + `CustomerKey`.
+
+**Нотификация** (сверено): POST на `NotificationURL`; поля `TerminalKey, OrderId, Success,
+Status, PaymentId, ErrorCode, Amount, CardId, Pan, ExpDate, RebillId, Token, Data`;
+content-type — JSON или form-urlencoded (парсим оба); ответ строго `HTTP 200` + тело `OK`;
+при ошибке банк повторяет (раз в час 24ч, затем раз в сутки месяц) → приём идемпотентен.
+
 ### 4.1. Конфиг — `app/config.py`
 Новая группа `TBankSettings` (префикс `TBANK_`):
 - `terminal_key: str` — Terminal Key.
@@ -186,7 +209,12 @@ partial UNIQUE на `external_ref` для refund, по аналогии с prize
 
 ## 9. Открытые вопросы (уточнить при реализации)
 
-- Точный формат тела уведомления и набор скалярных полей для `Token` — сверить по
-  `developer.tbank.ru` (endpoint уведомлений).
+Форма, тело `Init`, алгоритм `Token`, поля нотификации и требуемый ответ `OK` — **сверены по
+developer.tbank.ru** (см. 4.0). Осталось уточнить точечно:
+
+- Content-type нотификации (JSON vs form-urlencoded) — обработаем оба.
+- Полный список статусов (`CONFIRMED`/`AUTHORIZED`/`REJECTED`/`REFUNDED`/`PARTIAL_REFUNDED`/
+  `CANCELED`/`DEADLINE_EXPIRED`) — сверить по справочнику при реализации.
+- Точное тело `Cancel` и структура `Receipt` (позиции, `Tax`, `PaymentMethod`/`PaymentObject`).
 - Карта-отказ для Теста 2 и карта возврата для Теста 8 — взять из кабинета при прогоне.
 - Префикс billing-роутера (`/billing`) — подтвердить для точного `NotificationURL`.
