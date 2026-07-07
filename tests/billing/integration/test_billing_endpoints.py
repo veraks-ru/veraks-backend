@@ -36,7 +36,9 @@ from app.modules.billing.api.dependencies import (
     get_subscription_repository,
 )
 from app.modules.billing.domain import chart
+from app.modules.billing.domain.entities import PaymentProvider
 from app.modules.billing.domain.ledger import LedgerAccount, LedgerType
+from app.modules.billing.domain.tbank_signing import make_token
 from app.modules.identity.api.dependencies import get_current_user
 from app.modules.identity.domain.entities import User, UserRole
 from tests.billing.conftest import FIXED_NOW
@@ -56,6 +58,7 @@ from tests.billing.fakes import (
 
 _SEED = [
     (LedgerType.OPERATIONS, chart.OPS_CASH_YOOKASSA),
+    (LedgerType.OPERATIONS, chart.OPS_CASH_TBANK),
     (LedgerType.OPERATIONS, chart.OPS_REVENUE_SUBSCRIPTIONS),
     (LedgerType.PRIZE, chart.PRIZE_CASH_SPONSOR),
     (LedgerType.PRIZE, chart.PRIZE_PAYABLE_WINNERS),
@@ -78,6 +81,7 @@ def _user(role: UserRole) -> User:
 class Ctx:
     client: TestClient
     ledger: InMemoryLedgerRepository
+    payments: InMemoryPaymentRepository
     funds: InMemoryPrizeFundRepository
     seasons: FakeSeasonDirectory
     holder: dict
@@ -122,7 +126,8 @@ def ctx():
     client = TestClient(app)
     try:
         yield Ctx(
-            client=client, ledger=ledger, funds=funds, seasons=seasons, holder=holder
+            client=client, ledger=ledger, payments=payments, funds=funds,
+            seasons=seasons, holder=holder
         )
     finally:
         client.close()
@@ -437,3 +442,71 @@ def test_non_admin_cannot_create_fund(ctx: Ctx) -> None:
         json={"sponsor_name": "Acme", "committed_kopecks": 1},
     )
     assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+# ── Вебхук ТБанк ──────────────────────────────────────────────────────────
+
+
+def _tbank_notif(password: str, **fields) -> dict:
+    body = {"TerminalKey": "TDEMO", **fields}
+    body["Token"] = make_token(body, password)
+    return body
+
+
+def _new_tbank_subscription(ctx: Ctx) -> str:
+    ctx.holder["user"] = _user(UserRole.USER)
+    start = ctx.client.post("/billing/subscriptions", json={"plan": "monthly"})
+    assert start.status_code == 201, start.text
+    return start.json()["subscription"]["id"]
+
+
+def test_tbank_webhook_confirmed_records_payment(ctx: Ctx) -> None:
+    """CONFIRMED → идемпотентный приём в OPERATIONS, ответ телом OK."""
+    sub_id = _new_tbank_subscription(ctx)
+    notif = _tbank_notif(
+        "", OrderId=sub_id, Success=True, Status="CONFIRMED",
+        PaymentId="tb-1", Amount=99_000,
+    )
+
+    resp = ctx.client.post("/webhooks/payments/tbank", json=notif)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.text == "OK"
+    assert len(ctx.payments.items) == 1
+    assert ctx.payments.items[0].provider is PaymentProvider.TBANK
+    # Повтор идемпотентен: второй платёж не создаётся.
+    assert ctx.client.post("/webhooks/payments/tbank", json=notif).text == "OK"
+    assert len(ctx.payments.items) == 1
+
+
+def test_tbank_webhook_rejected_does_not_record(ctx: Ctx) -> None:
+    """REJECTED → OK, но платёж не проводится (Тест 2 — неуспешная оплата)."""
+    sub_id = _new_tbank_subscription(ctx)
+    notif = _tbank_notif(
+        "", OrderId=sub_id, Success=False, Status="REJECTED",
+        PaymentId="tb-2", Amount=99_000,
+    )
+
+    resp = ctx.client.post("/webhooks/payments/tbank", json=notif)
+
+    assert resp.status_code == 200 and resp.text == "OK"
+    assert ctx.payments.items == []
+
+
+def test_tbank_webhook_bad_token_401() -> None:
+    """С заданным паролем терминала неверный Token → 401 (до use-case)."""
+    from app.config import TBankSettings, get_settings
+
+    base = get_settings()
+    with_tbank = base.model_copy(
+        update={"tbank": TBankSettings(enabled=False, password="realpass")}
+    )
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: with_tbank
+    with TestClient(app) as client:
+        body = {
+            "TerminalKey": "TDEMO", "OrderId": str(uuid.uuid4()),
+            "Success": True, "Status": "CONFIRMED", "PaymentId": "tb-3",
+            "Amount": 99_000, "Token": "bad",
+        }
+        assert client.post("/webhooks/payments/tbank", json=body).status_code == 401

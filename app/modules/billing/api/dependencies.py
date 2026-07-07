@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Annotated
+from urllib.parse import parse_qsl
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +55,7 @@ from app.modules.billing.application.use_cases import (
     StartSubscription,
 )
 from app.modules.billing.domain.entities import SubscriptionPlan
+from app.modules.billing.domain.tbank_signing import verify_token
 from app.modules.billing.domain.webhooks import verify_signature
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.notifications import Notifier
@@ -373,3 +376,27 @@ async def verify_payout_webhook(request: Request, settings: SettingsDep) -> None
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверная подпись вебхука",
         )
+
+
+async def verified_tbank_payload(
+    request: Request, settings: SettingsDep
+) -> dict[str, object]:
+    """Прочитать тело уведомления ТБанк (JSON или form) и проверить Token.
+
+    Content-type может быть application/json или form-urlencoded — парсим оба.
+    Подпись проверяется по паролю терминала (``settings.tbank.password``), а не
+    HMAC-секретом. Неверный/отсутствующий Token → 401.
+    """
+    body = await request.body()
+    payload: dict[str, object]
+    try:
+        parsed = json.loads(body)
+        payload = parsed if isinstance(parsed, dict) else {}
+    except (ValueError, TypeError):
+        payload = dict(parse_qsl(body.decode("utf-8", "replace")))
+    if not verify_token(payload, settings.tbank.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверный Token вебхука",
+        )
+    return payload

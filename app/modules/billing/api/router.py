@@ -11,6 +11,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import PlainTextResponse
 
 from app.modules.billing.api.dependencies import (
     ActorDep,
@@ -31,9 +32,11 @@ from app.modules.billing.api.dependencies import (
     get_record_sponsor_deposit,
     get_record_subscription_payment,
     get_start_subscription,
+    verified_tbank_payload,
     verify_payment_webhook,
     verify_payout_webhook,
 )
+from app.modules.billing.domain.entities import PaymentProvider
 from app.modules.billing.api.schemas import (
     AnnouncePrizeFundRequest,
     CreatePayoutRequest,
@@ -180,6 +183,34 @@ async def yookassa_payment_webhook(
         subscription_id=payload.subscription_id,
     )
     return PaymentResponse.from_domain(payment)
+
+
+@router.post(
+    "/webhooks/payments/tbank",
+    summary="Вебхук приёма платежа ТБанк (→ операционная касса)",
+)
+async def tbank_payment_webhook(
+    payload: Annotated[dict[str, object], Depends(verified_tbank_payload)],
+    uc: Annotated[RecordSubscriptionPayment, Depends(get_record_subscription_payment)],
+) -> PlainTextResponse:
+    """Идемпотентно принять подтверждённый платёж ТБанк; ответить телом ``OK``.
+
+    Token проверяется зависимостью ``verified_tbank_payload`` до входа. Успешные
+    статусы (``CONFIRMED``/``AUTHORIZED``) активируют подписку; неуспешные
+    (``REJECTED``/``CANCELED``/…) — нет. Всегда отвечаем ``OK``, иначе банк
+    повторяет уведомление (раз в час 24ч, затем раз в сутки месяц).
+    """
+    if payload.get("Success") and str(payload.get("Status")) in {
+        "CONFIRMED",
+        "AUTHORIZED",
+    }:
+        await uc.execute(
+            provider=PaymentProvider.TBANK,
+            provider_payment_id=str(payload["PaymentId"]),
+            amount_kopecks=int(str(payload["Amount"])),
+            subscription_id=uuid.UUID(str(payload["OrderId"])),
+        )
+    return PlainTextResponse("OK")
 
 
 # ── Призовой фонд (призовая касса) ────────────────────────────────────────
