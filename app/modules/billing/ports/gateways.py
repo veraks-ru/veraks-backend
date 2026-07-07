@@ -28,6 +28,14 @@ class PayoutInstruction:
     provider_payout_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class RefundResult:
+    """Результат возврата/отмены платежа у провайдера (операционка)."""
+
+    provider_payment_id: str
+    status: str
+
+
 @runtime_checkable
 class SubscriptionCheckoutGateway(Protocol):
     """Создание рекуррентной оплаты подписки у провайдера (операционка)."""
@@ -55,6 +63,21 @@ class PayoutGateway(Protocol):
         amount_kopecks: int,
     ) -> PayoutInstruction:
         """Инициировать выплату; вернуть идентификатор у провайдера."""
+        ...
+
+
+@runtime_checkable
+class PaymentRefundGateway(Protocol):
+    """Возврат/отмена подтверждённого платежа у провайдера (операционка)."""
+
+    async def cancel_payment(
+        self,
+        *,
+        provider_payment_id: str,
+        amount_kopecks: int,
+        receipt: dict[str, object] | None,
+    ) -> RefundResult:
+        """Инициировать возврат; вернуть статус у провайдера."""
         ...
 
 
