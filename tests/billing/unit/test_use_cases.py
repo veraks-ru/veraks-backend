@@ -71,6 +71,25 @@ async def test_record_payment_posts_operations_and_activates(
     assert refreshed.current_period_end == FIXED_NOW + timedelta(days=30)
 
 
+async def test_record_tbank_payment_posts_to_tbank_cash(stand: Stand, user) -> None:
+    """Платёж провайдера ТБанк проводится в отдельный кэш-счёт ops:cash:tbank."""
+    sub, _ = await stand.start_subscription.execute(
+        user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
+    )
+
+    await stand.record_payment.execute(
+        provider=PaymentProvider.TBANK,
+        provider_payment_id="tb-1",
+        amount_kopecks=49_000,
+        subscription_id=sub.id,
+    )
+
+    tbank_cash = await stand.ledger.get_account_by_code(chart.OPS_CASH_TBANK)
+    yookassa_cash = await stand.ledger.get_account_by_code(chart.OPS_CASH_YOOKASSA)
+    assert await stand.ledger.balance(tbank_cash.id) == 49_000
+    assert await stand.ledger.balance(yookassa_cash.id) == 0  # чужой провайдер не затронут
+
+
 async def test_record_payment_is_idempotent(stand: Stand, user) -> None:
     sub, _ = await stand.start_subscription.execute(
         user_id=user.user_id, plan=SubscriptionPlan.MONTHLY

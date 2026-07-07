@@ -43,6 +43,7 @@ PLAN_PRICES = {
 # Стандартный план счетов, который засевает миграция 0010.
 _SEED_ACCOUNTS = [
     (LedgerType.OPERATIONS, chart.OPS_CASH_YOOKASSA, "Операционный кэш"),
+    (LedgerType.OPERATIONS, chart.OPS_CASH_TBANK, "Операционный кэш ТБанк"),
     (LedgerType.OPERATIONS, chart.OPS_REVENUE_SUBSCRIPTIONS, "Выручка: подписки"),
     (LedgerType.PRIZE, chart.PRIZE_CASH_SPONSOR, "Призовой кэш спонсора"),
     (LedgerType.PRIZE, chart.PRIZE_PAYABLE_WINNERS, "К выплате победителям"),

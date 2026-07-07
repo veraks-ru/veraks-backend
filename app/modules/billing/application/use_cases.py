@@ -212,6 +212,13 @@ class CancelSubscription:
         return saved
 
 
+# Операционный кэш-счёт зависит от провайдера приёма (раздельный учёт по провайдеру).
+_CASH_ACCOUNT: dict[PaymentProvider, str] = {
+    PaymentProvider.YOOKASSA: chart.OPS_CASH_YOOKASSA,
+    PaymentProvider.TBANK: chart.OPS_CASH_TBANK,
+}
+
+
 class RecordSubscriptionPayment:
     """Принять успешный платёж по подписке из вебхука провайдера (OPERATIONS).
 
@@ -267,7 +274,7 @@ class RecordSubscriptionPayment:
             user_id = subscription.user_id
 
         now = self._clock.now()
-        cash = await self._ledger.account(chart.OPS_CASH_YOOKASSA)
+        cash = await self._ledger.account(_CASH_ACCOUNT[provider])
         revenue = await self._ledger.account(chart.OPS_REVENUE_SUBSCRIPTIONS)
 
         transaction = LedgerTransaction.post(
