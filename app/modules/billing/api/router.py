@@ -31,6 +31,7 @@ from app.modules.billing.api.dependencies import (
     get_season_prize_fund,
     get_record_sponsor_deposit,
     get_record_subscription_payment,
+    get_refund_subscription_payment,
     get_start_subscription,
     verified_tbank_payload,
     verify_payment_webhook,
@@ -70,6 +71,7 @@ from app.modules.billing.application.use_cases import (
     RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
+    RefundSubscriptionPayment,
     StartSubscription,
 )
 
@@ -211,6 +213,27 @@ async def tbank_payment_webhook(
             subscription_id=uuid.UUID(str(payload["OrderId"])),
         )
     return PlainTextResponse("OK")
+
+
+@router.post(
+    "/billing/payments/{payment_id}/refund",
+    response_model=PaymentResponse,
+    summary="Возврат платежа подписки (админ)",
+)
+async def refund_subscription_payment(
+    payment_id: uuid.UUID,
+    actor: ActorDep,
+    uc: Annotated[
+        RefundSubscriptionPayment, Depends(get_refund_subscription_payment)
+    ],
+) -> PaymentResponse:
+    """Полный возврат платежа ТБанк: провайдер (Cancel + чек) + сторно OPERATIONS.
+
+    Доступно только администратору (проверка роли в use-case). Возвращает платёж
+    в статусе ``refunded``.
+    """
+    payment = await uc.execute(payment_id=payment_id, actor=actor)
+    return PaymentResponse.from_domain(payment)
 
 
 # ── Призовой фонд (призовая касса) ────────────────────────────────────────

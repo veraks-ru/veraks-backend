@@ -357,6 +357,8 @@ class RefundSubscriptionPayment:
 
     async def execute(self, *, payment_id: uuid.UUID, actor: Actor) -> Payment:
         """Вернуть платёж: провайдер → сторно OPERATIONS → статус refunded."""
+        if actor.role is not UserRole.ADMIN:
+            raise BillingPermissionError("Возврат платежа доступен только администратору")
         payment = await self._payments.get_by_id(payment_id)
         if payment is None:
             raise PaymentNotFoundError(str(payment_id))

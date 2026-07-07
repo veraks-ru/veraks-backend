@@ -32,6 +32,7 @@ from app.modules.billing.api.dependencies import (
     get_payout_notifier,
     get_payout_repository,
     get_prize_fund_repository,
+    get_refund_gateway,
     get_season_directory,
     get_subscription_repository,
 )
@@ -48,6 +49,7 @@ from tests.billing.fakes import (
     FakeClock,
     FakeNotifier,
     FakePayoutGateway,
+    FakeRefundGateway,
     FakeSeasonDirectory,
     InMemoryLedgerRepository,
     InMemoryPaymentRepository,
@@ -110,6 +112,7 @@ def ctx():
     app.dependency_overrides[get_payout_repository] = lambda: payouts
     app.dependency_overrides[get_audit_trail] = lambda: audit
     app.dependency_overrides[get_checkout_gateway] = lambda: FakeCheckoutGateway()
+    app.dependency_overrides[get_refund_gateway] = lambda: FakeRefundGateway()
     app.dependency_overrides[get_payout_gateway] = lambda: FakePayoutGateway()
     app.dependency_overrides[get_payout_notifier] = lambda: FakeNotifier()
     app.dependency_overrides[get_season_directory] = lambda: seasons
@@ -510,3 +513,35 @@ def test_tbank_webhook_bad_token_401() -> None:
             "Amount": 99_000, "Token": "bad",
         }
         assert client.post("/webhooks/payments/tbank", json=body).status_code == 401
+
+
+def _tbank_paid(ctx: Ctx, ref: str) -> str:
+    sub_id = _new_tbank_subscription(ctx)
+    ctx.client.post(
+        "/webhooks/payments/tbank",
+        json=_tbank_notif(
+            "", OrderId=sub_id, Success=True, Status="CONFIRMED",
+            PaymentId=ref, Amount=99_000,
+        ),
+    )
+    return str(ctx.payments.items[0].id)
+
+
+def test_refund_endpoint_admin_refunds(ctx: Ctx) -> None:
+    """Админ возвращает платёж ТБанк → статус refunded (Тест 3 — возврат)."""
+    payment_id = _tbank_paid(ctx, "tb-r1")
+
+    ctx.holder["user"] = _user(UserRole.ADMIN)
+    resp = ctx.client.post(f"/billing/payments/{payment_id}/refund")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "refunded"
+
+
+def test_refund_endpoint_forbidden_for_user(ctx: Ctx) -> None:
+    """Обычный пользователь не может вернуть платёж → 403."""
+    payment_id = _tbank_paid(ctx, "tb-r2")  # роль остаётся USER
+
+    resp = ctx.client.post(f"/billing/payments/{payment_id}/refund")
+
+    assert resp.status_code == status.HTTP_403_FORBIDDEN

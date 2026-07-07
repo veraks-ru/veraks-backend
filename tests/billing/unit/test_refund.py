@@ -8,7 +8,10 @@ from app.modules.billing.domain.entities import (
     PaymentStatus,
     SubscriptionPlan,
 )
-from app.modules.billing.domain.errors import InvalidPaymentError
+from app.modules.billing.domain.errors import (
+    BillingPermissionError,
+    InvalidPaymentError,
+)
 from tests.billing.conftest import Stand
 
 
@@ -48,3 +51,9 @@ async def test_refund_non_tbank_rejected(stand: Stand, user, admin):
     pay = await _paid(stand, user, provider=PaymentProvider.YOOKASSA, ref="yk-1")
     with pytest.raises(InvalidPaymentError):
         await stand.refund_payment.execute(payment_id=pay.id, actor=admin)
+
+
+async def test_refund_requires_admin(stand: Stand, user):
+    pay = await _paid(stand, user, provider=PaymentProvider.TBANK, ref="tb-11")
+    with pytest.raises(BillingPermissionError):
+        await stand.refund_payment.execute(payment_id=pay.id, actor=user)

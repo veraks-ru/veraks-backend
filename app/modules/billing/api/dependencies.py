@@ -7,14 +7,15 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Annotated
 from urllib.parse import parse_qsl
 
+import httpx
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import SettingsDep
+from app.config import Settings, SettingsDep
 from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
 from app.modules.notifications.adapters.goctopus import GoctopusPusher
 from app.modules.notifications.adapters.repository import (
@@ -27,6 +28,7 @@ from app.modules.billing.adapters.gateways import (
     YookassaPayoutGateway,
     YookassaSubscriptionCheckoutGateway,
 )
+from app.modules.billing.adapters.tbank_gateway import TBankGateway
 from app.modules.billing.adapters.repositories import (
     SqlAlchemyLedgerRepository,
     SqlAlchemyPaymentRepository,
@@ -52,6 +54,7 @@ from app.modules.billing.application.use_cases import (
     RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
+    RefundSubscriptionPayment,
     StartSubscription,
 )
 from app.modules.billing.domain.entities import SubscriptionPlan
@@ -60,6 +63,7 @@ from app.modules.billing.domain.webhooks import verify_signature
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.ports.gateways import (
+    PaymentRefundGateway,
     PayoutGateway,
     SeasonDirectory,
     SubscriptionCheckoutGateway,
@@ -111,11 +115,42 @@ def get_payout_repository(session: SessionDep) -> PayoutRepository:
     return SqlAlchemyPayoutRepository(session)
 
 
-def get_checkout_gateway(settings: SettingsDep) -> SubscriptionCheckoutGateway:
-    """Шлюз оплаты подписок. Локально — заглушка с мгновенной активацией."""
+async def get_http_client() -> AsyncIterator[httpx.AsyncClient]:
+    """HTTP-клиент для внешних платёжных вызовов (ТБанк)."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        yield client
+
+
+HttpClientDep = Annotated[httpx.AsyncClient, Depends(get_http_client)]
+
+
+def _tbank_gateway(settings: Settings, client: httpx.AsyncClient) -> TBankGateway:
+    """Собрать адаптер ТБанк с публичными URL из настроек."""
+    return TBankGateway(
+        settings.tbank,
+        client,
+        notification_url=f"{settings.public_api_base}/webhooks/payments/tbank",
+        success_url=f"{settings.public_web_base}/account",
+        fail_url=f"{settings.public_web_base}/account",
+    )
+
+
+def get_checkout_gateway(
+    settings: SettingsDep, client: HttpClientDep
+) -> SubscriptionCheckoutGateway:
+    """Шлюз оплаты подписок. local → заглушка; ТБанк → эквайринг; иначе ЮKassa."""
     if settings.app_env == "local":
         return LocalSubscriptionCheckoutGateway()
+    if settings.tbank.enabled:
+        return _tbank_gateway(settings, client)
     return YookassaSubscriptionCheckoutGateway()
+
+
+def get_refund_gateway(
+    settings: SettingsDep, client: HttpClientDep
+) -> PaymentRefundGateway:
+    """Шлюз возврата платежей (ТБанк)."""
+    return _tbank_gateway(settings, client)
 
 
 def get_payout_gateway() -> PayoutGateway:
@@ -224,6 +259,25 @@ def get_record_subscription_payment(
         ledger=ledger,
         audit=audit,
         clock=clock,
+    )
+
+
+def get_refund_subscription_payment(
+    settings: SettingsDep,
+    payments: PaymentRepoDep,
+    ledger: LedgerRepoDep,
+    gateway: Annotated[PaymentRefundGateway, Depends(get_refund_gateway)],
+    audit: AuditDep,
+    clock: ClockDep,
+) -> RefundSubscriptionPayment:
+    """Use-case возврата платежа по подписке (админ → провайдер → сторно)."""
+    return RefundSubscriptionPayment(
+        payments=payments,
+        ledger=ledger,
+        gateway=gateway,
+        audit=audit,
+        clock=clock,
+        taxation=settings.tbank.taxation,
     )
 
 
