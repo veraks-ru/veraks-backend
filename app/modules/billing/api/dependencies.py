@@ -54,6 +54,7 @@ from app.modules.billing.application.use_cases import (
     RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
+    RefundLatestSubscriptionPayment,
     RefundSubscriptionPayment,
     StartSubscription,
 )
@@ -279,6 +280,16 @@ def get_refund_subscription_payment(
         clock=clock,
         taxation=settings.tbank.taxation,
     )
+
+
+def get_refund_latest_subscription_payment(
+    payments: PaymentRepoDep,
+    refunder: Annotated[
+        RefundSubscriptionPayment, Depends(get_refund_subscription_payment)
+    ],
+) -> RefundLatestSubscriptionPayment:
+    """Use-case возврата последнего успешного платежа по подписке (админ)."""
+    return RefundLatestSubscriptionPayment(payments=payments, refunder=refunder)
 
 
 def get_announce_prize_fund(

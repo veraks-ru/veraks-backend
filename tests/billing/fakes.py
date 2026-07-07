@@ -14,6 +14,7 @@ from typing import Any
 
 from app.modules.billing.domain.entities import (
     Payment,
+    PaymentStatus,
     Payout,
     PrizeFund,
     Subscription,
@@ -134,6 +135,10 @@ class InMemorySubscriptionRepository:
             return None
         return max(owned, key=lambda s: s.created_at)
 
+    async def list_by_user(self, user_id: uuid.UUID) -> list[Subscription]:
+        owned = [s for s in self.items.values() if s.user_id == user_id]
+        return sorted(owned, key=lambda s: s.created_at, reverse=True)
+
     async def update(self, subscription: Subscription) -> Subscription:
         self.items[subscription.id] = subscription
         return subscription
@@ -161,6 +166,19 @@ class InMemoryPaymentRepository:
             if p.id == payment_id:
                 return p
         return None
+
+    async def get_latest_succeeded_by_subscription(
+        self, subscription_id: uuid.UUID
+    ) -> Payment | None:
+        owned = [
+            p
+            for p in self.items
+            if p.subscription_id == subscription_id
+            and p.status is PaymentStatus.SUCCEEDED
+        ]
+        if not owned:
+            return None
+        return max(owned, key=lambda p: p.created_at)
 
     async def add(self, payment: Payment) -> Payment:
         self.items.append(payment)

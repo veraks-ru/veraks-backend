@@ -31,6 +31,7 @@ from app.modules.billing.api.dependencies import (
     get_season_prize_fund,
     get_record_sponsor_deposit,
     get_record_subscription_payment,
+    get_refund_latest_subscription_payment,
     get_refund_subscription_payment,
     get_start_subscription,
     verified_tbank_payload,
@@ -71,6 +72,7 @@ from app.modules.billing.application.use_cases import (
     RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
+    RefundLatestSubscriptionPayment,
     RefundSubscriptionPayment,
     StartSubscription,
 )
@@ -233,6 +235,24 @@ async def refund_subscription_payment(
     в статусе ``refunded``.
     """
     payment = await uc.execute(payment_id=payment_id, actor=actor)
+    return PaymentResponse.from_domain(payment)
+
+
+@router.post(
+    "/billing/subscriptions/{subscription_id}/refund",
+    response_model=PaymentResponse,
+    summary="Возврат последней оплаты подписки (админ)",
+)
+async def refund_subscription(
+    subscription_id: uuid.UUID,
+    actor: ActorDep,
+    uc: Annotated[
+        RefundLatestSubscriptionPayment,
+        Depends(get_refund_latest_subscription_payment),
+    ],
+) -> PaymentResponse:
+    """Вернуть последнюю успешную оплату подписки (админ). Для UI-кнопки возврата."""
+    payment = await uc.execute(subscription_id=subscription_id, actor=actor)
     return PaymentResponse.from_domain(payment)
 
 

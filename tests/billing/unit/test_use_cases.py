@@ -90,6 +90,41 @@ async def test_record_tbank_payment_posts_to_tbank_cash(stand: Stand, user) -> N
     assert await stand.ledger.balance(yookassa_cash.id) == 0  # чужой провайдер не затронут
 
 
+async def test_start_subscription_reuses_incomplete(stand: Stand, user) -> None:
+    """Повторный «Оформить» переиспользует незавершённую подписку (ретрай, без плодов)."""
+    sub1, _ = await stand.start_subscription.execute(
+        user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
+    )
+    sub2, _ = await stand.start_subscription.execute(
+        user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
+    )
+    assert sub1.id == sub2.id
+    assert len(await stand.subscriptions.list_by_user(user.user_id)) == 1
+
+
+async def test_get_my_subscription_prefers_active(stand: Stand, user) -> None:
+    """Кабинет показывает активную подписку, а не позднюю незавершённую попытку."""
+    from app.modules.billing.application.use_cases import GetMySubscription
+
+    sub, _ = await stand.start_subscription.execute(
+        user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
+    )
+    await stand.record_payment.execute(
+        provider=PaymentProvider.TBANK, provider_payment_id="tb-a",
+        amount_kopecks=49_000, subscription_id=sub.id,
+    )
+    # Позже — новая незавершённая попытка другого тарифа (не переиспользуется).
+    await stand.start_subscription.execute(
+        user_id=user.user_id, plan=SubscriptionPlan.ANNUAL
+    )
+
+    current = await GetMySubscription(subscriptions=stand.subscriptions).execute(
+        user_id=user.user_id
+    )
+    assert current.status is SubscriptionStatus.ACTIVE
+    assert current.id == sub.id
+
+
 async def test_record_payment_is_idempotent(stand: Stand, user) -> None:
     sub, _ = await stand.start_subscription.execute(
         user_id=user.user_id, plan=SubscriptionPlan.MONTHLY

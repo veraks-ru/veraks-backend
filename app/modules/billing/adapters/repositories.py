@@ -23,6 +23,7 @@ from app.modules.billing.adapters.orm import (
 )
 from app.modules.billing.domain.entities import (
     Payment,
+    PaymentStatus,
     Payout,
     PrizeFund,
     Subscription,
@@ -159,6 +160,15 @@ class SqlAlchemySubscriptionRepository:
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
+    async def list_by_user(self, user_id: uuid.UUID) -> list[Subscription]:
+        stmt = (
+            select(SubscriptionORM)
+            .where(SubscriptionORM.user_id == user_id)
+            .order_by(SubscriptionORM.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [orm.to_domain() for orm in rows]
+
     async def update(self, subscription: Subscription) -> Subscription:
         orm = await self._session.get(SubscriptionORM, subscription.id)
         if orm is None:  # pragma: no cover — вызывается только для существующих
@@ -190,6 +200,21 @@ class SqlAlchemyPaymentRepository:
 
     async def get_by_id(self, payment_id: uuid.UUID) -> Payment | None:
         orm = await self._session.get(PaymentORM, payment_id)
+        return orm.to_domain() if orm else None
+
+    async def get_latest_succeeded_by_subscription(
+        self, subscription_id: uuid.UUID
+    ) -> Payment | None:
+        stmt = (
+            select(PaymentORM)
+            .where(
+                PaymentORM.subscription_id == subscription_id,
+                PaymentORM.status == PaymentStatus.SUCCEEDED,
+            )
+            .order_by(PaymentORM.created_at.desc())
+            .limit(1)
+        )
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
     async def add(self, payment: Payment) -> Payment:

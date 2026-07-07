@@ -33,6 +33,7 @@ from app.modules.billing.domain.entities import (
     PayoutStatus,
     Subscription,
     SubscriptionPlan,
+    SubscriptionStatus,
 )
 from app.modules.billing.domain.errors import (
     BillingPermissionError,
@@ -150,12 +151,26 @@ class StartSubscription:
         plan: SubscriptionPlan,
         provider: PaymentProvider = PaymentProvider.YOOKASSA,
     ) -> tuple[Subscription, str]:
-        """Создать подписку (incomplete) и вернуть её и URL оплаты."""
+        """Создать (или переиспользовать незавершённую) подписку и URL оплаты."""
         price = self._plan_prices[plan]
-        subscription = Subscription(
-            user_id=user_id, plan=plan, price_kopecks=price, provider=provider
+        # Ретрай оплаты вместо плодов новых записей: если у пользователя уже есть
+        # незавершённая подписка того же тарифа — переоформляем её оплату.
+        pending = next(
+            (
+                s
+                for s in await self._subscriptions.list_by_user(user_id)
+                if s.status is SubscriptionStatus.INCOMPLETE and s.plan == plan
+            ),
+            None,
         )
-        saved = await self._subscriptions.add(subscription)
+        if pending is not None:
+            saved = pending
+        else:
+            saved = await self._subscriptions.add(
+                Subscription(
+                    user_id=user_id, plan=plan, price_kopecks=price, provider=provider
+                )
+            )
 
         intent = await self._checkout.create_checkout(
             subscription_id=saved.id,
@@ -415,6 +430,32 @@ class RefundSubscriptionPayment:
         return saved
 
 
+class RefundLatestSubscriptionPayment:
+    """Вернуть последний успешный платёж по подписке (админ, из UI/кабинета)."""
+
+    def __init__(
+        self,
+        *,
+        payments: PaymentRepository,
+        refunder: RefundSubscriptionPayment,
+    ) -> None:
+        self._payments = payments
+        self._refunder = refunder
+
+    async def execute(
+        self, *, subscription_id: uuid.UUID, actor: Actor
+    ) -> Payment:
+        """Найти последний успешный платёж подписки и вернуть его."""
+        payment = await self._payments.get_latest_succeeded_by_subscription(
+            subscription_id
+        )
+        if payment is None:
+            raise PaymentNotFoundError(
+                "Нет успешного платежа для возврата по этой подписке"
+            )
+        return await self._refunder.execute(payment_id=payment.id, actor=actor)
+
+
 # ── Призовой фонд (PRIZE) ─────────────────────────────────────────────────
 
 
@@ -612,17 +653,30 @@ class GetSeasonPrizeFund:
 
 
 class GetMySubscription:
-    """Чтение текущей (последней) подписки пользователя."""
+    """Чтение текущей подписки: активная (если есть), иначе последняя.
+
+    Иначе кабинет показывал бы «последнюю» запись — например, незавершённую
+    попытку оплаты — вместо реально действующей активной подписки.
+    """
 
     def __init__(self, *, subscriptions: SubscriptionRepository) -> None:
         self._subscriptions = subscriptions
 
     async def execute(self, *, user_id: uuid.UUID) -> Subscription:
-        """Вернуть последнюю подписку пользователя или доменную ошибку 404."""
-        subscription = await self._subscriptions.get_latest_by_user(user_id)
-        if subscription is None:
+        """Вернуть действующую подписку или доменную ошибку 404."""
+        subs = await self._subscriptions.list_by_user(user_id)
+        if not subs:
             raise SubscriptionNotFoundError("У пользователя нет подписки")
-        return subscription
+        current = next(
+            (
+                s
+                for s in subs
+                if s.status
+                in (SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE)
+            ),
+            None,
+        )
+        return current or subs[0]
 
 
 class ListPayouts:

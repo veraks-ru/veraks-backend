@@ -66,6 +66,10 @@ class SubscriptionRepository(Protocol):
         """Последняя (по ``created_at``) подписка пользователя или ``None``."""
         ...
 
+    async def list_by_user(self, user_id: uuid.UUID) -> list[Subscription]:
+        """Все подписки пользователя, новые первыми (по ``created_at`` убыв.)."""
+        ...
+
     async def update(self, subscription: Subscription) -> Subscription:
         """Синхронизировать изменяемые поля (статус, период, отмена)."""
         ...
@@ -83,6 +87,12 @@ class PaymentRepository(Protocol):
 
     async def get_by_id(self, payment_id: uuid.UUID) -> Payment | None:
         """Платёж по ``id`` или ``None``."""
+        ...
+
+    async def get_latest_succeeded_by_subscription(
+        self, subscription_id: uuid.UUID
+    ) -> Payment | None:
+        """Последний успешный платёж по подписке (для возврата) или ``None``."""
         ...
 
     async def add(self, payment: Payment) -> Payment:
