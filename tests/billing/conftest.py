@@ -139,6 +139,7 @@ def stand() -> Stand:
             audit=audit,
             clock=clock,
             taxation="usn_income",
+            receipt_email="chek@example.com",
         ),
     )
 

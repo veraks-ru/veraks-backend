@@ -279,6 +279,7 @@ def get_refund_subscription_payment(
         audit=audit,
         clock=clock,
         taxation=settings.tbank.taxation,
+        receipt_email=settings.tbank.receipt_email,
     )
 
 

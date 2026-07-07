@@ -354,6 +354,7 @@ class RefundSubscriptionPayment:
         audit: AuditTrail,
         clock: Clock,
         taxation: str,
+        receipt_email: str,
     ) -> None:
         self._payments = payments
         self._ledger = _LedgerOps(ledger)
@@ -362,6 +363,7 @@ class RefundSubscriptionPayment:
         self._audit = audit
         self._clock = clock
         self._taxation = taxation
+        self._receipt_email = receipt_email
 
     async def execute(self, *, payment_id: uuid.UUID, actor: Actor) -> Payment:
         """Вернуть платёж: провайдер → сторно OPERATIONS → статус refunded."""
@@ -377,12 +379,18 @@ class RefundSubscriptionPayment:
                 f"Возврат недоступен для платежа в статусе {payment.status.value}"
             )
 
-        receipt = build_receipt(
-            description="Возврат: подписка",
-            amount_kopecks=payment.amount_kopecks,
-            taxation=self._taxation,
-            email=None,
-            phone=None,
+        # Чек возврата (54-ФЗ) — только если задан e-mail: ТБанк требует в Receipt
+        # Email или Phone, иначе Cancel падает с 329 «Неверные параметры».
+        receipt = (
+            build_receipt(
+                description="Возврат: подписка",
+                amount_kopecks=payment.amount_kopecks,
+                taxation=self._taxation,
+                email=self._receipt_email,
+                phone=None,
+            )
+            if self._receipt_email
+            else None
         )
         await self._gateway.cancel_payment(
             provider_payment_id=payment.provider_payment_id,
