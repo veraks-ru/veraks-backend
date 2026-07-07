@@ -90,37 +90,41 @@ async def test_record_tbank_payment_posts_to_tbank_cash(stand: Stand, user) -> N
     assert await stand.ledger.balance(yookassa_cash.id) == 0  # чужой провайдер не затронут
 
 
-async def test_start_subscription_reuses_incomplete(stand: Stand, user) -> None:
-    """Повторный «Оформить» переиспользует незавершённую подписку (ретрай, без плодов)."""
+async def test_start_subscription_creates_new_each_time(stand: Stand, user) -> None:
+    """Каждое оформление — отдельная подписка (уникальный OrderId у провайдера)."""
     sub1, _ = await stand.start_subscription.execute(
         user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
     )
     sub2, _ = await stand.start_subscription.execute(
         user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
     )
-    assert sub1.id == sub2.id
-    assert len(await stand.subscriptions.list_by_user(user.user_id)) == 1
+    assert sub1.id != sub2.id
+    assert len(await stand.subscriptions.list_by_user(user.user_id)) == 2
 
 
-async def test_get_my_subscription_prefers_active(stand: Stand, user) -> None:
-    """Кабинет показывает активную подписку, а не позднюю незавершённую попытку."""
+async def test_get_my_subscription_active_only_else_404(stand: Stand, user) -> None:
+    """Кабинет отдаёт активную; при её отсутствии — 404 (незавершённые не показываем)."""
     from app.modules.billing.application.use_cases import GetMySubscription
+    from app.modules.billing.domain.errors import SubscriptionNotFoundError
 
-    sub, _ = await stand.start_subscription.execute(
+    uc = GetMySubscription(subscriptions=stand.subscriptions)
+
+    # Только незавершённая попытка → активной подписки нет → 404.
+    await stand.start_subscription.execute(
         user_id=user.user_id, plan=SubscriptionPlan.MONTHLY
     )
-    await stand.record_payment.execute(
-        provider=PaymentProvider.TBANK, provider_payment_id="tb-a",
-        amount_kopecks=49_000, subscription_id=sub.id,
-    )
-    # Позже — новая незавершённая попытка другого тарифа (не переиспользуется).
-    await stand.start_subscription.execute(
+    with pytest.raises(SubscriptionNotFoundError):
+        await uc.execute(user_id=user.user_id)
+
+    # Оплачиваем другую — становится активной, кабинет её отдаёт.
+    sub, _ = await stand.start_subscription.execute(
         user_id=user.user_id, plan=SubscriptionPlan.ANNUAL
     )
-
-    current = await GetMySubscription(subscriptions=stand.subscriptions).execute(
-        user_id=user.user_id
+    await stand.record_payment.execute(
+        provider=PaymentProvider.TBANK, provider_payment_id="tb-b",
+        amount_kopecks=490_000, subscription_id=sub.id,
     )
+    current = await uc.execute(user_id=user.user_id)
     assert current.status is SubscriptionStatus.ACTIVE
     assert current.id == sub.id
 

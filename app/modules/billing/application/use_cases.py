@@ -151,26 +151,19 @@ class StartSubscription:
         plan: SubscriptionPlan,
         provider: PaymentProvider = PaymentProvider.YOOKASSA,
     ) -> tuple[Subscription, str]:
-        """Создать (или переиспользовать незавершённую) подписку и URL оплаты."""
+        """Создать новую подписку (incomplete) и вернуть её и URL оплаты.
+
+        Каждое оформление — отдельная запись с собственным ``id`` (он же уникальный
+        ``OrderId`` у провайдера): повторная оплата не конфликтует с прошлой
+        попыткой. Незавершённые попытки не показываются в кабинете (см.
+        ``GetMySubscription``).
+        """
         price = self._plan_prices[plan]
-        # Ретрай оплаты вместо плодов новых записей: если у пользователя уже есть
-        # незавершённая подписка того же тарифа — переоформляем её оплату.
-        pending = next(
-            (
-                s
-                for s in await self._subscriptions.list_by_user(user_id)
-                if s.status is SubscriptionStatus.INCOMPLETE and s.plan == plan
-            ),
-            None,
-        )
-        if pending is not None:
-            saved = pending
-        else:
-            saved = await self._subscriptions.add(
-                Subscription(
-                    user_id=user_id, plan=plan, price_kopecks=price, provider=provider
-                )
+        saved = await self._subscriptions.add(
+            Subscription(
+                user_id=user_id, plan=plan, price_kopecks=price, provider=provider
             )
+        )
 
         intent = await self._checkout.create_checkout(
             subscription_id=saved.id,
@@ -663,20 +656,24 @@ class GetMySubscription:
         self._subscriptions = subscriptions
 
     async def execute(self, *, user_id: uuid.UUID) -> Subscription:
-        """Вернуть действующую подписку или доменную ошибку 404."""
-        subs = await self._subscriptions.list_by_user(user_id)
-        if not subs:
-            raise SubscriptionNotFoundError("У пользователя нет подписки")
+        """Вернуть действующую (активную/просроченную) подписку или 404.
+
+        Незавершённые/отменённые/истёкшие в кабинете не показываем — иначе после
+        отмены всплывала бы старая незавершённая попытка. Оформить заново — с
+        выбором тарифа на «Тарифах».
+        """
         current = next(
             (
                 s
-                for s in subs
+                for s in await self._subscriptions.list_by_user(user_id)
                 if s.status
                 in (SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE)
             ),
             None,
         )
-        return current or subs[0]
+        if current is None:
+            raise SubscriptionNotFoundError("У пользователя нет активной подписки")
+        return current
 
 
 class ListPayouts:
