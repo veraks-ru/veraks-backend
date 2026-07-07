@@ -38,13 +38,16 @@ from app.modules.billing.domain.errors import (
     BillingPermissionError,
     InsufficientPrizeFundError,
     InvalidAmountError,
+    InvalidPaymentError,
     LedgerAccountNotFoundError,
+    PaymentNotFoundError,
     PayoutAlreadyDecidedError,
     PayoutNotFoundError,
     PrizeFundNotFoundError,
     SeasonNotFoundError,
     SubscriptionNotFoundError,
 )
+from app.modules.billing.domain.receipt import build_receipt
 from app.modules.billing.domain.ledger import (
     EntryDirection,
     LedgerAccount,
@@ -64,6 +67,7 @@ from app.modules.billing.domain.policies import (
 )
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.gateways import (
+    PaymentRefundGateway,
     PayoutGateway,
     SeasonDirectory,
     SubscriptionCheckoutGateway,
@@ -320,6 +324,91 @@ class RecordSubscriptionPayment:
                 "ledger_type": LedgerType.OPERATIONS.value,
             },
             metadata={"provider": provider.value, "external_ref": provider_payment_id},
+        )
+        return saved
+
+
+class RefundSubscriptionPayment:
+    """Полный возврат успешного платежа по подписке через провайдера (OPERATIONS).
+
+    Инициатор — админ (RBAC на уровне API). Обращаемся к провайдеру за возвратом
+    (с чеком возврата 54-ФЗ), затем проводим сторно в операционной кассе и помечаем
+    платёж возвращённым. Идемпотентность сторно-проводки гарантирует partial UNIQUE
+    на ``external_ref`` вида ``refund`` (миграция 0022).
+    """
+
+    def __init__(
+        self,
+        *,
+        payments: PaymentRepository,
+        ledger: LedgerRepository,
+        gateway: PaymentRefundGateway,
+        audit: AuditTrail,
+        clock: Clock,
+        taxation: str,
+    ) -> None:
+        self._payments = payments
+        self._ledger = _LedgerOps(ledger)
+        self._ledger_repo = ledger
+        self._gateway = gateway
+        self._audit = audit
+        self._clock = clock
+        self._taxation = taxation
+
+    async def execute(self, *, payment_id: uuid.UUID, actor: Actor) -> Payment:
+        """Вернуть платёж: провайдер → сторно OPERATIONS → статус refunded."""
+        payment = await self._payments.get_by_id(payment_id)
+        if payment is None:
+            raise PaymentNotFoundError(str(payment_id))
+        if payment.provider is not PaymentProvider.TBANK:
+            raise InvalidPaymentError("Возврат поддержан только для платежей ТБанк")
+        if payment.status is not PaymentStatus.SUCCEEDED:
+            raise InvalidPaymentError(
+                f"Возврат недоступен для платежа в статусе {payment.status.value}"
+            )
+
+        receipt = build_receipt(
+            description="Возврат: подписка",
+            amount_kopecks=payment.amount_kopecks,
+            taxation=self._taxation,
+            email=None,
+            phone=None,
+        )
+        await self._gateway.cancel_payment(
+            provider_payment_id=payment.provider_payment_id,
+            amount_kopecks=payment.amount_kopecks,
+            receipt=receipt,
+        )
+
+        now = self._clock.now()
+        cash = await self._ledger.account(_CASH_ACCOUNT[payment.provider])
+        revenue = await self._ledger.account(chart.OPS_REVENUE_SUBSCRIPTIONS)
+        transaction = LedgerTransaction.post(
+            kind=TransactionKind.REFUND,
+            legs=(
+                PostingLeg(revenue, EntryDirection.DEBIT, payment.amount_kopecks),
+                PostingLeg(cash, EntryDirection.CREDIT, payment.amount_kopecks),
+            ),
+            external_ref=f"{payment.provider_payment_id}:refund",
+            description="Возврат по подписке",
+            now=now,
+        )
+        saved_txn = await self._ledger_repo.add_transaction(transaction)
+
+        payment.status = PaymentStatus.REFUNDED
+        saved = await self._payments.update(payment)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_ACTOR_TYPE_BY_ROLE[actor.role],
+            action="subscription.payment.refunded",
+            entity_type="payment",
+            entity_id=saved.id,
+            after={"status": saved.status.value},
+            metadata={
+                "provider": payment.provider.value,
+                "external_ref": f"{payment.provider_payment_id}:refund",
+                "ledger_transaction_id": str(saved_txn.id),
+            },
         )
         return saved
 

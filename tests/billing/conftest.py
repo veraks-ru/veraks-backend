@@ -17,6 +17,7 @@ from app.modules.billing.application.use_cases import (
     GetPrizeFund,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
+    RefundSubscriptionPayment,
     StartSubscription,
 )
 from app.modules.billing.domain import chart
@@ -27,6 +28,7 @@ from tests.billing.fakes import (
     FakeAuditTrail,
     FakeCheckoutGateway,
     FakeClock,
+    FakeRefundGateway,
     InMemoryLedgerRepository,
     InMemoryPaymentRepository,
     InMemoryPayoutRepository,
@@ -70,6 +72,8 @@ class Stand:
     get_fund: GetPrizeFund
     create_payout: CreatePayout
     approve_payout: ApprovePayout
+    refund_gateway: FakeRefundGateway
+    refund_payment: RefundSubscriptionPayment
 
 
 @pytest.fixture
@@ -87,6 +91,7 @@ def stand() -> Stand:
     payouts = InMemoryPayoutRepository()
     audit = FakeAuditTrail()
     checkout = FakeCheckoutGateway()
+    refund_gateway = FakeRefundGateway()
 
     return Stand(
         clock=clock,
@@ -125,6 +130,15 @@ def stand() -> Stand:
         ),
         approve_payout=ApprovePayout(
             payouts=payouts, funds=funds, ledger=ledger, audit=audit, clock=clock
+        ),
+        refund_gateway=refund_gateway,
+        refund_payment=RefundSubscriptionPayment(
+            payments=payments,
+            ledger=ledger,
+            gateway=refund_gateway,
+            audit=audit,
+            clock=clock,
+            taxation="usn_income",
         ),
     )
 

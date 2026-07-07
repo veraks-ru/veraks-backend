@@ -81,8 +81,16 @@ class PaymentRepository(Protocol):
         """Платёж по ключу идемпотентности вебхука или ``None``."""
         ...
 
+    async def get_by_id(self, payment_id: uuid.UUID) -> Payment | None:
+        """Платёж по ``id`` или ``None``."""
+        ...
+
     async def add(self, payment: Payment) -> Payment:
         """Зафиксировать платёж."""
+        ...
+
+    async def update(self, payment: Payment) -> Payment:
+        """Обновить платёж (напр. статус при возврате)."""
         ...
 
 

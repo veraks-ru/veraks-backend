@@ -24,7 +24,11 @@ from app.modules.billing.domain.ledger import (
     LedgerTransaction,
     LedgerType,
 )
-from app.modules.billing.ports.gateways import CheckoutIntent, PayoutInstruction
+from app.modules.billing.ports.gateways import (
+    CheckoutIntent,
+    PayoutInstruction,
+    RefundResult,
+)
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
 
 
@@ -152,7 +156,21 @@ class InMemoryPaymentRepository:
                 return p
         return None
 
+    async def get_by_id(self, payment_id: uuid.UUID) -> Payment | None:
+        for p in self.items:
+            if p.id == payment_id:
+                return p
+        return None
+
     async def add(self, payment: Payment) -> Payment:
+        self.items.append(payment)
+        return payment
+
+    async def update(self, payment: Payment) -> Payment:
+        for i, p in enumerate(self.items):
+            if p.id == payment.id:
+                self.items[i] = payment
+                return payment
         self.items.append(payment)
         return payment
 
@@ -259,6 +277,31 @@ class FakePayoutGateway:
     ) -> PayoutInstruction:
         return PayoutInstruction(
             provider="yookassa", provider_payout_id=f"po-{payout_id}"
+        )
+
+
+class FakeRefundGateway:
+    """Шлюз возврата: фиксирует вызовы, отдаёт детерминированный результат."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def cancel_payment(
+        self,
+        *,
+        provider_payment_id: str,
+        amount_kopecks: int,
+        receipt: dict | None,
+    ) -> RefundResult:
+        self.calls.append(
+            {
+                "provider_payment_id": provider_payment_id,
+                "amount_kopecks": amount_kopecks,
+                "receipt": receipt,
+            }
+        )
+        return RefundResult(
+            provider_payment_id=provider_payment_id, status="REFUNDED"
         )
 
 

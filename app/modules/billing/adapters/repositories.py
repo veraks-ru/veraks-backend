@@ -188,9 +188,22 @@ class SqlAlchemyPaymentRepository:
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
+    async def get_by_id(self, payment_id: uuid.UUID) -> Payment | None:
+        orm = await self._session.get(PaymentORM, payment_id)
+        return orm.to_domain() if orm else None
+
     async def add(self, payment: Payment) -> Payment:
         orm = PaymentORM.from_domain(payment)
         self._session.add(orm)
+        await self._session.flush()
+        return orm.to_domain()
+
+    async def update(self, payment: Payment) -> Payment:
+        orm = await self._session.get(PaymentORM, payment.id)
+        if orm is None:  # pragma: no cover
+            raise _RowVanishedError(str(payment.id))
+        orm.status = payment.status
+        orm.fiscal_receipt_id = payment.fiscal_receipt_id
         await self._session.flush()
         return orm.to_domain()
 
