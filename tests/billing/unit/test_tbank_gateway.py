@@ -55,6 +55,47 @@ async def test_init_builds_request_and_returns_payment_url():
     assert captured["Token"] == make_token(captured, "p")
 
 
+async def test_init_includes_receipt_when_email_configured():
+    captured: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(200, json={
+            "Success": True, "Status": "NEW",
+            "PaymentId": "901", "PaymentURL": "https://pay.test/form/901",
+        })
+
+    settings = TBankSettings(
+        enabled=True, terminal_key="TDEMO", password="p",
+        api_base_url="https://pay.test/v2", receipt_email="chek@example.com",
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gw = TBankGateway(settings, client, notification_url="n",
+                      success_url="s", fail_url="f")
+    await gw.create_checkout(
+        subscription_id=uuid.uuid4(), amount_kopecks=99000, description="Подписка"
+    )
+    assert captured["Receipt"]["Email"] == "chek@example.com"
+    # Token не учитывает вложенный Receipt (исключён из подписи)
+    assert captured["Token"] == make_token(captured, "p")
+
+
+async def test_init_no_receipt_without_email():
+    captured: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(200, json={
+            "Success": True, "Status": "NEW", "PaymentId": "902",
+            "PaymentURL": "https://pay.test/form/902",
+        })
+
+    await _gateway(handler).create_checkout(
+        subscription_id=uuid.uuid4(), amount_kopecks=1, description="x"
+    )
+    assert "Receipt" not in captured
+
+
 async def test_init_failure_raises_gateway_error():
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={

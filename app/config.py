@@ -97,6 +97,9 @@ class TBankSettings(BaseSettings):
     api_base_url: str = "https://securepay.tinkoff.ru/v2"
     # СНО для чека 54-ФЗ. ИП на УСН «доходы» → usn_income.
     taxation: str = "usn_income"
+    # E-mail для чека 54-ФЗ (ЕСИА не даёт почту плательщика). Пусто → Receipt в
+    # Init не отправляется. Заполнить, когда к терминалу подключена онлайн-касса.
+    receipt_email: str = ""
 
 
 class RealtimeSettings(BaseSettings):

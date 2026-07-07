@@ -14,6 +14,7 @@ import httpx
 
 from app.config import TBankSettings
 from app.modules.billing.domain.errors import PaymentGatewayError
+from app.modules.billing.domain.receipt import build_receipt
 from app.modules.billing.domain.tbank_signing import make_token
 from app.modules.billing.ports.gateways import CheckoutIntent, RefundResult
 
@@ -69,6 +70,15 @@ class TBankGateway:
             "SuccessURL": self._success_url,
             "FailURL": self._fail_url,
         }
+        # Чек 54-ФЗ прихода (Тест 7) — если задан e-mail для чека.
+        if self._s.receipt_email:
+            payload["Receipt"] = build_receipt(
+                description=description,
+                amount_kopecks=amount_kopecks,
+                taxation=self._s.taxation,
+                email=self._s.receipt_email,
+                phone=None,
+            )
         data = await self._post("Init", payload)
         return CheckoutIntent(
             confirmation_url=str(data["PaymentURL"]),
