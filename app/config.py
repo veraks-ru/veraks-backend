@@ -81,6 +81,24 @@ class BillingSettings(BaseSettings):
     annual_price_kopecks: int = Field(default=499_000, ge=1)
 
 
+class TBankSettings(BaseSettings):
+    """Эквайринг ТБанк (приём платежей за подписку, hosted-форма банка, nonPCI).
+
+    Секреты (``terminal_key``/``password``) — только из env/K8s-секрета, не в git.
+    ``enabled=False`` — интеграция выключена (поведение как прежде). Подпись Token и
+    приём вебхука используют ``password`` (см. domain/tbank_signing.py).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TBANK_", extra="ignore")
+
+    enabled: bool = False
+    terminal_key: str = ""
+    password: str = ""
+    api_base_url: str = "https://securepay.tinkoff.ru/v2"
+    # СНО для чека 54-ФЗ. ИП на УСН «доходы» → usn_income.
+    taxation: str = "usn_income"
+
+
 class RealtimeSettings(BaseSettings):
     """Пуш in-app уведомлений в реальном времени через goctopus (WS-релей).
 
@@ -153,6 +171,11 @@ class Settings(BaseSettings):
     billing: BillingSettings = Field(default_factory=BillingSettings)
     webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
     b2b: B2bSettings = Field(default_factory=B2bSettings)
+    tbank: TBankSettings = Field(default_factory=TBankSettings)
+
+    # Публичные базовые URL для платёжных редиректов и вебхуков ТБанк.
+    public_web_base: str = "https://veraks.ru"
+    public_api_base: str = "https://api.veraks.ru"
 
     @model_validator(mode="after")
     def _require_webhook_secrets_in_prod(self) -> "Settings":
@@ -163,14 +186,18 @@ class Settings(BaseSettings):
         выплат. Поэтому при ``app_env != local`` приложение не поднимется без них.
         """
         if self.app_env != "local":
-            missing = [
-                name
-                for name, value in (
-                    ("WEBHOOK_YOOKASSA_PAYMENT_SECRET", self.webhooks.yookassa_payment_secret),
-                    ("WEBHOOK_YOOKASSA_PAYOUT_SECRET", self.webhooks.yookassa_payout_secret),
-                )
-                if not value
+            required: list[tuple[str, str]] = [
+                ("WEBHOOK_YOOKASSA_PAYMENT_SECRET", self.webhooks.yookassa_payment_secret),
+                ("WEBHOOK_YOOKASSA_PAYOUT_SECRET", self.webhooks.yookassa_payout_secret),
             ]
+            # Вебхук ТБанк проверяется по паролю терминала (Token), а не по
+            # WEBHOOK_*-секрету: при включённом ТБанк обязателен именно он.
+            if self.tbank.enabled:
+                required += [
+                    ("TBANK_TERMINAL_KEY", self.tbank.terminal_key),
+                    ("TBANK_PASSWORD", self.tbank.password),
+                ]
+            missing = [name for name, value in required if not value]
             if missing:
                 raise ValueError(
                     f"В окружении '{self.app_env}' обязательны секреты вебхуков: "
