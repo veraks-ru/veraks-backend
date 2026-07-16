@@ -26,6 +26,18 @@ from app.modules.billing.ports.gateways import (
 _SBP_REQUISITE_TYPE_ID = 10
 
 
+def _format_error_fields(fields: object) -> str:
+    """Пополевые ошибки Jump (``error.fields``) одной строкой для диагностики."""
+    if not isinstance(fields, list):
+        return ""
+    parts = [
+        f"{item.get('field')}: {', '.join(map(str, item.get('messages') or []))}"
+        for item in fields
+        if isinstance(item, dict)
+    ]
+    return f" — {'; '.join(parts)}" if parts else ""
+
+
 class JumpGateway:
     """Реализует PayoutGateway и PayoutStatusProbe для Jump.Finance."""
 
@@ -58,6 +70,7 @@ class JumpGateway:
             raise PaymentGatewayError(
                 f"Jump {method} {path}: HTTP {resp.status_code}: "
                 f"{detail.get('title', '')} {detail.get('detail', '')}".strip()
+                + _format_error_fields(detail.get("fields"))
             )
         return data
 

@@ -150,6 +150,34 @@ async def test_send_payout_error_response_raises_gateway_error():
         )
 
 
+async def test_send_payout_error_includes_field_details():
+    # Jump кладёт конкретику валидации в error.fields — без неё «Ошибка в
+    # переданных данных» недиагностируема.
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={
+            "error": {
+                "title": "Ошибка",
+                "detail": "Ошибка в переданных данных.",
+                "fields": [
+                    {"field": "requisite.sbp_bank_id", "messages": ["Банк не найден"]},
+                    {"field": "phone", "messages": ["Неверный формат"]},
+                ],
+                "code": 422,
+            }
+        })
+
+    with pytest.raises(
+        PaymentGatewayError,
+        match=r"requisite\.sbp_bank_id: Банк не найден.*phone: Неверный формат",
+    ):
+        await _gateway(handler).send_payout(
+            payout_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            amount_kopecks=100,
+            recipient=_recipient(),
+        )
+
+
 async def test_send_payout_network_error_raises_gateway_error():
     def handler(req: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("нет сети")
