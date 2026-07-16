@@ -14,6 +14,7 @@ from app.modules.billing.domain.entities import (
     PaymentProvider,
     PaymentStatus,
     Payout,
+    PayoutRequisites,
     PayoutStatus,
     PrizeFund,
     PrizeFundStatus,
@@ -215,6 +216,10 @@ class PayoutResponse(BaseModel):
     created_by: uuid.UUID
     approved_by: uuid.UUID | None
     ledger_transaction_id: uuid.UUID | None
+    provider: PaymentProvider | None
+    provider_payout_id: str | None
+    created_at: datetime
+    paid_at: datetime | None
 
     @classmethod
     def from_domain(cls, payout: Payout) -> "PayoutResponse":
@@ -228,6 +233,48 @@ class PayoutResponse(BaseModel):
             created_by=payout.created_by,
             approved_by=payout.approved_by,
             ledger_transaction_id=payout.ledger_transaction_id,
+            provider=payout.provider,
+            provider_payout_id=payout.provider_payout_id,
+            created_at=payout.created_at,
+            paid_at=payout.paid_at,
+        )
+
+
+class PayoutRequisitesRequest(BaseModel):
+    """Сохранение реквизитов выплат (СБП по телефону).
+
+    Нормализация/валидация телефона и ФИО — в доменной сущности
+    ``PayoutRequisites``; здесь только транспортная форма.
+    """
+
+    sbp_phone: str
+    sbp_bank_id: str
+    last_name: str
+    first_name: str
+    middle_name: str | None = None
+
+
+class PayoutRequisitesResponse(BaseModel):
+    """Реквизиты выплат пользователя (его профиль)."""
+
+    id: uuid.UUID
+    sbp_phone: str
+    sbp_bank_id: str
+    last_name: str
+    first_name: str
+    middle_name: str | None
+    updated_at: datetime
+
+    @classmethod
+    def from_domain(cls, requisites: PayoutRequisites) -> "PayoutRequisitesResponse":
+        return cls(
+            id=requisites.id,
+            sbp_phone=requisites.phone,
+            sbp_bank_id=requisites.sbp_bank_id,
+            last_name=requisites.last_name,
+            first_name=requisites.first_name,
+            middle_name=requisites.middle_name,
+            updated_at=requisites.updated_at,
         )
 
 

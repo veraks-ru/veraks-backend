@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import PlainTextResponse
 
 from app.modules.billing.api.dependencies import (
@@ -25,6 +25,7 @@ from app.modules.billing.api.dependencies import (
     get_dispatch_payout,
     get_list_my_payouts,
     get_list_payouts,
+    get_my_payout_requisites,
     get_my_subscription,
     get_prize_fund,
     get_record_payout_result,
@@ -34,6 +35,7 @@ from app.modules.billing.api.dependencies import (
     get_refund_latest_subscription_payment,
     get_refund_subscription_payment,
     get_start_subscription,
+    get_upsert_my_payout_requisites,
     verified_tbank_payload,
     verify_payment_webhook,
     verify_payout_webhook,
@@ -44,6 +46,8 @@ from app.modules.billing.api.schemas import (
     CreatePayoutRequest,
     PaymentResponse,
     PaymentWebhookRequest,
+    PayoutRequisitesRequest,
+    PayoutRequisitesResponse,
     PayoutResponse,
     PayoutWebhookRequest,
     PlanResponse,
@@ -64,11 +68,13 @@ from app.modules.billing.application.use_cases import (
     CancelSubscription,
     CreatePayout,
     DispatchPayout,
+    GetMyPayoutRequisites,
     GetMySubscription,
     GetPrizeFund,
     GetSeasonPrizeFund,
     ListMyPayouts,
     ListPayouts,
+    UpsertMyPayoutRequisites,
     RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
@@ -134,6 +140,49 @@ async def read_my_payouts(
     """Вернуть выплаты текущего пользователя (новые сверху)."""
     payouts = await uc.execute(user_id=actor.user_id)
     return [PayoutResponse.from_domain(p) for p in payouts]
+
+
+@router.get(
+    "/users/me/payout-requisites",
+    response_model=PayoutRequisitesResponse,
+    summary="Свои реквизиты выплат (СБП)",
+)
+async def read_my_payout_requisites(
+    actor: ActorDep,
+    uc: Annotated[GetMyPayoutRequisites, Depends(get_my_payout_requisites)],
+) -> PayoutRequisitesResponse:
+    """Реквизиты выплат текущего пользователя; 404, если не заполнены."""
+    requisites = await uc.execute(user_id=actor.user_id)
+    if requisites is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Реквизиты выплат не заполнены",
+        )
+    return PayoutRequisitesResponse.from_domain(requisites)
+
+
+@router.put(
+    "/users/me/payout-requisites",
+    response_model=PayoutRequisitesResponse,
+    summary="Сохранить свои реквизиты выплат (СБП)",
+)
+async def upsert_my_payout_requisites(
+    payload: PayoutRequisitesRequest,
+    actor: ActorDep,
+    uc: Annotated[
+        UpsertMyPayoutRequisites, Depends(get_upsert_my_payout_requisites)
+    ],
+) -> PayoutRequisitesResponse:
+    """Создать/обновить реквизиты (одна запись на пользователя)."""
+    requisites = await uc.execute(
+        user_id=actor.user_id,
+        phone=payload.sbp_phone,
+        sbp_bank_id=payload.sbp_bank_id,
+        last_name=payload.last_name,
+        first_name=payload.first_name,
+        middle_name=payload.middle_name,
+    )
+    return PayoutRequisitesResponse.from_domain(requisites)
 
 
 @router.get(

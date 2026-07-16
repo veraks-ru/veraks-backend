@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import uuid
 
-from app.modules.billing.ports.gateways import CheckoutIntent, PayoutInstruction
+from app.modules.billing.ports.gateways import (
+    CheckoutIntent,
+    PayoutInstruction,
+    PayoutRecipient,
+)
 
 
 class YookassaSubscriptionCheckoutGateway:
@@ -49,7 +53,12 @@ class YookassaPayoutGateway:
     """Отправка выплаты физлицу через ЮKassa Payouts/СБП (призовая касса)."""
 
     async def send_payout(
-        self, *, payout_id: uuid.UUID, user_id: uuid.UUID, amount_kopecks: int
+        self,
+        *,
+        payout_id: uuid.UUID,
+        user_id: uuid.UUID,
+        amount_kopecks: int,
+        recipient: PayoutRecipient,
     ) -> PayoutInstruction:
         """TODO(billing-infra): инициировать выплату и вернуть provider_payout_id."""
         raise NotImplementedError(

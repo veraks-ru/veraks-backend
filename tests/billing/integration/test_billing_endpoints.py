@@ -31,13 +31,14 @@ from app.modules.billing.api.dependencies import (
     get_payout_gateway,
     get_payout_notifier,
     get_payout_repository,
+    get_payout_requisite_repository,
     get_prize_fund_repository,
     get_refund_gateway,
     get_season_directory,
     get_subscription_repository,
 )
 from app.modules.billing.domain import chart
-from app.modules.billing.domain.entities import PaymentProvider
+from app.modules.billing.domain.entities import PaymentProvider, PayoutRequisites
 from app.modules.billing.domain.ledger import LedgerAccount, LedgerType
 from app.modules.billing.domain.tbank_signing import make_token
 from app.modules.identity.api.dependencies import get_current_user
@@ -54,6 +55,7 @@ from tests.billing.fakes import (
     InMemoryLedgerRepository,
     InMemoryPaymentRepository,
     InMemoryPayoutRepository,
+    InMemoryPayoutRequisiteRepository,
     InMemoryPrizeFundRepository,
     InMemorySubscriptionRepository,
 )
@@ -85,6 +87,7 @@ class Ctx:
     ledger: InMemoryLedgerRepository
     payments: InMemoryPaymentRepository
     funds: InMemoryPrizeFundRepository
+    requisites: InMemoryPayoutRequisiteRepository
     seasons: FakeSeasonDirectory
     holder: dict
 
@@ -100,6 +103,7 @@ def ctx():
     payments = InMemoryPaymentRepository()
     funds = InMemoryPrizeFundRepository()
     payouts = InMemoryPayoutRepository()
+    requisites = InMemoryPayoutRequisiteRepository()
     audit = FakeAuditTrail()
     seasons = FakeSeasonDirectory()
     holder: dict = {"user": None}
@@ -110,6 +114,7 @@ def ctx():
     app.dependency_overrides[get_payment_repository] = lambda: payments
     app.dependency_overrides[get_prize_fund_repository] = lambda: funds
     app.dependency_overrides[get_payout_repository] = lambda: payouts
+    app.dependency_overrides[get_payout_requisite_repository] = lambda: requisites
     app.dependency_overrides[get_audit_trail] = lambda: audit
     app.dependency_overrides[get_checkout_gateway] = lambda: FakeCheckoutGateway()
     app.dependency_overrides[get_refund_gateway] = lambda: FakeRefundGateway()
@@ -130,7 +135,7 @@ def ctx():
     try:
         yield Ctx(
             client=client, ledger=ledger, payments=payments, funds=funds,
-            seasons=seasons, holder=holder
+            requisites=requisites, seasons=seasons, holder=holder
         )
     finally:
         client.close()
@@ -321,6 +326,7 @@ def test_payout_dispatch_and_webhook_lifecycle(ctx: Ctx) -> None:
     maker = _user(UserRole.ADMIN)
     checker = _user(UserRole.ADMIN)
 
+    winner_id = uuid.uuid4()
     ctx.holder["user"] = maker
     fund_id = ctx.client.post(
         "/admin/prize-funds",
@@ -332,11 +338,20 @@ def test_payout_dispatch_and_webhook_lifecycle(ctx: Ctx) -> None:
     payout_id = ctx.client.post(
         "/admin/payouts",
         json={
-            "user_id": str(uuid.uuid4()),
+            "user_id": str(winner_id),
             "prize_fund_id": fund_id,
             "amount_kopecks": 8_700,
         },
     ).json()["id"]
+    # У победителя заполнены реквизиты СБП — иначе dispatch вернёт 409.
+    await_seed = PayoutRequisites(
+        user_id=winner_id,
+        phone="+79001234567",
+        sbp_bank_id="100000000004",
+        last_name="Иванов",
+        first_name="Пётр",
+    )
+    ctx.requisites.items[winner_id] = await_seed
 
     # checker подтверждает
     ctx.holder["user"] = checker
@@ -545,3 +560,120 @@ def test_refund_endpoint_forbidden_for_user(ctx: Ctx) -> None:
     resp = ctx.client.post(f"/billing/payments/{payment_id}/refund")
 
     assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+# ── Реквизиты выплат (СБП) и авто-dispatch Jump ────────────────────────────
+
+
+_REQUISITES_BODY = {
+    "sbp_phone": "8 (900) 123-45-67",
+    "sbp_bank_id": "100000000004",
+    "last_name": "Иванов",
+    "first_name": "Пётр",
+    "middle_name": None,
+}
+
+
+def test_requisites_require_auth(ctx: Ctx) -> None:
+    """Реквизиты выплат — только для владельца сессии (401 без входа)."""
+    assert (
+        ctx.client.get("/users/me/payout-requisites").status_code
+        == status.HTTP_401_UNAUTHORIZED
+    )
+    assert (
+        ctx.client.put(
+            "/users/me/payout-requisites", json=_REQUISITES_BODY
+        ).status_code
+        == status.HTTP_401_UNAUTHORIZED
+    )
+
+
+def test_requisites_404_until_saved_then_roundtrip(ctx: Ctx) -> None:
+    """PUT сохраняет реквизиты (телефон нормализуется), GET возвращает их."""
+    ctx.holder["user"] = _user(UserRole.USER)
+
+    assert (
+        ctx.client.get("/users/me/payout-requisites").status_code
+        == status.HTTP_404_NOT_FOUND
+    )
+
+    saved = ctx.client.put("/users/me/payout-requisites", json=_REQUISITES_BODY)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["sbp_phone"] == "+79001234567"
+
+    fetched = ctx.client.get("/users/me/payout-requisites")
+    assert fetched.status_code == 200
+    assert fetched.json()["sbp_bank_id"] == "100000000004"
+    assert fetched.json()["last_name"] == "Иванов"
+
+    # Повторный PUT обновляет запись, а не плодит вторую.
+    updated = ctx.client.put(
+        "/users/me/payout-requisites",
+        json={**_REQUISITES_BODY, "sbp_bank_id": "100000000111"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["sbp_bank_id"] == "100000000111"
+    assert updated.json()["id"] == saved.json()["id"]
+
+
+def test_requisites_invalid_phone_rejected(ctx: Ctx) -> None:
+    """Мусорный телефон СБП → 422 с доменной ошибкой."""
+    ctx.holder["user"] = _user(UserRole.USER)
+    resp = ctx.client.put(
+        "/users/me/payout-requisites",
+        json={**_REQUISITES_BODY, "sbp_phone": "не телефон"},
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_dispatch_without_requisites_conflicts(ctx: Ctx) -> None:
+    """Dispatch выплаты получателю без реквизитов → 409, статус не меняется."""
+    maker = _user(UserRole.ADMIN)
+    checker = _user(UserRole.ADMIN)
+
+    ctx.holder["user"] = maker
+    fund_id = ctx.client.post(
+        "/admin/prize-funds",
+        json={"sponsor_name": "Acme", "committed_kopecks": 1_000_000},
+    ).json()["id"]
+    ctx.client.post(
+        f"/admin/prize-funds/{fund_id}/deposit", json={"amount_kopecks": 1_000_000}
+    )
+    payout_id = ctx.client.post(
+        "/admin/payouts",
+        json={
+            "user_id": str(uuid.uuid4()),
+            "prize_fund_id": fund_id,
+            "amount_kopecks": 8_700,
+        },
+    ).json()["id"]
+    ctx.holder["user"] = checker
+    ctx.client.post(f"/admin/payouts/{payout_id}/approve")
+
+    resp = ctx.client.post(f"/admin/payouts/{payout_id}/dispatch")
+
+    assert resp.status_code == status.HTTP_409_CONFLICT, resp.text
+    listed = ctx.client.get("/admin/payouts").json()
+    assert [p["status"] for p in listed if p["id"] == payout_id] == ["approved"]
+
+
+def test_payout_response_exposes_provider_fields(ctx: Ctx) -> None:
+    """Проекция выплаты содержит провайдера и его ссылку (нужно админке)."""
+    maker = _user(UserRole.ADMIN)
+    ctx.holder["user"] = maker
+    fund_id = ctx.client.post(
+        "/admin/prize-funds",
+        json={"sponsor_name": "Acme", "committed_kopecks": 1_000_000},
+    ).json()["id"]
+    payout = ctx.client.post(
+        "/admin/payouts",
+        json={
+            "user_id": str(uuid.uuid4()),
+            "prize_fund_id": fund_id,
+            "amount_kopecks": 100,
+        },
+    ).json()
+    assert payout["provider"] is None
+    assert payout["provider_payout_id"] is None
+    assert payout["paid_at"] is None
+    assert payout["created_at"] is not None

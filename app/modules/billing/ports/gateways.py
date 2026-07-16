@@ -29,6 +29,25 @@ class PayoutInstruction:
 
 
 @dataclass(frozen=True, slots=True)
+class PayoutRecipient:
+    """Получатель выплаты: реквизиты СБП и раздельное ФИО (требование Jump)."""
+
+    phone: str  # "+7XXXXXXXXXX"
+    last_name: str
+    first_name: str
+    middle_name: str | None
+    sbp_bank_id: str  # id банка в СБП (словарь провайдера)
+
+
+@dataclass(frozen=True, slots=True)
+class PayoutStatusView:
+    """Статус выплаты у провайдера при опросе (провайдеры без вебхуков)."""
+
+    status_id: int
+    is_final: bool
+
+
+@dataclass(frozen=True, slots=True)
 class RefundResult:
     """Результат возврата/отмены платежа у провайдера (операционка)."""
 
@@ -61,8 +80,23 @@ class PayoutGateway(Protocol):
         payout_id: uuid.UUID,
         user_id: uuid.UUID,
         amount_kopecks: int,
+        recipient: PayoutRecipient,
     ) -> PayoutInstruction:
-        """Инициировать выплату; вернуть идентификатор у провайдера."""
+        """Инициировать выплату; вернуть идентификатор у провайдера.
+
+        ``payout_id`` — ключ идемпотентности на стороне провайдера.
+        """
+        ...
+
+
+@runtime_checkable
+class PayoutStatusProbe(Protocol):
+    """Опрос статуса выплаты у провайдера (для провайдеров без вебхуков)."""
+
+    async def get_payout_status(
+        self, *, provider_payout_id: str
+    ) -> PayoutStatusView:
+        """Текущий статус выплаты у провайдера."""
         ...
 
 

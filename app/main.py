@@ -76,10 +76,12 @@ from app.modules.billing.domain.errors import (
     CrossLedgerEntryError,
     InsufficientPrizeFundError,
     InvalidAmountError,
+    InvalidRequisiteError,
     LedgerAccountNotFoundError,
     PaymentGatewayError,
     PayoutAlreadyDecidedError,
     PayoutNotFoundError,
+    PayoutRequisitesMissingError,
     PrizeFundNotFoundError,
     SeasonNotFoundError as BillingSeasonNotFoundError,
     SelfApprovalError,
@@ -194,6 +196,9 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     SelfApprovalError: status.HTTP_403_FORBIDDEN,
     PayoutAlreadyDecidedError: status.HTTP_409_CONFLICT,
     InsufficientPrizeFundError: status.HTTP_409_CONFLICT,
+    # Выплату нельзя отправить, пока получатель не заполнил реквизиты СБП.
+    PayoutRequisitesMissingError: status.HTTP_409_CONFLICT,
+    InvalidRequisiteError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     InvalidAmountError: status.HTTP_400_BAD_REQUEST,
     # Отказ/сбой внешнего платёжного шлюза — 502.
     PaymentGatewayError: status.HTTP_502_BAD_GATEWAY,

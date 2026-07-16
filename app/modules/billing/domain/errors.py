@@ -102,3 +102,11 @@ class SelfApprovalError(BillingError):
 
 class InsufficientPrizeFundError(BillingError):
     """В фонде недостаточно средств для выплаты."""
+
+
+class InvalidRequisiteError(BillingError):
+    """Некорректные реквизиты выплаты (телефон СБП, банк, ФИО)."""
+
+
+class PayoutRequisitesMissingError(BillingError):
+    """У получателя выплаты не заполнены реквизиты — отправка невозможна."""

@@ -12,6 +12,9 @@ from typing import Protocol, runtime_checkable
 
 from app.modules.billing.domain.entities import (
     Payment,
+    PaymentProvider,
+    PayoutRequisites,
+    PayoutStatus,
     PrizeFund,
     Payout,
     Subscription,
@@ -169,6 +172,35 @@ class PayoutRepository(Protocol):
         """Выплаты из конкретного фонда, новые сверху (кабинет спонсора)."""
         ...
 
+    async def list_by_status(
+        self,
+        status: PayoutStatus,
+        *,
+        provider: PaymentProvider | None = None,
+    ) -> list[Payout]:
+        """Выплаты в статусе (опц. по провайдеру), старые сверху (FIFO).
+
+        Для воркера: скан ``approved`` на отправку и ``processing`` на опрос.
+        """
+        ...
+
     async def update(self, payout: Payout) -> Payout:
         """Синхронизировать изменяемые поля (статус, approver, provider, paid_at)."""
+        ...
+
+
+@runtime_checkable
+class PayoutRequisiteRepository(Protocol):
+    """Реквизиты выплат пользователя (СБП). Одна запись на пользователя.
+
+    ПДн (телефон, ФИО) шифруются адаптером при хранении; наружу отдаются
+    открытые значения.
+    """
+
+    async def get_by_user(self, user_id: uuid.UUID) -> PayoutRequisites | None:
+        """Реквизиты пользователя или ``None``."""
+        ...
+
+    async def upsert(self, requisites: PayoutRequisites) -> PayoutRequisites:
+        """Создать или заменить реквизиты пользователя (``UNIQUE(user_id)``)."""
         ...

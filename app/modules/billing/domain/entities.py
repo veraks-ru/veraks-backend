@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from app.modules.billing.domain.errors import (
     InvalidAmountError,
+    InvalidRequisiteError,
     PayoutAlreadyDecidedError,
 )
 
@@ -51,6 +52,7 @@ class PaymentProvider(str, enum.Enum):
 
     YOOKASSA = "yookassa"
     TBANK = "tbank"
+    JUMP = "jump"
 
 
 class PaymentStatus(str, enum.Enum):
@@ -263,3 +265,51 @@ class Payout:
                 f"{self.status.value}"
             )
         self.status = PayoutStatus.FAILED
+
+
+def _normalize_sbp_phone(raw: str) -> str:
+    """Нормализовать телефон СБП к виду ``+7XXXXXXXXXX``.
+
+    Принимаются записи с пробелами/скобками/дефисами и префиксами
+    ``8``/``7``/``+7``; всё остальное — :class:`InvalidRequisiteError`.
+    """
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if raw.strip().startswith("+") and not raw.strip().startswith("+7"):
+        raise InvalidRequisiteError(f"Телефон СБП должен быть российским: {raw!r}")
+    if len(digits) != 11 or digits[0] not in ("7", "8"):
+        raise InvalidRequisiteError(f"Некорректный телефон СБП: {raw!r}")
+    return f"+7{digits[1:]}"
+
+
+@dataclass
+class PayoutRequisites:
+    """Реквизиты выплат пользователя: СБП по номеру телефона.
+
+    Единственный поддерживаемый маршрут выплат — СБП; карты не храним.
+    ФИО пользователь вводит раздельными полями (Jump требует их порознь,
+    а в identity ФИО хранится одной строкой). ПДн шифруются адаптером
+    хранения, домен работает с открытыми значениями.
+    """
+
+    user_id: uuid.UUID
+    phone: str
+    sbp_bank_id: str
+    last_name: str
+    first_name: str
+    middle_name: str | None = None
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
+
+    def __post_init__(self) -> None:
+        self.phone = _normalize_sbp_phone(self.phone)
+        self.sbp_bank_id = self.sbp_bank_id.strip()
+        self.last_name = self.last_name.strip()
+        self.first_name = self.first_name.strip()
+        if self.middle_name is not None:
+            self.middle_name = self.middle_name.strip() or None
+        if not self.sbp_bank_id.isdigit():
+            # У Jump id банка СБП — целое число (словарь /dictionaries).
+            raise InvalidRequisiteError("Не указан банк СБП")
+        if not self.last_name or not self.first_name:
+            raise InvalidRequisiteError("Фамилия и имя обязательны")

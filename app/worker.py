@@ -37,8 +37,24 @@ from app.modules.predictions.adapters.repository import (
     SqlAlchemyPredictionRepository,
 )
 from app.modules.predictions.application.use_cases import LockEventPredictions
-from app.modules.billing.adapters.repositories import SqlAlchemyLedgerRepository
-from app.modules.billing.application.use_cases import ReconcileLedger
+import httpx
+
+from app.modules.billing.adapters.clock import SystemClock as BillingClock
+from app.modules.billing.adapters.jump_gateway import JumpGateway
+from app.modules.billing.adapters.repositories import (
+    SqlAlchemyLedgerRepository,
+    SqlAlchemyPayoutRepository,
+    SqlAlchemyPayoutRequisiteRepository,
+)
+from app.modules.billing.application.use_cases import (
+    DispatchApprovedPayouts,
+    DispatchPayout,
+    PollPayoutStatuses,
+    ReconcileLedger,
+    RecordPayoutResult,
+)
+from app.modules.billing.domain.errors import BillingError, PaymentGatewayError
+from app.modules.identity.adapters.security import FernetFieldEncryptor
 from app.modules.scoring.adapters.clock import SystemClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
 from app.modules.scoring.adapters.scoring_gateway import (
@@ -305,6 +321,89 @@ async def reconcile(_ctx: dict[Any, Any]) -> int:
     return imbalanced
 
 
+def _payout_requisites(session: Any) -> SqlAlchemyPayoutRequisiteRepository:
+    """Репозиторий реквизитов с энкриптором ПДн (ключ — как в identity)."""
+    settings = get_settings()
+    return SqlAlchemyPayoutRequisiteRepository(
+        session, FernetFieldEncryptor(settings.security.field_encryption_key)
+    )
+
+
+async def dispatch_approved_payouts(_ctx: dict[Any, Any]) -> int:
+    """Авто-отправка подтверждённых выплат в Jump (``approved → processing``).
+
+    Первой сессией собирает id кандидатов, затем отправляет каждую выплату в
+    ОТДЕЛЬНОЙ транзакции: сбой/откат одной (нет реквизитов, отказ Jump) не
+    задевает остальные. Идемпотентность повтора — FOR UPDATE + статусная
+    машина у нас и ``customer_payment_id`` (uuid выплаты) на стороне Jump.
+    No-op при выключенной интеграции.
+    """
+    settings = get_settings()
+    if not settings.jump.enabled:
+        return 0
+    async with session_scope() as session:
+        candidate_ids = await DispatchApprovedPayouts(
+            payouts=SqlAlchemyPayoutRepository(session)
+        ).list_dispatchable_ids()
+    if not candidate_ids:
+        return 0
+
+    dispatched = 0
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        gateway = JumpGateway(settings.jump, client)
+        for payout_id in candidate_ids:
+            try:
+                async with session_scope() as session:
+                    uc = DispatchPayout(
+                        payouts=SqlAlchemyPayoutRepository(session),
+                        gateway=gateway,
+                        requisites=_payout_requisites(session),
+                        audit=SqlAlchemyAuditTrail(session),
+                        clock=BillingClock(),
+                    )
+                    await uc.execute(actor=None, payout_id=payout_id)
+                dispatched += 1
+            except (PaymentGatewayError, BillingError) as exc:
+                # Нет реквизитов / отказ Jump / гонка статуса: выплата остаётся
+                # approved (или уже обработана) — следующий тик повторит.
+                logger.warning("dispatch payout %s: %s", payout_id, exc)
+    logger.info(
+        "dispatch_approved_payouts: %d/%d отправлено", dispatched, len(candidate_ids)
+    )
+    return dispatched
+
+
+async def poll_jump_payouts(_ctx: dict[Any, Any]) -> int:
+    """Опрос статусов выплат Jump до ``is_final`` (вебхуков у Jump нет).
+
+    Терминальные исходы фиксирует идемпотентный ``RecordPayoutResult``;
+    победитель получает уведомление. No-op при выключенной интеграции.
+    """
+    settings = get_settings()
+    if not settings.jump.enabled:
+        return 0
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        async with session_scope() as session:
+            payouts = SqlAlchemyPayoutRepository(session)
+            clock = BillingClock()
+            uc = PollPayoutStatuses(
+                payouts=payouts,
+                probe=JumpGateway(settings.jump, client),
+                recorder=RecordPayoutResult(
+                    payouts=payouts,
+                    audit=SqlAlchemyAuditTrail(session),
+                    clock=clock,
+                ),
+                notifier=PushingNotificationEmitter(
+                    SqlAlchemyNotificationRepository(session),
+                    GoctopusPusher(settings.realtime),
+                ),
+            )
+            finalized = await uc.execute()
+    logger.info("poll_jump_payouts: %d выплат финализировано", finalized)
+    return finalized
+
+
 class WorkerSettings:
     """Настройки arq-воркера: задачи и расписание."""
 
@@ -315,6 +414,8 @@ class WorkerSettings:
         close_dispute_windows,
         close_expired_events,
         reconcile,
+        dispatch_approved_payouts,
+        poll_jump_payouts,
     ]
     cron_jobs = [
         # Ночной полный пересчёт рейтингов.
@@ -332,5 +433,11 @@ class WorkerSettings:
         cron(close_expired_events),  # type: ignore[arg-type]
         # Сверка баланса книг — ежечасно (раннее обнаружение рассогласований).
         cron(reconcile, minute=7),  # type: ignore[arg-type]
+        # Авто-отправка подтверждённых выплат в Jump — каждую минуту
+        # (enqueue из HTTP-приложения нет — у него нет ARQ-пула).
+        cron(dispatch_approved_payouts),  # type: ignore[arg-type]
+        # Опрос статусов выплат Jump — каждые 2 минуты (Jump просит опрашивать
+        # не чаще раза в минуту; вебхуков у Jump нет).
+        cron(poll_jump_payouts, minute=set(range(0, 60, 2))),  # type: ignore[arg-type]
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

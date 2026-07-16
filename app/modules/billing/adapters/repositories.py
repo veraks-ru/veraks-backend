@@ -18,16 +18,21 @@ from app.modules.billing.adapters.orm import (
     LedgerTransactionORM,
     PaymentORM,
     PayoutORM,
+    PayoutRequisitesORM,
     PrizeFundORM,
     SubscriptionORM,
 )
 from app.modules.billing.domain.entities import (
     Payment,
+    PaymentProvider,
     PaymentStatus,
     Payout,
+    PayoutRequisites,
+    PayoutStatus,
     PrizeFund,
     Subscription,
 )
+from app.modules.billing.ports.crypto import FieldEncryptor
 from app.modules.billing.domain.ledger import (
     EntryDirection,
     LedgerAccount,
@@ -350,6 +355,22 @@ class SqlAlchemyPayoutRepository:
         rows = (await self._session.execute(stmt)).scalars().all()
         return [orm.to_domain() for orm in rows]
 
+    async def list_by_status(
+        self,
+        status: PayoutStatus,
+        *,
+        provider: PaymentProvider | None = None,
+    ) -> list[Payout]:
+        stmt = (
+            select(PayoutORM)
+            .where(PayoutORM.status == status)
+            .order_by(PayoutORM.created_at)
+        )
+        if provider is not None:
+            stmt = stmt.where(PayoutORM.provider == provider)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [orm.to_domain() for orm in rows]
+
     async def update(self, payout: Payout) -> Payout:
         orm = await self._session.get(PayoutORM, payout.id)
         if orm is None:  # pragma: no cover
@@ -362,3 +383,60 @@ class SqlAlchemyPayoutRepository:
         orm.paid_at = payout.paid_at
         await self._session.flush()
         return orm.to_domain()
+
+
+class SqlAlchemyPayoutRequisiteRepository:
+    """Реквизиты выплат пользователя; ПДн шифруются переданным энкриптором."""
+
+    def __init__(self, session: AsyncSession, encryptor: FieldEncryptor) -> None:
+        self._session = session
+        self._crypto = encryptor
+
+    def _to_domain(self, orm: PayoutRequisitesORM) -> PayoutRequisites:
+        return PayoutRequisites(
+            id=orm.id,
+            user_id=orm.user_id,
+            phone=self._crypto.decrypt(orm.sbp_phone_enc),
+            sbp_bank_id=orm.sbp_bank_id,
+            last_name=self._crypto.decrypt(orm.last_name_enc),
+            first_name=self._crypto.decrypt(orm.first_name_enc),
+            middle_name=(
+                self._crypto.decrypt(orm.middle_name_enc)
+                if orm.middle_name_enc is not None
+                else None
+            ),
+            created_at=orm.created_at,
+            updated_at=orm.updated_at,
+        )
+
+    async def get_by_user(self, user_id: uuid.UUID) -> PayoutRequisites | None:
+        stmt = select(PayoutRequisitesORM).where(
+            PayoutRequisitesORM.user_id == user_id
+        )
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
+        return self._to_domain(orm) if orm else None
+
+    async def upsert(self, requisites: PayoutRequisites) -> PayoutRequisites:
+        stmt = select(PayoutRequisitesORM).where(
+            PayoutRequisitesORM.user_id == requisites.user_id
+        )
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
+        if orm is None:
+            orm = PayoutRequisitesORM(
+                id=requisites.id,
+                user_id=requisites.user_id,
+                created_at=requisites.created_at,
+            )
+            self._session.add(orm)
+        orm.sbp_phone_enc = self._crypto.encrypt(requisites.phone)
+        orm.sbp_bank_id = requisites.sbp_bank_id
+        orm.last_name_enc = self._crypto.encrypt(requisites.last_name)
+        orm.first_name_enc = self._crypto.encrypt(requisites.first_name)
+        orm.middle_name_enc = (
+            self._crypto.encrypt(requisites.middle_name)
+            if requisites.middle_name is not None
+            else None
+        )
+        orm.updated_at = requisites.updated_at
+        await self._session.flush()
+        return self._to_domain(orm)

@@ -438,3 +438,34 @@ class PayoutORM(Base):
             created_at=payout.created_at,
             paid_at=payout.paid_at,
         )
+
+
+class PayoutRequisitesORM(Base):
+    """Таблица ``payout_requisites`` — реквизиты выплат пользователя (СБП).
+
+    ПДн (телефон, ФИО) лежат шифрованными (Fernet); маппинг в доменную
+    сущность делает репозиторий, которому передан ``FieldEncryptor`` — ORM
+    о ключах не знает.
+    """
+
+    __tablename__ = "payout_requisites"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    sbp_phone_enc: Mapped[bytes] = mapped_column(nullable=False)
+    sbp_bank_id: Mapped[str] = mapped_column(Text, nullable=False)
+    last_name_enc: Mapped[bytes] = mapped_column(nullable=False)
+    first_name_enc: Mapped[bytes] = mapped_column(nullable=False)
+    middle_name_enc: Mapped[bytes | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )

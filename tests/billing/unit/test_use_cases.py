@@ -352,15 +352,33 @@ def _approved_payout(amount=8_700, **over):
     )
 
 
-def _dispatch_uc(payouts):
+def _dispatch_uc(payouts, requisites=None):
     from app.modules.billing.application.use_cases import DispatchPayout
-    from tests.billing.fakes import FakeAuditTrail, FakeClock, FakePayoutGateway
+    from tests.billing.fakes import (
+        FakeAuditTrail,
+        FakeClock,
+        FakePayoutGateway,
+        InMemoryPayoutRequisiteRepository,
+    )
 
     return DispatchPayout(
         payouts=payouts,
         gateway=FakePayoutGateway(),
+        requisites=requisites or InMemoryPayoutRequisiteRepository(),
         audit=FakeAuditTrail(),
         clock=FakeClock(FIXED_NOW),
+    )
+
+
+def _requisites_for(user_id):
+    from app.modules.billing.domain.entities import PayoutRequisites
+
+    return PayoutRequisites(
+        user_id=user_id,
+        phone="+79001234567",
+        sbp_bank_id="100000000004",
+        last_name="Иванов",
+        first_name="Пётр",
     )
 
 
@@ -378,12 +396,18 @@ async def test_dispatch_payout_sends_and_marks_processing() -> None:
     from app.modules.identity.domain.entities import UserRole
     from tests.billing.fakes import InMemoryPayoutRepository
 
+    from tests.billing.fakes import InMemoryPayoutRequisiteRepository
+
     payouts = InMemoryPayoutRepository()
     payout = _approved_payout()
     await payouts.add(payout)
+    requisites = InMemoryPayoutRequisiteRepository()
+    await requisites.upsert(_requisites_for(payout.user_id))
     admin = Actor(user_id=uuid.uuid4(), role=UserRole.ADMIN)
 
-    saved = await _dispatch_uc(payouts).execute(actor=admin, payout_id=payout.id)
+    saved = await _dispatch_uc(payouts, requisites).execute(
+        actor=admin, payout_id=payout.id
+    )
 
     assert saved.status is PayoutStatus.PROCESSING
     assert saved.provider is PaymentProvider.YOOKASSA

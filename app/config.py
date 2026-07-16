@@ -102,6 +102,28 @@ class TBankSettings(BaseSettings):
     receipt_email: str = ""
 
 
+class JumpSettings(BaseSettings):
+    """Выплаты победителям через Jump.Finance (касса PRIZE, СБП по телефону).
+
+    ``api_key`` — Client-Key из ЛК Jump (Настройки → Интеграции → OpenAPI);
+    показывается один раз, только из env/секрета. Песочницы у Jump нет:
+    безопасное тестирование — режим «Требующие подтверждения» в ЛК (выплата
+    создаётся, деньги не двигаются до ручного подтверждения). Вебхуков нет —
+    статусы опрашивает воркер. ``enabled=False`` — интеграция выключена.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="JUMP_", extra="ignore")
+
+    enabled: bool = False
+    api_key: str = ""
+    api_base_url: str = "https://api.jump.finance/services/openapi"
+    # id юрлица и счёта в Jump (GET /banks_accounts); фиксируются в env.
+    agent_id: int | None = None
+    bank_account_id: int | None = None
+    # Правовая форма исполнителя: 1 — физлицо (НДФЛ удерживает платформа).
+    legal_form_id: int = 1
+
+
 class RealtimeSettings(BaseSettings):
     """Пуш in-app уведомлений в реальном времени через goctopus (WS-релей).
 
@@ -175,6 +197,7 @@ class Settings(BaseSettings):
     webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
     b2b: B2bSettings = Field(default_factory=B2bSettings)
     tbank: TBankSettings = Field(default_factory=TBankSettings)
+    jump: JumpSettings = Field(default_factory=JumpSettings)
 
     # Публичные базовые URL для платёжных редиректов и вебхуков ТБанк.
     public_web_base: str = "https://veraks.ru"
@@ -199,6 +222,13 @@ class Settings(BaseSettings):
                 required += [
                     ("TBANK_TERMINAL_KEY", self.tbank.terminal_key),
                     ("TBANK_PASSWORD", self.tbank.password),
+                ]
+            # Jump вебхуков не имеет, но без ключа и юрлица выплаты не
+            # отправить — при включённой интеграции они обязательны.
+            if self.jump.enabled:
+                required += [
+                    ("JUMP_API_KEY", self.jump.api_key),
+                    ("JUMP_AGENT_ID", str(self.jump.agent_id or "")),
                 ]
             missing = [name for name, value in required if not value]
             if missing:

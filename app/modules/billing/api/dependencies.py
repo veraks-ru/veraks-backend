@@ -28,11 +28,13 @@ from app.modules.billing.adapters.gateways import (
     YookassaPayoutGateway,
     YookassaSubscriptionCheckoutGateway,
 )
+from app.modules.billing.adapters.jump_gateway import JumpGateway
 from app.modules.billing.adapters.tbank_gateway import TBankGateway
 from app.modules.billing.adapters.repositories import (
     SqlAlchemyLedgerRepository,
     SqlAlchemyPaymentRepository,
     SqlAlchemyPayoutRepository,
+    SqlAlchemyPayoutRequisiteRepository,
     SqlAlchemyPrizeFundRepository,
     SqlAlchemySubscriptionRepository,
 )
@@ -44,6 +46,7 @@ from app.modules.billing.application.use_cases import (
     CancelSubscription,
     CreatePayout,
     DispatchPayout,
+    GetMyPayoutRequisites,
     GetMySponsorFund,
     GetMySubscription,
     GetPrizeFund,
@@ -57,11 +60,13 @@ from app.modules.billing.application.use_cases import (
     RefundLatestSubscriptionPayment,
     RefundSubscriptionPayment,
     StartSubscription,
+    UpsertMyPayoutRequisites,
 )
 from app.modules.billing.domain.entities import SubscriptionPlan
 from app.modules.billing.domain.tbank_signing import verify_token
 from app.modules.billing.domain.webhooks import verify_signature
 from app.modules.billing.ports.clock import Clock
+from app.modules.billing.ports.crypto import FieldEncryptor
 from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.ports.gateways import (
     PaymentRefundGateway,
@@ -73,9 +78,11 @@ from app.modules.billing.ports.repositories import (
     LedgerRepository,
     PaymentRepository,
     PayoutRepository,
+    PayoutRequisiteRepository,
     PrizeFundRepository,
     SubscriptionRepository,
 )
+from app.modules.identity.adapters.security import FernetFieldEncryptor
 from app.modules.identity.api.dependencies import CurrentUser
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from app.shared.audit.ports.audit_trail import AuditTrail
@@ -116,6 +123,21 @@ def get_payout_repository(session: SessionDep) -> PayoutRepository:
     return SqlAlchemyPayoutRepository(session)
 
 
+def get_field_encryptor(settings: SettingsDep) -> FieldEncryptor:
+    """Шифрование ПДн реквизитов — тем же ключом, что identity."""
+    return FernetFieldEncryptor(settings.security.field_encryption_key)
+
+
+FieldEncryptorDep = Annotated[FieldEncryptor, Depends(get_field_encryptor)]
+
+
+def get_payout_requisite_repository(
+    session: SessionDep, encryptor: FieldEncryptorDep
+) -> PayoutRequisiteRepository:
+    """Репозиторий реквизитов выплат (ПДн шифруются на записи)."""
+    return SqlAlchemyPayoutRequisiteRepository(session, encryptor)
+
+
 async def get_http_client() -> AsyncIterator[httpx.AsyncClient]:
     """HTTP-клиент для внешних платёжных вызовов (ТБанк)."""
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -154,8 +176,12 @@ def get_refund_gateway(
     return _tbank_gateway(settings, client)
 
 
-def get_payout_gateway() -> PayoutGateway:
-    """Шлюз выплат физлицам (TODO(billing-infra): реальная интеграция)."""
+def get_payout_gateway(
+    settings: SettingsDep, client: HttpClientDep
+) -> PayoutGateway:
+    """Шлюз выплат физлицам: Jump.Finance (СБП), если включён."""
+    if settings.jump.enabled:
+        return JumpGateway(settings.jump, client)
     return YookassaPayoutGateway()
 
 
@@ -177,6 +203,9 @@ SubscriptionRepoDep = Annotated[
 PaymentRepoDep = Annotated[PaymentRepository, Depends(get_payment_repository)]
 PrizeFundRepoDep = Annotated[PrizeFundRepository, Depends(get_prize_fund_repository)]
 PayoutRepoDep = Annotated[PayoutRepository, Depends(get_payout_repository)]
+PayoutRequisiteRepoDep = Annotated[
+    PayoutRequisiteRepository, Depends(get_payout_requisite_repository)
+]
 CheckoutGatewayDep = Annotated[
     SubscriptionCheckoutGateway, Depends(get_checkout_gateway)
 ]
@@ -348,13 +377,34 @@ def get_list_my_payouts(payouts: PayoutRepoDep) -> ListMyPayouts:
 def get_dispatch_payout(
     payouts: PayoutRepoDep,
     gateway: PayoutGatewayDep,
+    requisites: PayoutRequisiteRepoDep,
     audit: AuditDep,
     clock: ClockDep,
 ) -> DispatchPayout:
     """Use-case отправки подтверждённой выплаты провайдеру."""
     return DispatchPayout(
-        payouts=payouts, gateway=gateway, audit=audit, clock=clock
+        payouts=payouts,
+        gateway=gateway,
+        requisites=requisites,
+        audit=audit,
+        clock=clock,
     )
+
+
+def get_upsert_my_payout_requisites(
+    requisites: PayoutRequisiteRepoDep, audit: AuditDep, clock: ClockDep
+) -> UpsertMyPayoutRequisites:
+    """Use-case сохранения своих реквизитов выплат."""
+    return UpsertMyPayoutRequisites(
+        requisites=requisites, audit=audit, clock=clock
+    )
+
+
+def get_my_payout_requisites(
+    requisites: PayoutRequisiteRepoDep,
+) -> GetMyPayoutRequisites:
+    """Use-case чтения своих реквизитов выплат."""
+    return GetMyPayoutRequisites(requisites=requisites)
 
 
 def get_record_payout_result(

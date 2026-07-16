@@ -11,6 +11,7 @@ FastAPI/SQLAlchemy. Любое движение денег идёт строго
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass as _sponsor_dataclass
 from collections.abc import Mapping
@@ -30,11 +31,13 @@ from app.modules.billing.domain.entities import (
     PaymentStatus,
     PrizeFund,
     Payout,
+    PayoutRequisites,
     PayoutStatus,
     Subscription,
     SubscriptionPlan,
     SubscriptionStatus,
 )
+from app.modules.billing.domain.jump import map_jump_status
 from app.modules.billing.domain.errors import (
     BillingPermissionError,
     InsufficientPrizeFundError,
@@ -44,6 +47,7 @@ from app.modules.billing.domain.errors import (
     PaymentNotFoundError,
     PayoutAlreadyDecidedError,
     PayoutNotFoundError,
+    PayoutRequisitesMissingError,
     PrizeFundNotFoundError,
     SeasonNotFoundError,
     SubscriptionNotFoundError,
@@ -70,6 +74,8 @@ from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.gateways import (
     PaymentRefundGateway,
     PayoutGateway,
+    PayoutRecipient,
+    PayoutStatusProbe,
     SeasonDirectory,
     SubscriptionCheckoutGateway,
 )
@@ -77,12 +83,15 @@ from app.modules.billing.ports.repositories import (
     LedgerRepository,
     PaymentRepository,
     PayoutRepository,
+    PayoutRequisiteRepository,
     PrizeFundRepository,
     SubscriptionRepository,
 )
 from app.modules.identity.domain.entities import UserRole
 from app.shared.audit.domain.entities import AuditActorType
 from app.shared.audit.ports.audit_trail import AuditTrail
+
+_logger = logging.getLogger(__name__)
 
 _ACTOR_TYPE_BY_ROLE: dict[UserRole, AuditActorType] = {
     UserRole.USER: AuditActorType.USER,
@@ -918,8 +927,10 @@ class DispatchPayout:
     """Отправка подтверждённой выплаты провайдеру (``approved → processing``).
 
     Вызывает шлюз выплат физлицам и фиксирует ``provider``/``provider_payout_id``
-    для последующего сопоставления с вебхуком. Проводка кассы PRIZE уже сделана
-    на шаге подтверждения — здесь только внешняя отправка и смена статуса.
+    для последующего сопоставления результата (вебхук или опрос). Проводка
+    кассы PRIZE уже сделана на шаге подтверждения — здесь только внешняя
+    отправка и смена статуса. ``actor=None`` — системный вызов из воркера
+    (авто-dispatch): RBAC не применяется, аудит пишется от SYSTEM.
     """
 
     def __init__(
@@ -927,17 +938,20 @@ class DispatchPayout:
         *,
         payouts: PayoutRepository,
         gateway: PayoutGateway,
+        requisites: PayoutRequisiteRepository,
         audit: AuditTrail,
         clock: Clock,
     ) -> None:
         self._payouts = payouts
         self._gateway = gateway
+        self._requisites = requisites
         self._audit = audit
         self._clock = clock
 
-    async def execute(self, *, actor: Actor, payout_id: uuid.UUID) -> Payout:
+    async def execute(self, *, actor: Actor | None, payout_id: uuid.UUID) -> Payout:
         """Отправляет выплату провайдеру и переводит её в ``processing``."""
-        ensure_can_approve_payout(actor.role)
+        if actor is not None:
+            ensure_can_approve_payout(actor.role)
         payout = await self._payouts.get_for_update(payout_id)
         if payout is None:
             raise PayoutNotFoundError(str(payout_id))
@@ -948,6 +962,13 @@ class DispatchPayout:
             raise PayoutAlreadyDecidedError(
                 f"Выплата в статусе {payout.status.value}, ожидался approved"
             )
+        # Реквизиты — тоже ДО внешнего вызова: без них выплата остаётся
+        # approved и уйдёт автоматически, как только получатель их заполнит.
+        requisites = await self._requisites.get_by_user(payout.user_id)
+        if requisites is None:
+            raise PayoutRequisitesMissingError(
+                "У получателя не заполнены реквизиты выплат (СБП)"
+            )
 
         # payout.id — идемпотентный ключ на стороне провайдера: повтор отправки
         # той же выплаты не создаёт второй перевод.
@@ -955,6 +976,13 @@ class DispatchPayout:
             payout_id=payout.id,
             user_id=payout.user_id,
             amount_kopecks=payout.amount_kopecks,
+            recipient=PayoutRecipient(
+                phone=requisites.phone,
+                last_name=requisites.last_name,
+                first_name=requisites.first_name,
+                middle_name=requisites.middle_name,
+                sbp_bank_id=requisites.sbp_bank_id,
+            ),
         )
         payout.mark_processing(
             provider=PaymentProvider(instruction.provider),
@@ -962,8 +990,12 @@ class DispatchPayout:
         )
         saved = await self._payouts.update(payout)
         await self._audit.record(
-            actor_id=actor.user_id,
-            actor_type=_actor_type(actor.role),
+            actor_id=actor.user_id if actor is not None else None,
+            actor_type=(
+                _actor_type(actor.role)
+                if actor is not None
+                else AuditActorType.SYSTEM
+            ),
             action="prize.payout.dispatched",
             entity_type="payout",
             entity_id=saved.id,
@@ -1028,6 +1060,166 @@ class RecordPayoutResult:
             metadata={"provider": provider.value, "provider_payout_id": provider_payout_id},
         )
         return saved
+
+
+# ── Реквизиты выплат и фоновые задачи Jump (авто-dispatch, опрос) ───────────
+
+
+def _mask_phone(phone: str) -> str:
+    """Маска телефона для аудита/логов: ПДн наружу не отдаём."""
+    return f"{phone[:2]}***{phone[-4:]}"
+
+
+class UpsertMyPayoutRequisites:
+    """Пользователь сохраняет свои реквизиты выплат (СБП по телефону).
+
+    Одна запись на пользователя: повторное сохранение обновляет её
+    (id стабилен). В аудит пишутся только банк и маска телефона.
+    """
+
+    def __init__(
+        self,
+        *,
+        requisites: PayoutRequisiteRepository,
+        audit: AuditTrail,
+        clock: Clock,
+    ) -> None:
+        self._requisites = requisites
+        self._audit = audit
+        self._clock = clock
+
+    async def execute(
+        self,
+        *,
+        user_id: uuid.UUID,
+        phone: str,
+        sbp_bank_id: str,
+        last_name: str,
+        first_name: str,
+        middle_name: str | None,
+    ) -> PayoutRequisites:
+        """Создаёт или обновляет реквизиты; валидация — в доменной сущности."""
+        existing = await self._requisites.get_by_user(user_id)
+        now = self._clock.now()
+        requisites = PayoutRequisites(
+            user_id=user_id,
+            phone=phone,
+            sbp_bank_id=sbp_bank_id,
+            last_name=last_name,
+            first_name=first_name,
+            middle_name=middle_name,
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+            id=existing.id if existing else uuid.uuid4(),
+        )
+        saved = await self._requisites.upsert(requisites)
+        await self._audit.record(
+            actor_id=user_id,
+            actor_type=AuditActorType.USER,
+            action="prize.requisites.updated",
+            entity_type="payout_requisites",
+            entity_id=saved.id,
+            after={
+                "sbp_bank_id": saved.sbp_bank_id,
+                "phone_mask": _mask_phone(saved.phone),
+            },
+        )
+        return saved
+
+
+class GetMyPayoutRequisites:
+    """Реквизиты выплат пользователя (его профиль) или ``None``."""
+
+    def __init__(self, *, requisites: PayoutRequisiteRepository) -> None:
+        self._requisites = requisites
+
+    async def execute(self, *, user_id: uuid.UUID) -> PayoutRequisites | None:
+        return await self._requisites.get_by_user(user_id)
+
+
+class DispatchApprovedPayouts:
+    """Очередь авто-отправки: id подтверждённых выплат (FIFO).
+
+    Сам dispatch воркер выполняет по одной выплате в отдельной сессии —
+    ошибка/откат одной не задевает остальные.
+    """
+
+    def __init__(self, *, payouts: PayoutRepository) -> None:
+        self._payouts = payouts
+
+    async def list_dispatchable_ids(self) -> list[uuid.UUID]:
+        approved = await self._payouts.list_by_status(PayoutStatus.APPROVED)
+        return [p.id for p in approved]
+
+
+class PollPayoutStatuses:
+    """Опрос статусов выплат Jump до ``is_final`` (вебхуков у Jump нет).
+
+    Берёт ``processing``-выплаты провайдера Jump, спрашивает статус и
+    терминальные исходы фиксирует через идемпотентный
+    :class:`RecordPayoutResult`. Ошибка опроса одной выплаты не роняет
+    остальные. Возвращает число финализированных выплат.
+    """
+
+    def __init__(
+        self,
+        *,
+        payouts: PayoutRepository,
+        probe: PayoutStatusProbe,
+        recorder: RecordPayoutResult,
+        notifier: Notifier | None = None,
+    ) -> None:
+        self._payouts = payouts
+        self._probe = probe
+        self._recorder = recorder
+        self._notifier = notifier
+
+    async def execute(self) -> int:
+        pending = await self._payouts.list_by_status(
+            PayoutStatus.PROCESSING, provider=PaymentProvider.JUMP
+        )
+        finalized = 0
+        for payout in pending:
+            if payout.provider_payout_id is None:  # pragma: no cover — инвариант
+                continue
+            try:
+                view = await self._probe.get_payout_status(
+                    provider_payout_id=payout.provider_payout_id
+                )
+                succeeded = map_jump_status(view.status_id, is_final=view.is_final)
+                if succeeded is None:
+                    continue
+                saved = await self._recorder.execute(
+                    provider=PaymentProvider.JUMP,
+                    provider_payout_id=payout.provider_payout_id,
+                    succeeded=succeeded,
+                )
+            except Exception:  # noqa: BLE001 — изолируем сбой одной выплаты
+                _logger.exception(
+                    "Опрос выплаты Jump %s не удался", payout.provider_payout_id
+                )
+                continue
+            finalized += 1
+            if self._notifier is not None:
+                if succeeded:
+                    await self._notifier.emit(
+                        user_id=saved.user_id,
+                        kind="payout.paid",
+                        title="Приз выплачен",
+                        body="Выплата отправлена по СБП на ваш номер",
+                        entity_type="payout",
+                        entity_id=saved.id,
+                    )
+                else:
+                    await self._notifier.emit(
+                        user_id=saved.user_id,
+                        kind="payout.failed",
+                        title="Выплата не прошла",
+                        body="Проверьте реквизиты выплат в профиле — мы повторим перевод",
+                        entity_type="payout",
+                        entity_id=saved.id,
+                    )
+        return finalized
 
 
 # ── Кабинет спонсора (read) ──────────────────────────────────────────────────

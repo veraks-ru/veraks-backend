@@ -14,11 +14,15 @@ from typing import Any
 
 from app.modules.billing.domain.entities import (
     Payment,
+    PaymentProvider,
     PaymentStatus,
     Payout,
+    PayoutRequisites,
+    PayoutStatus,
     PrizeFund,
     Subscription,
 )
+from app.modules.billing.domain.errors import PaymentGatewayError
 from app.modules.billing.domain.ledger import (
     EntryDirection,
     LedgerAccount,
@@ -28,6 +32,8 @@ from app.modules.billing.domain.ledger import (
 from app.modules.billing.ports.gateways import (
     CheckoutIntent,
     PayoutInstruction,
+    PayoutRecipient,
+    PayoutStatusView,
     RefundResult,
 )
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
@@ -270,9 +276,36 @@ class InMemoryPayoutRepository:
         owned = [p for p in self.items.values() if p.user_id == user_id]
         return sorted(owned, key=lambda p: p.created_at, reverse=True)
 
+    async def list_by_status(
+        self,
+        status: PayoutStatus,
+        *,
+        provider: PaymentProvider | None = None,
+    ) -> list[Payout]:
+        matched = [
+            p
+            for p in self.items.values()
+            if p.status is status and (provider is None or p.provider is provider)
+        ]
+        return sorted(matched, key=lambda p: p.created_at)
+
     async def update(self, payout: Payout) -> Payout:
         self.items[payout.id] = payout
         return payout
+
+
+class InMemoryPayoutRequisiteRepository:
+    """Реквизиты выплат в памяти (одна запись на пользователя, без шифрования)."""
+
+    def __init__(self) -> None:
+        self.items: dict[uuid.UUID, PayoutRequisites] = {}
+
+    async def get_by_user(self, user_id: uuid.UUID) -> PayoutRequisites | None:
+        return self.items.get(user_id)
+
+    async def upsert(self, requisites: PayoutRequisites) -> PayoutRequisites:
+        self.items[requisites.user_id] = requisites
+        return requisites
 
 
 class FakeCheckoutGateway:
@@ -288,14 +321,46 @@ class FakeCheckoutGateway:
 
 
 class FakePayoutGateway:
-    """Шлюз выплат физлицам: отдаёт детерминированную инструкцию."""
+    """Шлюз выплат физлицам: копит вызовы, отдаёт детерминированную инструкцию."""
+
+    def __init__(self, provider: str = "yookassa") -> None:
+        self.provider = provider
+        self.calls: list[dict[str, Any]] = []
 
     async def send_payout(
-        self, *, payout_id: uuid.UUID, user_id: uuid.UUID, amount_kopecks: int
+        self,
+        *,
+        payout_id: uuid.UUID,
+        user_id: uuid.UUID,
+        amount_kopecks: int,
+        recipient: PayoutRecipient,
     ) -> PayoutInstruction:
-        return PayoutInstruction(
-            provider="yookassa", provider_payout_id=f"po-{payout_id}"
+        self.calls.append(
+            {
+                "payout_id": payout_id,
+                "user_id": user_id,
+                "amount_kopecks": amount_kopecks,
+                "recipient": recipient,
+            }
         )
+        return PayoutInstruction(
+            provider=self.provider, provider_payout_id=f"po-{payout_id}"
+        )
+
+
+class FakePayoutStatusProbe:
+    """Опрос статусов выплат: управляемый словарь ответов и «сломанных» ссылок."""
+
+    def __init__(self) -> None:
+        self.statuses: dict[str, PayoutStatusView] = {}
+        self.errors: set[str] = set()
+
+    async def get_payout_status(
+        self, *, provider_payout_id: str
+    ) -> PayoutStatusView:
+        if provider_payout_id in self.errors:
+            raise PaymentGatewayError(f"Jump недоступен для {provider_payout_id}")
+        return self.statuses[provider_payout_id]
 
 
 class FakeRefundGateway:
