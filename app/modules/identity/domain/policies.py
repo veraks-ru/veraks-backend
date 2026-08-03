@@ -53,7 +53,9 @@ def missing_consents(
     версию оферты/ПДн через env, заставляет всех пользователей заново
     подтвердить согласие при следующем входе.
     """
-    accepted_pairs = {(consent.document, consent.version) for consent in accepted}
+    accepted_list = list(accepted)
     return [
-        doc for doc in required if (doc.document, doc.version) not in accepted_pairs
+        doc
+        for doc in required
+        if not any(consent.satisfies(doc) for consent in accepted_list)
     ]

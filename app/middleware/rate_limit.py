@@ -19,6 +19,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.http import client_ip
+
 logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "ratelimit:"
@@ -43,14 +45,6 @@ async def check_rate_limit(
     return int(count) <= limit
 
 
-def _client_ip(request: Request) -> str:
-    """IP клиента с учётом обратного прокси (первый в ``X-Forwarded-For``)."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Ограничивает число запросов с одного IP в минуту (fixed window)."""
 
@@ -70,7 +64,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        identity = _client_ip(request)
+        identity = client_ip(request) or "unknown"
         try:
             allowed = await check_rate_limit(
                 self._redis_factory(),

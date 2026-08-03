@@ -12,11 +12,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
+from app.http import client_ip
 from app.modules.identity.api.dependencies import (
     CurrentUser,
     get_complete_onboarding_uc,
     get_my_consents_uc,
-    get_onboarding_status_uc,
     get_public_profile_uc,
     get_update_profile_uc,
     get_user_repository,
@@ -34,7 +34,6 @@ from app.modules.identity.application.dto import ConsentInput
 from app.modules.identity.application.use_cases import (
     CompleteOnboarding,
     GetMyConsents,
-    GetOnboardingStatus,
     GetPublicProfile,
     UpdateMyProfile,
 )
@@ -86,7 +85,6 @@ async def complete_onboarding(
     request: Request,
     current_user: CurrentUser,
     uc: Annotated[CompleteOnboarding, Depends(get_complete_onboarding_uc)],
-    status_uc: Annotated[GetOnboardingStatus, Depends(get_onboarding_status_uc)],
 ) -> AuthMeResponse:
     """Фиксирует принятие обязательных документов и завершает онбординг.
 
@@ -94,6 +92,11 @@ async def complete_onboarding(
     просто возвращает текущее состояние 200 (плюс применяет переданные
     правки профиля, как обычный PATCH). Иначе при неполном наборе согласий —
     ``IncompleteConsentsError`` (422, маппинг в ``app/main.py``).
+
+    ``uc.execute()`` либо бросает ``IncompleteConsentsError``, либо
+    гарантирует постусловие «все обязательные согласия текущих версий
+    приняты, onboarded_at выставлен» — поэтому статус после успешного
+    вызова известен без повторного похода в ``GetOnboardingStatus``.
     """
     user = await uc.execute(
         user_id=current_user.id,
@@ -103,13 +106,10 @@ async def complete_onboarding(
             ConsentInput(document=c.document, version=c.version)
             for c in payload.consents
         ],
-        ip=request.client.host if request.client else None,
+        ip=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
-    needs_onboarding, missing = await status_uc.execute(user=user)
-    return AuthMeResponse.build(
-        user, needs_onboarding=needs_onboarding, missing=missing
-    )
+    return AuthMeResponse.build(user, needs_onboarding=False, missing=[])
 
 
 @router.get(

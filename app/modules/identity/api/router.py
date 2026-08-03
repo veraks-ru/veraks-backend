@@ -25,10 +25,10 @@ from app.modules.identity.api.schemas import (
     AuthMeResponse,
     CallbackRequest,
 )
-from app.modules.identity.application.use_cases import GetOnboardingStatus
 from app.modules.identity.application.dto import SessionTokens
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
+    GetOnboardingStatus,
     InitiateEsiaLogin,
     LogoutSession,
     RefreshSession,
