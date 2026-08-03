@@ -110,3 +110,11 @@ class InvalidRequisiteError(BillingError):
 
 class PayoutRequisitesMissingError(BillingError):
     """У получателя выплаты не заполнены реквизиты — отправка невозможна."""
+
+
+class ManualPayoutDispatchError(BillingError):
+    """``BILLING_PAYOUT_PROVIDER=manual`` — автоматическая отправка недоступна.
+
+    В этом режиме нет провайдера выплат: деньги переводятся получателю вне
+    системы. Явная доменная ошибка вместо тихого падения в мёртвый шлюз.
+    """

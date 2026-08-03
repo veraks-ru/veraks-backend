@@ -25,8 +25,7 @@ from app.db.session import get_session
 from app.modules.billing.adapters.clock import SystemClock
 from app.modules.billing.adapters.gateways import (
     LocalSubscriptionCheckoutGateway,
-    YookassaPayoutGateway,
-    YookassaSubscriptionCheckoutGateway,
+    ManualPayoutGateway,
 )
 from app.modules.billing.adapters.jump_gateway import JumpGateway
 from app.modules.billing.adapters.tbank_gateway import TBankGateway
@@ -54,7 +53,6 @@ from app.modules.billing.application.use_cases import (
     ListMyPayouts,
     ListMySponsorFunds,
     ListPayouts,
-    RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
     RefundLatestSubscriptionPayment,
@@ -64,7 +62,6 @@ from app.modules.billing.application.use_cases import (
 )
 from app.modules.billing.domain.entities import SubscriptionPlan
 from app.modules.billing.domain.tbank_signing import verify_token
-from app.modules.billing.domain.webhooks import verify_signature
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.crypto import FieldEncryptor
 from app.modules.billing.ports.notifications import Notifier
@@ -161,12 +158,14 @@ def _tbank_gateway(settings: Settings, client: httpx.AsyncClient) -> TBankGatewa
 def get_checkout_gateway(
     settings: SettingsDep, client: HttpClientDep
 ) -> SubscriptionCheckoutGateway:
-    """Шлюз оплаты подписок. local → заглушка; ТБанк → эквайринг; иначе ЮKassa."""
-    if settings.app_env == "local":
-        return LocalSubscriptionCheckoutGateway()
-    if settings.tbank.enabled:
+    """Шлюз оплаты подписок — выбор по явному ``BILLING_CHECKOUT_PROVIDER``.
+
+    Вне ``local`` валидатор ``Settings`` не даст подняться ни с чем, кроме
+    полностью настроенного ``tbank`` (см. ``config.py``).
+    """
+    if settings.billing.checkout_provider == "tbank":
         return _tbank_gateway(settings, client)
-    return YookassaSubscriptionCheckoutGateway()
+    return LocalSubscriptionCheckoutGateway()
 
 
 def get_refund_gateway(
@@ -179,10 +178,15 @@ def get_refund_gateway(
 def get_payout_gateway(
     settings: SettingsDep, client: HttpClientDep
 ) -> PayoutGateway:
-    """Шлюз выплат физлицам: Jump.Finance (СБП), если включён."""
-    if settings.jump.enabled:
+    """Шлюз выплат физлицам — выбор по явному ``BILLING_PAYOUT_PROVIDER``.
+
+    ``jump`` — Jump.Finance (СБП по телефону); ``manual`` — выплаты вне
+    системы (см. ``ManualPayoutGateway``). Вне ``local`` валидатор ``Settings``
+    требует полной настройки Jump, если он выбран (см. ``config.py``).
+    """
+    if settings.billing.payout_provider == "jump":
         return JumpGateway(settings.jump, client)
-    return YookassaPayoutGateway()
+    return ManualPayoutGateway()
 
 
 def get_season_directory(session: SessionDep) -> SeasonDirectory:
@@ -407,13 +411,6 @@ def get_my_payout_requisites(
     return GetMyPayoutRequisites(requisites=requisites)
 
 
-def get_record_payout_result(
-    payouts: PayoutRepoDep, audit: AuditDep, clock: ClockDep
-) -> RecordPayoutResult:
-    """Use-case приёма результата выплаты из вебхука провайдера."""
-    return RecordPayoutResult(payouts=payouts, audit=audit, clock=clock)
-
-
 def get_season_prize_fund(
     seasons: SeasonDirectoryDep,
     funds: PrizeFundRepoDep,
@@ -459,39 +456,7 @@ def get_approve_payout(
     )
 
 
-# ── Верификация подписи вебхуков ──────────────────────────────────────────
-
-_SIGNATURE_HEADER = "x-signature"
-
-
-async def verify_payment_webhook(request: Request, settings: SettingsDep) -> None:
-    """Проверяет подпись вебхука приёма платежа (HMAC по телу).
-
-    Пустой секрет (``WEBHOOK_YOOKASSA_PAYMENT_SECRET``) — верификация выключена
-    (dev/тест). При заданном секрете неверная/отсутствующая подпись → 401.
-    """
-    body = await request.body()
-    signature = request.headers.get(_SIGNATURE_HEADER)
-    if not verify_signature(
-        settings.webhooks.yookassa_payment_secret, body, signature
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверная подпись вебхука",
-        )
-
-
-async def verify_payout_webhook(request: Request, settings: SettingsDep) -> None:
-    """Проверяет подпись вебхука результата выплаты (HMAC по телу)."""
-    body = await request.body()
-    signature = request.headers.get(_SIGNATURE_HEADER)
-    if not verify_signature(
-        settings.webhooks.yookassa_payout_secret, body, signature
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверная подпись вебхука",
-        )
+# ── Верификация вебхука ТБанк ────────────────────────────────────────────
 
 
 async def verified_tbank_payload(

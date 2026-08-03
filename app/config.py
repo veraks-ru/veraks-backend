@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends
 from pydantic import Field, model_validator
@@ -91,6 +91,15 @@ class BillingSettings(BaseSettings):
 
     Цены тарифов — в копейках (никаких float). Composition root billing читает
     эти настройки и собирает из них карту «тариф → цена».
+
+    ``checkout_provider``/``payout_provider`` — явный выбор платёжного шлюза
+    (composition root — ``billing/api/dependencies.py``). Раньше при
+    незаданных ``tbank.enabled``/``jump.enabled`` сборка молча уходила в
+    мёртвые ЮKassa-адаптеры (``NotImplementedError`` только в рантайме на
+    первом платеже); теперь провайдер — явное значение, а не побочный эффект
+    флага, и вне ``local`` проверяется валидатором ``Settings`` при старте.
+    ``manual`` — осмысленное состояние «выплаты отправляются вручную, без
+    провайдера», а не мёртвый фолбэк.
     """
 
     model_config = SettingsConfigDict(env_prefix="BILLING_", extra="ignore")
@@ -99,6 +108,9 @@ class BillingSettings(BaseSettings):
     weekly_price_kopecks: int = Field(default=49_900, ge=1)
     monthly_price_kopecks: int = Field(default=99_000, ge=1)
     annual_price_kopecks: int = Field(default=499_000, ge=1)
+
+    checkout_provider: Literal["local", "tbank"] = "local"
+    payout_provider: Literal["manual", "jump"] = "manual"
 
 
 class TBankSettings(BaseSettings):
@@ -158,20 +170,6 @@ class RealtimeSettings(BaseSettings):
     password: str = ""
 
 
-class WebhookSettings(BaseSettings):
-    """Секреты верификации подписи входящих вебхуков провайдеров.
-
-    Пустой секрет означает «верификация выключена» (локальная разработка/тесты);
-    в проде секреты обязательны — иначе подделанный вебхук мог бы провести
-    платёж/выплату. Адаптер проверяет HMAC-SHA256 тела по этому секрету.
-    """
-
-    model_config = SettingsConfigDict(env_prefix="WEBHOOK_", extra="ignore")
-
-    yookassa_payment_secret: str = ""
-    yookassa_payout_secret: str = ""
-
-
 class B2bSettings(BaseSettings):
     """Параметры B2B signal API: квоты и цена выдачи ключа.
 
@@ -215,7 +213,6 @@ class Settings(BaseSettings):
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
     resolutions: ResolutionsSettings = Field(default_factory=ResolutionsSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
-    webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
     b2b: B2bSettings = Field(default_factory=B2bSettings)
     tbank: TBankSettings = Field(default_factory=TBankSettings)
     jump: JumpSettings = Field(default_factory=JumpSettings)
@@ -225,38 +222,58 @@ class Settings(BaseSettings):
     public_api_base: str = "https://api.veraks.ru"
 
     @model_validator(mode="after")
-    def _require_webhook_secrets_in_prod(self) -> "Settings":
-        """Вне ``local`` секреты вебхуков обязательны (fail-closed).
+    def _require_billing_providers_in_prod(self) -> "Settings":
+        """Вне ``local`` платёжные провайдеры обязаны быть явно и полно настроены.
 
-        Пустой секрет отключает проверку подписи (``verify_signature`` вернёт
-        ``True`` на что угодно) — в проде это открывает подделку платежей и
-        выплат. Поэтому при ``app_env != local`` приложение не поднимется без них.
+        Прецедент — этот же паттерн раньше стоял на секретах вебхуков ЮKassa
+        (ныне не используются: интеграции не будет). Проблема, которую решает
+        именно эта проверка: при незаданных ``tbank.enabled``/``jump.enabled``
+        composition root (``billing/api/dependencies.py``) раньше молча собирал
+        приложение с мёртвыми ЮKassa-адаптерами (``create_checkout``/
+        ``send_payout`` кидали ``NotImplementedError`` только в рантайме, на
+        первом платеже). Теперь провайдер выбирается явно
+        (``BILLING_CHECKOUT_PROVIDER``/``BILLING_PAYOUT_PROVIDER``), и вне
+        ``local`` он обязан указывать на реальную, полностью настроенную
+        интеграцию — иначе приложение не поднимется.
         """
-        if self.app_env != "local":
-            required: list[tuple[str, str]] = [
-                ("WEBHOOK_YOOKASSA_PAYMENT_SECRET", self.webhooks.yookassa_payment_secret),
-                ("WEBHOOK_YOOKASSA_PAYOUT_SECRET", self.webhooks.yookassa_payout_secret),
-            ]
-            # Вебхук ТБанк проверяется по паролю терминала (Token), а не по
-            # WEBHOOK_*-секрету: при включённом ТБанк обязателен именно он.
-            if self.tbank.enabled:
-                required += [
-                    ("TBANK_TERMINAL_KEY", self.tbank.terminal_key),
-                    ("TBANK_PASSWORD", self.tbank.password),
-                ]
-            # Jump вебхуков не имеет, но без ключа и юрлица выплаты не
-            # отправить — при включённой интеграции они обязательны.
-            if self.jump.enabled:
-                required += [
+        if self.app_env == "local":
+            return self
+
+        if self.billing.checkout_provider != "tbank":
+            raise ValueError(
+                "Вне окружения 'local' BILLING_CHECKOUT_PROVIDER должен быть "
+                f"'tbank' (сейчас {self.billing.checkout_provider!r}): локальная "
+                "заглушка оплаты недопустима вне local."
+            )
+        missing_checkout = [
+            name
+            for name, value in (
+                ("TBANK_ENABLED", "true" if self.tbank.enabled else ""),
+                ("TBANK_TERMINAL_KEY", self.tbank.terminal_key),
+                ("TBANK_PASSWORD", self.tbank.password),
+            )
+            if not value
+        ]
+        if missing_checkout:
+            raise ValueError(
+                f"В окружении '{self.app_env}' BILLING_CHECKOUT_PROVIDER=tbank "
+                f"требует заполненных настроек: {', '.join(missing_checkout)}."
+            )
+
+        if self.billing.payout_provider == "jump":
+            missing_payout = [
+                name
+                for name, value in (
+                    ("JUMP_ENABLED", "true" if self.jump.enabled else ""),
                     ("JUMP_API_KEY", self.jump.api_key),
                     ("JUMP_AGENT_ID", str(self.jump.agent_id or "")),
-                ]
-            missing = [name for name, value in required if not value]
-            if missing:
+                )
+                if not value
+            ]
+            if missing_payout:
                 raise ValueError(
-                    f"В окружении '{self.app_env}' обязательны секреты вебхуков: "
-                    f"{', '.join(missing)} (пустой секрет отключает проверку подписи "
-                    "и открывает подделку платежей/выплат)."
+                    f"В окружении '{self.app_env}' BILLING_PAYOUT_PROVIDER=jump "
+                    f"требует заполненных настроек: {', '.join(missing_payout)}."
                 )
         return self
 

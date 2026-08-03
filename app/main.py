@@ -78,6 +78,7 @@ from app.modules.billing.domain.errors import (
     InvalidAmountError,
     InvalidRequisiteError,
     LedgerAccountNotFoundError,
+    ManualPayoutDispatchError,
     PaymentGatewayError,
     PayoutAlreadyDecidedError,
     PayoutNotFoundError,
@@ -202,6 +203,8 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     InsufficientPrizeFundError: status.HTTP_409_CONFLICT,
     # Выплату нельзя отправить, пока получатель не заполнил реквизиты СБП.
     PayoutRequisitesMissingError: status.HTTP_409_CONFLICT,
+    # BILLING_PAYOUT_PROVIDER=manual: авто-отправка через API недоступна.
+    ManualPayoutDispatchError: status.HTTP_409_CONFLICT,
     InvalidRequisiteError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     InvalidAmountError: status.HTTP_400_BAD_REQUEST,
     # Отказ/сбой внешнего платёжного шлюза — 502.

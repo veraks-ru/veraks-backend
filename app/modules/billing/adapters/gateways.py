@@ -1,19 +1,21 @@
-"""Адаптеры платёжных шлюзов billing.
-
-TODO(billing-infra): здесь подключаются реальные интеграции — ЮKassa
-(рекурренты подписок, выплаты физлицам), СБП, T-Bank. Пока это точки стыка:
-реализации поднимают ``NotImplementedError``, чтобы не было «тихих» заглушек в
-проде. В тестах порты подменяются фейками через ``dependency_overrides``.
+"""Адаптеры платёжных шлюзов billing, не завязанные на внешний HTTP.
 
 Раздельные договоры/счета операционки и приза — на уровне этих адаптеров
 (зеркало раздельного ledger'а): подписочный эквайринг и выплаты из призового
 фонда идут через разные конфигурации провайдера.
+
+Реальные интеграции (ТБанк — эквайринг, Jump.Finance — выплаты) живут в
+соседних ``tbank_gateway.py``/``jump_gateway.py``; здесь — заглушки для
+явных, не-«провайдерских» режимов (``local``/``manual``), которые
+composition root (``api/dependencies.py``) выбирает по
+``BILLING_CHECKOUT_PROVIDER``/``BILLING_PAYOUT_PROVIDER``.
 """
 
 from __future__ import annotations
 
 import uuid
 
+from app.modules.billing.domain.errors import ManualPayoutDispatchError
 from app.modules.billing.ports.gateways import (
     CheckoutIntent,
     PayoutInstruction,
@@ -21,23 +23,13 @@ from app.modules.billing.ports.gateways import (
 )
 
 
-class YookassaSubscriptionCheckoutGateway:
-    """Создание рекуррентной оплаты подписки в ЮKassa (операционная касса)."""
-
-    async def create_checkout(
-        self, *, subscription_id: uuid.UUID, amount_kopecks: int, description: str
-    ) -> CheckoutIntent:
-        """TODO(billing-infra): создать платёж ЮKassa и вернуть confirmation_url."""
-        raise NotImplementedError(
-            "Интеграция с ЮKassa для подписок ещё не подключена (billing-infra)"
-        )
-
-
 class LocalSubscriptionCheckoutGateway:
-    """Локальная заглушка оплаты (APP_ENV=local): без реального провайдера.
+    """Локальная заглушка оплаты (``BILLING_CHECKOUT_PROVIDER=local``).
 
     Возвращает фиктивный intent; активация подписки происходит сразу в
-    ``StartSubscription`` (instant_activate). НЕ для прода.
+    ``StartSubscription`` (``instant_activate``). Допустима только при
+    ``APP_ENV=local`` — вне local валидатор ``Settings`` не даст подняться с
+    этим провайдером.
     """
 
     async def create_checkout(
@@ -49,8 +41,15 @@ class LocalSubscriptionCheckoutGateway:
         )
 
 
-class YookassaPayoutGateway:
-    """Отправка выплаты физлицу через ЮKassa Payouts/СБП (призовая касса)."""
+class ManualPayoutGateway:
+    """Выплаты вручную (``BILLING_PAYOUT_PROVIDER=manual``): без провайдера.
+
+    Проводка в кассе PRIZE уже сделана на шаге подтверждения выплаты —
+    получателю переводят деньги вне системы (по реквизитам СБП из
+    ``PayoutRequisites``). Попытка автоматической отправки через API
+    (``/admin/payouts/{id}/dispatch``) в этом режиме — явная доменная ошибка,
+    а не тихое падение в несуществующего провайдера.
+    """
 
     async def send_payout(
         self,
@@ -60,7 +59,9 @@ class YookassaPayoutGateway:
         amount_kopecks: int,
         recipient: PayoutRecipient,
     ) -> PayoutInstruction:
-        """TODO(billing-infra): инициировать выплату и вернуть provider_payout_id."""
-        raise NotImplementedError(
-            "Интеграция выплат физлицам ещё не подключена (billing-infra)"
+        raise ManualPayoutDispatchError(
+            "Выплаты в этом окружении отправляются вручную "
+            "(BILLING_PAYOUT_PROVIDER=manual) — автоматическая отправка "
+            "провайдеру недоступна, переведите средства получателю напрямую "
+            "по его реквизитам СБП."
         )

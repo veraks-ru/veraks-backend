@@ -28,7 +28,6 @@ from app.modules.billing.api.dependencies import (
     get_my_payout_requisites,
     get_my_subscription,
     get_prize_fund,
-    get_record_payout_result,
     get_season_prize_fund,
     get_record_sponsor_deposit,
     get_record_subscription_payment,
@@ -37,19 +36,15 @@ from app.modules.billing.api.dependencies import (
     get_start_subscription,
     get_upsert_my_payout_requisites,
     verified_tbank_payload,
-    verify_payment_webhook,
-    verify_payout_webhook,
 )
 from app.modules.billing.domain.entities import PaymentProvider
 from app.modules.billing.api.schemas import (
     AnnouncePrizeFundRequest,
     CreatePayoutRequest,
     PaymentResponse,
-    PaymentWebhookRequest,
     PayoutRequisitesRequest,
     PayoutRequisitesResponse,
     PayoutResponse,
-    PayoutWebhookRequest,
     PlanResponse,
     PlansResponse,
     PrizeFundResponse,
@@ -75,7 +70,6 @@ from app.modules.billing.application.use_cases import (
     ListMyPayouts,
     ListPayouts,
     UpsertMyPayoutRequisites,
-    RecordPayoutResult,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
     RefundLatestSubscriptionPayment,
@@ -212,30 +206,6 @@ async def cancel_subscription(
     """Отменить подписку (владелец или admin)."""
     subscription = await uc.execute(subscription_id=subscription_id, actor=actor)
     return SubscriptionResponse.from_domain(subscription)
-
-
-@router.post(
-    "/webhooks/payments/yookassa",
-    response_model=PaymentResponse,
-    summary="Вебхук приёма платежа (→ операционная касса)",
-    dependencies=[Depends(verify_payment_webhook)],
-)
-async def yookassa_payment_webhook(
-    payload: PaymentWebhookRequest,
-    uc: Annotated[RecordSubscriptionPayment, Depends(get_record_subscription_payment)],
-) -> PaymentResponse:
-    """Идемпотентно принять платёж и провести его в OPERATIONS.
-
-    Подпись вебхука проверяется зависимостью ``verify_payment_webhook`` до входа
-    (HMAC по телу; при заданном ``WEBHOOK_YOOKASSA_PAYMENT_SECRET``).
-    """
-    payment = await uc.execute(
-        provider=payload.provider,
-        provider_payment_id=payload.provider_payment_id,
-        amount_kopecks=payload.amount_kopecks,
-        subscription_id=payload.subscription_id,
-    )
-    return PaymentResponse.from_domain(payment)
 
 
 @router.post(
@@ -524,27 +494,4 @@ async def dispatch_payout(
 ) -> PayoutResponse:
     """Отправляет выплату провайдеру (``approved → processing``)."""
     payout = await uc.execute(actor=actor, payout_id=payout_id)
-    return PayoutResponse.from_domain(payout)
-
-
-@router.post(
-    "/webhooks/payouts/yookassa",
-    response_model=PayoutResponse,
-    summary="Вебхук результата выплаты (→ paid/failed)",
-    dependencies=[Depends(verify_payout_webhook)],
-)
-async def yookassa_payout_webhook(
-    payload: PayoutWebhookRequest,
-    uc: Annotated[RecordPayoutResult, Depends(get_record_payout_result)],
-) -> PayoutResponse:
-    """Идемпотентно фиксирует исход выплаты у провайдера.
-
-    Подпись вебхука проверяется зависимостью ``verify_payout_webhook`` до входа
-    (HMAC по телу; при заданном ``WEBHOOK_YOOKASSA_PAYOUT_SECRET``).
-    """
-    payout = await uc.execute(
-        provider=payload.provider,
-        provider_payout_id=payload.provider_payout_id,
-        succeeded=payload.succeeded,
-    )
     return PayoutResponse.from_domain(payout)

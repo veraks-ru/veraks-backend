@@ -37,8 +37,13 @@ from app.modules.billing.api.dependencies import (
     get_season_directory,
     get_subscription_repository,
 )
+from app.modules.billing.application.use_cases import RecordPayoutResult
 from app.modules.billing.domain import chart
-from app.modules.billing.domain.entities import PaymentProvider, PayoutRequisites
+from app.modules.billing.domain.entities import (
+    PaymentProvider,
+    PayoutRequisites,
+    PayoutStatus,
+)
 from app.modules.billing.domain.ledger import LedgerAccount, LedgerType
 from app.modules.billing.domain.tbank_signing import make_token
 from app.modules.identity.api.dependencies import get_current_user
@@ -87,6 +92,7 @@ class Ctx:
     ledger: InMemoryLedgerRepository
     payments: InMemoryPaymentRepository
     funds: InMemoryPrizeFundRepository
+    payouts: InMemoryPayoutRepository
     requisites: InMemoryPayoutRequisiteRepository
     seasons: FakeSeasonDirectory
     holder: dict
@@ -135,7 +141,7 @@ def ctx():
     try:
         yield Ctx(
             client=client, ledger=ledger, payments=payments, funds=funds,
-            requisites=requisites, seasons=seasons, holder=holder
+            payouts=payouts, requisites=requisites, seasons=seasons, holder=holder
         )
     finally:
         client.close()
@@ -178,36 +184,6 @@ def test_my_subscription_requires_auth(ctx: Ctx) -> None:
     """Чтение своей подписки требует аутентификации."""
     resp = ctx.client.get("/billing/subscriptions/me")
     assert resp.status_code == status.HTTP_401_UNAUTHORIZED
-
-
-def test_payment_webhook_posts_operations(ctx: Ctx) -> None:
-    """Вебхук приёма платежа не требует авторизации и проводит в OPERATIONS."""
-    resp = ctx.client.post(
-        "/webhooks/payments/yookassa",
-        json={
-            "provider": "yookassa",
-            "provider_payment_id": "pay-int-1",
-            "amount_kopecks": 49_000,
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "succeeded"
-    assert body["ledger_transaction_id"] is not None
-    cash = ctx.ledger.transactions[0]
-    assert cash.ledger_type is LedgerType.OPERATIONS
-
-
-def test_payment_webhook_idempotent(ctx: Ctx) -> None:
-    payload = {
-        "provider": "yookassa",
-        "provider_payment_id": "pay-int-dup",
-        "amount_kopecks": 49_000,
-    }
-    first = ctx.client.post("/webhooks/payments/yookassa", json=payload).json()
-    second = ctx.client.post("/webhooks/payments/yookassa", json=payload).json()
-    assert first["id"] == second["id"]
-    assert len(ctx.ledger.transactions) == 1
 
 
 def test_prize_payout_maker_checker_flow(ctx: Ctx) -> None:
@@ -296,33 +272,14 @@ def test_my_payouts_requires_auth(ctx: Ctx) -> None:
     assert ctx.client.get("/users/me/payouts").status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_payout_webhook_rejects_bad_signature_when_secret_set() -> None:
-    """С заданным секретом вебхук без/с неверной подписью → 401 (до use-case)."""
-    from app.config import WebhookSettings, get_settings
+async def test_payout_dispatch_and_finalization_lifecycle(ctx: Ctx) -> None:
+    """approve → dispatch (processing) → результат провайдера (paid): полный цикл.
 
-    base = get_settings()
-    with_secret = base.model_copy(
-        update={"webhooks": WebhookSettings(yookassa_payout_secret="s3cr3t")}
-    )
-    app = create_app()
-    app.dependency_overrides[get_settings] = lambda: with_secret
-    with TestClient(app) as client:
-        body = {
-            "provider": "yookassa",
-            "provider_payout_id": "po-x",
-            "succeeded": True,
-        }
-        # Без подписи — отклонено до use-case (не доходит до БД).
-        assert client.post("/webhooks/payouts/yookassa", json=body).status_code == 401
-        # С неверной подписью — тоже 401.
-        bad = client.post(
-            "/webhooks/payouts/yookassa", json=body, headers={"X-Signature": "nope"}
-        )
-        assert bad.status_code == 401
-
-
-def test_payout_dispatch_and_webhook_lifecycle(ctx: Ctx) -> None:
-    """approve → dispatch (processing) → вебхук (paid): полный жизненный цикл."""
+    У Jump вебхуков нет — терминальный статус фиксирует ``RecordPayoutResult``,
+    которого воркер вызывает по итогам опроса (см. ``worker.poll_jump_payouts``);
+    здесь он вызван напрямую, как это делает воркер, а не через HTTP-эндпоинт —
+    отдельного вебхук-роута для этого шага больше нет.
+    """
     maker = _user(UserRole.ADMIN)
     checker = _user(UserRole.ADMIN)
 
@@ -365,18 +322,20 @@ def test_payout_dispatch_and_webhook_lifecycle(ctx: Ctx) -> None:
     assert dispatched.status_code == 200, dispatched.text
     assert dispatched.json()["status"] == "processing"
 
-    # вебхук провайдера (без авторизации) → paid
-    ctx.holder["user"] = None
-    webhook = ctx.client.post(
-        "/webhooks/payouts/yookassa",
-        json={
-            "provider": "yookassa",
-            "provider_payout_id": f"po-{payout_id}",
-            "succeeded": True,
-        },
+    # Результат провайдера (аналог опроса Jump воркером) → paid.
+    recorder = RecordPayoutResult(
+        payouts=ctx.payouts, audit=FakeAuditTrail(), clock=FakeClock(FIXED_NOW)
     )
-    assert webhook.status_code == 200, webhook.text
-    assert webhook.json()["status"] == "paid"
+    finalized = await recorder.execute(
+        provider=PaymentProvider(dispatched.json()["provider"]),
+        provider_payout_id=dispatched.json()["provider_payout_id"],
+        succeeded=True,
+    )
+    assert finalized.status is PayoutStatus.PAID
+
+    # видно и через API
+    listed = {p["id"]: p["status"] for p in ctx.client.get("/admin/payouts").json()}
+    assert listed[payout_id] == "paid"
 
 
 def test_list_payouts_admin_only(ctx: Ctx) -> None:
