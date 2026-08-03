@@ -58,6 +58,10 @@ class User:
     (152-ФЗ, минимизация ПДн); домен работает только с уже посчитанным хэшем,
     сам HMAC — забота адаптера (``HmacEsiaOidHasher``), не сущности.
     ``real_name_enc`` — зашифрованное ФИО; в публичный профиль не попадает.
+    ``onboarded_at`` — момент прохождения онбординга (152-ФЗ: принятие оферты
+    и согласия на ПДн + выбор псевдонима); ``None`` — онбординг ещё не пройден
+    (в т.ч. у всех аккаунтов, созданных до появления этой фичи — они пройдут
+    его при следующем входе).
     """
 
     esia_oid_hash: str
@@ -69,6 +73,7 @@ class User:
     status: UserStatus = UserStatus.ACTIVE
     id: uuid.UUID = field(default_factory=uuid.uuid4)
     created_at: datetime = field(default_factory=_utcnow)
+    onboarded_at: datetime | None = None
 
     @classmethod
     def register_from_esia(
@@ -101,20 +106,43 @@ class User:
         """Может ли аккаунт пользоваться системой."""
         return self.status is UserStatus.ACTIVE
 
-    def edit_profile(self, *, display_name: str | None) -> bool:
+    def edit_profile(
+        self, *, display_name: str | None = None, username: str | None = None
+    ) -> bool:
         """Редактирует публичный профиль (то, чем владеет пользователь).
 
-        ``display_name`` — пользовательское поле (PATCH /users/me), поэтому при
-        повторном входе ЕСИА его НЕ перезатирает (юридическое ФИО — отдельно в
-        ``real_name_enc``). Возвращает ``True``, если значение изменилось.
+        ``display_name`` и ``username`` — пользовательские поля (PATCH
+        /users/me и онбординг), поэтому при повторном входе ЕСИА их НЕ
+        перезатирает (юридическое ФИО — отдельно в ``real_name_enc``).
+        Уникальность ``username`` домен не проверяет — это забота репозитория
+        (``UNIQUE(username)``, citext); use-case ловит нарушение и превращает
+        его в доменную ошибку. Возвращает ``True``, если что-то изменилось.
         """
-        if display_name is None:
-            return False
-        new_value = display_name.strip()
-        if not new_value or new_value == self.display_name:
-            return False
-        self.display_name = new_value
-        return True
+        changed = False
+        if display_name is not None:
+            new_display_name = display_name.strip()
+            if new_display_name and new_display_name != self.display_name:
+                self.display_name = new_display_name
+                changed = True
+        if username is not None:
+            new_username = username.strip()
+            if new_username and new_username != self.username:
+                self.username = new_username
+                changed = True
+        return changed
+
+    def complete_onboarding(self) -> None:
+        """Фиксирует прохождение онбординга (согласия приняты, псевдоним задан)."""
+        self.onboarded_at = _utcnow()
+
+    def needs_onboarding(self, *, missing_consents: bool) -> bool:
+        """Нужен ли онбординг: не пройден ИЛИ есть недостающие обязательные согласия.
+
+        ``missing_consents`` считает вызывающий (обычно
+        ``domain.policies.missing_consents``), т.к. это требует сверки со
+        списком уже принятых документов, которого у самой сущности нет.
+        """
+        return self.onboarded_at is None or missing_consents
 
     def apply_esia_refresh(
         self, *, esia_oid_hash: str, real_name_enc: bytes | None

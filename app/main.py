@@ -126,10 +126,12 @@ from app.modules.identity.domain.errors import (
     AccountSuspendedError,
     EsiaExchangeError,
     IdentityError,
+    IncompleteConsentsError,
     InvalidSnilsError,
     InvalidStateError,
     InvalidTokenError,
     UnconfirmedEsiaAccountError,
+    UsernameAlreadyTakenError,
     UserNotFoundError,
 )
 
@@ -143,6 +145,8 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     EsiaExchangeError: status.HTTP_502_BAD_GATEWAY,
     InvalidTokenError: status.HTTP_401_UNAUTHORIZED,
     UserNotFoundError: status.HTTP_404_NOT_FOUND,
+    UsernameAlreadyTakenError: status.HTTP_409_CONFLICT,
+    IncompleteConsentsError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     # events
     EventNotFoundError: status.HTTP_404_NOT_FOUND,
     CategoryNotFoundError: status.HTTP_404_NOT_FOUND,

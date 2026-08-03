@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.modules.identity.domain.consent import Consent
 from app.modules.identity.domain.entities import User
 from app.modules.identity.domain.value_objects import EsiaIdentity, EsiaTokens
 from app.modules.identity.ports.repositories import (
@@ -57,6 +58,9 @@ class InMemoryUserRepository:
         return self._clone(user)
 
     async def update(self, user: User) -> User:
+        for existing in self._by_id.values():
+            if existing.id != user.id and existing.username.lower() == user.username.lower():
+                raise UsernameTakenError(user.username)
         self._by_id[user.id] = self._clone(user)
         return self._clone(user)
 
@@ -75,7 +79,26 @@ class InMemoryUserRepository:
             role=user.role,
             status=user.status,
             created_at=user.created_at,
+            onboarded_at=user.onboarded_at,
         )
+
+
+class InMemoryConsentRepository:
+    """Хранилище согласий в памяти с эмуляцией ``ON CONFLICT DO NOTHING``."""
+
+    def __init__(self) -> None:
+        self._consents: list[Consent] = []
+
+    async def list_for_user(self, user_id: uuid.UUID) -> list[Consent]:
+        return [c for c in self._consents if c.user_id == user_id]
+
+    async def add_many(self, consents: list[Consent]) -> None:
+        existing = {(c.user_id, c.document, c.version) for c in self._consents}
+        for consent in consents:
+            key = (consent.user_id, consent.document, consent.version)
+            if key not in existing:
+                self._consents.append(consent)
+                existing.add(key)
 
 
 class FakeEsiaGateway:

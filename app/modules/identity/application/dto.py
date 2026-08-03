@@ -45,3 +45,11 @@ class LoginResult:
     user_id: uuid.UUID
     tokens: SessionTokens
     is_new_user: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ConsentInput:
+    """Одно согласие, переданное клиентом (онбординг)."""
+
+    document: str
+    version: str

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.modules.identity.api.dependencies import (
+    get_consent_repository,
     get_esia_gateway,
     get_refresh_store,
     get_state_store,
@@ -23,6 +24,7 @@ from tests.identity.fakes import (
     FakeEsiaGateway,
     FakeRefreshTokenStore,
     FakeStateStore,
+    InMemoryConsentRepository,
     InMemoryUserRepository,
 )
 
@@ -33,11 +35,13 @@ def context(confirmed_identity):
     state_store = FakeStateStore()
     refresh_store = FakeRefreshTokenStore()
     gateway = FakeEsiaGateway(confirmed_identity)
+    consents = InMemoryConsentRepository()
     app = create_app()
     app.dependency_overrides[get_user_repository] = lambda: repo
     app.dependency_overrides[get_esia_gateway] = lambda: gateway
     app.dependency_overrides[get_state_store] = lambda: state_store
     app.dependency_overrides[get_refresh_store] = lambda: refresh_store
+    app.dependency_overrides[get_consent_repository] = lambda: consents
     with TestClient(app) as client:
         yield client, repo
 
@@ -91,3 +95,31 @@ def test_patch_me_requires_auth(context) -> None:
     client, _ = context
     resp = client.patch("/users/me", json={"display_name": "X"})
     assert resp.status_code == 401
+
+
+def test_patch_me_changes_username(context) -> None:
+    client, _ = context
+    _login(client)
+
+    resp = client.patch("/users/me", json={"username": "new-handle"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["username"] == "new-handle"
+
+
+async def test_patch_me_username_collision_conflicts(context) -> None:
+    from app.modules.identity.domain.entities import User
+
+    client, repo = context
+    await repo.add(
+        User(
+            esia_oid_hash="other-oid-hash",
+            snils_hash="other-snils-hash",
+            username="occupied",
+            display_name="Занято",
+            real_name_enc=None,
+        )
+    )
+    _login(client)
+
+    resp = client.patch("/users/me", json={"username": "occupied"})
+    assert resp.status_code == 409, resp.text

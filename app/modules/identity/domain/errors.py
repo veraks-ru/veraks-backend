@@ -41,3 +41,17 @@ class InvalidTokenError(IdentityError):
 
 class UserNotFoundError(IdentityError):
     """Запрошенный пользователь не найден."""
+
+
+class UsernameAlreadyTakenError(IdentityError):
+    """Публичный хэндл (username) занят другим аккаунтом.
+
+    Доменная обёртка над ``ports.repositories.UsernameTakenError``
+    (нарушением ``UNIQUE(username)``) — та не наследуется от ``IdentityError``
+    и не долетает до HTTP-слоя как есть (в логине она перехватывается для
+    переаллокации хэндла, а не отдаётся клиенту).
+    """
+
+
+class IncompleteConsentsError(IdentityError):
+    """При онбординге переданы не все обязательные согласия текущих версий."""

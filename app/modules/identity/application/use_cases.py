@@ -9,28 +9,35 @@ from __future__ import annotations
 
 import secrets
 import uuid
+from collections.abc import Sequence
 
 from app.modules.identity.application.dto import (
     AuthorizationRedirect,
+    ConsentInput,
     LoginResult,
     SessionClaims,
     SessionTokens,
 )
+from app.modules.identity.domain.consent import Consent, ConsentDocument
 from app.modules.identity.domain.entities import (
     User,
     UserStatus,
     generate_username_seed,
 )
 from app.modules.identity.domain.errors import (
+    IncompleteConsentsError,
     InvalidStateError,
     InvalidTokenError,
+    UsernameAlreadyTakenError,
     UserNotFoundError,
 )
 from app.modules.identity.domain.policies import (
     ensure_account_can_authenticate,
     ensure_esia_confirmed,
+    missing_consents,
 )
 from app.modules.identity.domain.value_objects import EsiaIdentity
+from app.modules.identity.ports.consents import ConsentRepository
 from app.modules.identity.ports.esia import EsiaGateway
 from app.modules.identity.ports.repositories import (
     SnilsAlreadyExistsError,
@@ -299,18 +306,145 @@ class GetPublicProfile:
 
 
 class UpdateMyProfile:
-    """Редактирование собственного профиля (display_name)."""
+    """Редактирование собственного профиля (display_name, username)."""
 
     def __init__(self, *, users: UserRepository) -> None:
         self._users = users
 
     async def execute(
-        self, *, user_id: uuid.UUID, display_name: str | None
+        self,
+        *,
+        user_id: uuid.UUID,
+        display_name: str | None = None,
+        username: str | None = None,
     ) -> User:
-        """Применяет правки профиля и сохраняет при изменении."""
+        """Применяет правки профиля и сохраняет при изменении.
+
+        Занятый ``username`` (нарушение ``UNIQUE(username)``) превращается из
+        инфраструктурного ``UsernameTakenError`` в доменную
+        ``UsernameAlreadyTakenError`` — это единая точка такого перевода,
+        переиспользуемая онбордингом (``CompleteOnboarding``).
+        """
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise UserNotFoundError("Пользователь не найден")
-        if user.edit_profile(display_name=display_name):
-            return await self._users.update(user)
+        if user.edit_profile(display_name=display_name, username=username):
+            try:
+                return await self._users.update(user)
+            except UsernameTakenError as exc:
+                raise UsernameAlreadyTakenError(str(exc)) from exc
         return user
+
+
+class GetOnboardingStatus:
+    """Считает ``needs_onboarding``/недостающие согласия для профиля (152-ФЗ).
+
+    Используется ``GET /auth/me`` и как «пост-проверка» после онбординга —
+    и там, и там нужен один и тот же расчёт по актуальному реестру документов.
+    """
+
+    def __init__(
+        self, *, consents: ConsentRepository, required: Sequence[ConsentDocument]
+    ) -> None:
+        self._consents = consents
+        self._required = list(required)
+
+    async def execute(self, *, user: User) -> tuple[bool, list[ConsentDocument]]:
+        """Возвращает ``(needs_onboarding, missing_consents)``."""
+        accepted = await self._consents.list_for_user(user.id)
+        missing = missing_consents(self._required, accepted)
+        return user.needs_onboarding(missing_consents=bool(missing)), missing
+
+
+class CompleteOnboarding:
+    """Прохождение онбординга: обязательные согласия + (опционально) псевдоним.
+
+    Проверяет, что среди переданных согласий есть ВСЕ недостающие обязательные
+    документы на их текущую версию (иначе — ``IncompleteConsentsError``),
+    записывает недостающие согласия, применяет правки профиля (та же логика,
+    что и ``UpdateMyProfile``) и фиксирует ``onboarded_at``.
+
+    Идемпотентна: повторный вызов при уже пройденном онбординге и отсутствии
+    недостающих согласий ничего не ломает — просто применяет (или не
+    применяет, если их нет) переданные правки профиля.
+    """
+
+    def __init__(
+        self,
+        *,
+        users: UserRepository,
+        consents: ConsentRepository,
+        required: Sequence[ConsentDocument],
+        method: str,
+    ) -> None:
+        self._users = users
+        self._consents = consents
+        self._required = list(required)
+        self._method = method
+
+    async def execute(
+        self,
+        *,
+        user_id: uuid.UUID,
+        username: str | None,
+        display_name: str | None,
+        provided_consents: Sequence[ConsentInput],
+        ip: str | None,
+        user_agent: str | None,
+    ) -> User:
+        user = await self._users.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError("Пользователь не найден")
+
+        already_accepted = await self._consents.list_for_user(user_id)
+        missing = missing_consents(self._required, already_accepted)
+        if missing:
+            provided_pairs = {(c.document, c.version) for c in provided_consents}
+            still_missing = [
+                doc
+                for doc in missing
+                if (doc.document, doc.version) not in provided_pairs
+            ]
+            if still_missing:
+                names = ", ".join(
+                    f"{doc.document}={doc.version}" for doc in still_missing
+                )
+                raise IncompleteConsentsError(
+                    "Не хватает согласий на актуальные версии документов: "
+                    f"{names}"
+                )
+            await self._consents.add_many(
+                [
+                    Consent(
+                        user_id=user_id,
+                        document=doc.document,
+                        version=doc.version,
+                        method=self._method,
+                        ip=ip,
+                        user_agent=user_agent,
+                    )
+                    for doc in missing
+                ]
+            )
+
+        if user.edit_profile(display_name=display_name, username=username):
+            try:
+                user = await self._users.update(user)
+            except UsernameTakenError as exc:
+                raise UsernameAlreadyTakenError(str(exc)) from exc
+
+        if user.onboarded_at is None:
+            user.complete_onboarding()
+            user = await self._users.update(user)
+
+        return user
+
+
+class GetMyConsents:
+    """Список согласий текущего пользователя (профиль, поддержка, юр. отдел)."""
+
+    def __init__(self, *, consents: ConsentRepository) -> None:
+        self._consents = consents
+
+    async def execute(self, *, user_id: uuid.UUID) -> list[Consent]:
+        return await self._consents.list_for_user(user_id)

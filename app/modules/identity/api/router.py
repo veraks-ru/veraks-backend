@@ -17,13 +17,15 @@ from app.modules.identity.api.dependencies import (
     get_complete_login,
     get_initiate_login,
     get_logout_session,
+    get_onboarding_status_uc,
     get_refresh_session,
 )
 from app.modules.identity.api.schemas import (
     AccessTokenResponse,
+    AuthMeResponse,
     CallbackRequest,
-    MeResponse,
 )
+from app.modules.identity.application.use_cases import GetOnboardingStatus
 from app.modules.identity.application.dto import SessionTokens
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
@@ -173,7 +175,22 @@ async def logout(
     return response
 
 
-@router.get("/me", response_model=MeResponse, summary="Текущий пользователь")
-async def me(current_user: CurrentUser) -> MeResponse:
-    """Возвращает профиль аутентифицированного пользователя (без ПДн)."""
-    return MeResponse.from_domain(current_user)
+@router.get(
+    "/me",
+    response_model=AuthMeResponse,
+    summary="Текущий пользователь + статус онбординга",
+)
+async def me(
+    current_user: CurrentUser,
+    uc: Annotated[GetOnboardingStatus, Depends(get_onboarding_status_uc)],
+) -> AuthMeResponse:
+    """Профиль аутентифицированного пользователя (без ПДн) + 152-ФЗ-статус.
+
+    ``needs_onboarding``/``missing_consents`` говорят фронту, нужно ли
+    показать экран онбординга (первый вход или юрист поменял версию
+    документа в конфиге — см. ``ConsentsSettings``).
+    """
+    needs_onboarding, missing = await uc.execute(user=current_user)
+    return AuthMeResponse.build(
+        current_user, needs_onboarding=needs_onboarding, missing=missing
+    )

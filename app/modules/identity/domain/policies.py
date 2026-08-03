@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
+
+from app.modules.identity.domain.consent import Consent, ConsentDocument
 from app.modules.identity.domain.entities import User, UserStatus
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
@@ -38,3 +41,19 @@ def ensure_account_can_authenticate(user: User) -> None:
         raise AccountDeletedError("Аккаунт удалён; повторная регистрация запрещена")
     if user.status is UserStatus.SUSPENDED:
         raise AccountSuspendedError("Аккаунт заблокирован")
+
+
+def missing_consents(
+    required: Sequence[ConsentDocument], accepted: Iterable[Consent]
+) -> list[ConsentDocument]:
+    """Обязательные документы, для которых нет согласия на ТЕКУЩУЮ версию.
+
+    Если пользователь принял более старую версию, а реестр (конфигурация)
+    обновили, документ снова считается недостающим — так юрист, поменяв
+    версию оферты/ПДн через env, заставляет всех пользователей заново
+    подтвердить согласие при следующем входе.
+    """
+    accepted_pairs = {(consent.document, consent.version) for consent in accepted}
+    return [
+        doc for doc in required if (doc.document, doc.version) not in accepted_pairs
+    ]

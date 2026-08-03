@@ -5,10 +5,12 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.identity.adapters.orm import UserORM
+from app.modules.identity.adapters.orm import ConsentORM, UserORM
+from app.modules.identity.domain.consent import Consent
 from app.modules.identity.domain.entities import User
 from app.modules.identity.ports.repositories import (
     SnilsAlreadyExistsError,
@@ -69,7 +71,12 @@ class SqlAlchemyUserRepository:
         return orm.to_domain()
 
     async def update(self, user: User) -> User:
-        """Обновляет изменяемые поля существующего аккаунта."""
+        """Обновляет изменяемые поля существующего аккаунта.
+
+        Смена ``username`` может нарушить ``UNIQUE(username)`` (пользователь
+        выбрал занятый хэндл в PATCH /users/me или онбординге) — разбираем
+        так же, как в ``add()``.
+        """
         orm = await self._session.get(UserORM, user.id)
         if orm is None:  # pragma: no cover — вызывается только для существующих
             raise SnilsAlreadyExistsError("Аккаунт исчез во время обновления")
@@ -79,7 +86,15 @@ class SqlAlchemyUserRepository:
         orm.real_name_enc = user.real_name_enc
         orm.role = user.role
         orm.status = user.status
-        await self._session.flush()
+        orm.onboarded_at = user.onboarded_at
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            constraint = _constraint_name(exc)
+            if constraint and "username" in constraint:
+                raise UsernameTakenError(str(exc)) from exc
+            raise
         return orm.to_domain()
 
 
@@ -89,3 +104,48 @@ def _constraint_name(exc: IntegrityError) -> str | None:
     if constraint:
         return str(constraint)
     return str(exc.orig)
+
+
+class SqlAlchemyConsentRepository:
+    """Хранилище согласий (append-only) поверх асинхронной сессии SQLAlchemy."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_for_user(self, user_id: uuid.UUID) -> list[Consent]:
+        """Все согласия пользователя, в порядке принятия."""
+        stmt = (
+            select(ConsentORM)
+            .where(ConsentORM.user_id == user_id)
+            .order_by(ConsentORM.accepted_at)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]
+
+    async def add_many(self, consents: list[Consent]) -> None:
+        """Вставляет согласия; повторное принятие той же версии — no-op.
+
+        ``ON CONFLICT DO NOTHING`` по ``UNIQUE(user_id, document, version)`` —
+        это не UPDATE, поэтому append-only триггер таблицы его не блокирует.
+        """
+        if not consents:
+            return
+        values = [
+            {
+                "id": c.id,
+                "user_id": c.user_id,
+                "document": c.document,
+                "version": c.version,
+                "accepted_at": c.accepted_at,
+                "method": c.method,
+                "ip": c.ip,
+                "user_agent": c.user_agent,
+            }
+            for c in consents
+        ]
+        stmt = pg_insert(ConsentORM).values(values)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["user_id", "document", "version"]
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()

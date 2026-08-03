@@ -20,7 +20,10 @@ from app.config import SettingsDep
 from app.db.session import get_session
 from app.redis import get_redis
 from app.modules.identity.adapters.esia_gateway import EsiaOidcGateway
-from app.modules.identity.adapters.repository import SqlAlchemyUserRepository
+from app.modules.identity.adapters.repository import (
+    SqlAlchemyConsentRepository,
+    SqlAlchemyUserRepository,
+)
 from app.modules.identity.adapters.security import (
     FernetFieldEncryptor,
     HmacEsiaOidHasher,
@@ -33,15 +36,20 @@ from app.modules.identity.adapters.stores import (
 )
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
+    CompleteOnboarding,
     GetCurrentUser,
+    GetMyConsents,
+    GetOnboardingStatus,
     GetPublicProfile,
     InitiateEsiaLogin,
     LogoutSession,
     RefreshSession,
     UpdateMyProfile,
 )
+from app.modules.identity.domain.consent import ConsentDocument
 from app.modules.identity.domain.entities import User
 from app.modules.identity.domain.errors import IdentityError
+from app.modules.identity.ports.consents import ConsentRepository
 from app.modules.identity.ports.esia import EsiaGateway
 from app.modules.identity.ports.repositories import UserRepository
 from app.modules.identity.ports.security import (
@@ -52,6 +60,9 @@ from app.modules.identity.ports.security import (
     StateStore,
     TokenIssuer,
 )
+
+# Способ фиксации согласий через веб-онбординг (PRD/т.з. T2).
+_ONBOARDING_METHOD = "onboarding_web"
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -76,6 +87,19 @@ async def get_http_client() -> AsyncIterator[httpx.AsyncClient]:
 def get_user_repository(session: SessionDep) -> UserRepository:
     """Репозиторий пользователей."""
     return SqlAlchemyUserRepository(session)
+
+
+def get_consent_repository(session: SessionDep) -> ConsentRepository:
+    """Репозиторий согласий (152-ФЗ)."""
+    return SqlAlchemyConsentRepository(session)
+
+
+def get_required_consents(settings: SettingsDep) -> list[ConsentDocument]:
+    """Реестр обязательных документов и их текущих версий из конфигурации."""
+    return [
+        ConsentDocument(document=document, version=version)
+        for document, version in settings.consents.required_documents.items()
+    ]
 
 
 def get_esia_gateway(
@@ -222,6 +246,32 @@ def get_update_profile_uc(
 ) -> UpdateMyProfile:
     """Use-case редактирования своего профиля."""
     return UpdateMyProfile(users=users)
+
+
+def get_onboarding_status_uc(
+    consents: Annotated[ConsentRepository, Depends(get_consent_repository)],
+    required: Annotated[list[ConsentDocument], Depends(get_required_consents)],
+) -> GetOnboardingStatus:
+    """Use-case расчёта ``needs_onboarding``/недостающих согласий."""
+    return GetOnboardingStatus(consents=consents, required=required)
+
+
+def get_complete_onboarding_uc(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+    consents: Annotated[ConsentRepository, Depends(get_consent_repository)],
+    required: Annotated[list[ConsentDocument], Depends(get_required_consents)],
+) -> CompleteOnboarding:
+    """Use-case прохождения онбординга."""
+    return CompleteOnboarding(
+        users=users, consents=consents, required=required, method=_ONBOARDING_METHOD
+    )
+
+
+def get_my_consents_uc(
+    consents: Annotated[ConsentRepository, Depends(get_consent_repository)],
+) -> GetMyConsents:
+    """Use-case списка согласий текущего пользователя."""
+    return GetMyConsents(consents=consents)
 
 
 # ── Аутентификация запроса ────────────────────────────────────────────────

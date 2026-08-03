@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import dataclasses
+import uuid
 
 import pytest
 
@@ -16,20 +17,27 @@ from app.modules.identity.adapters.security import (
     HmacSnilsHasher,
     JwtTokenIssuer,
 )
+from app.modules.identity.application.dto import ConsentInput
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
+    CompleteOnboarding,
     GetCurrentUser,
+    GetMyConsents,
+    GetOnboardingStatus,
     GetPublicProfile,
     LogoutSession,
     RefreshSession,
     UpdateMyProfile,
 )
+from app.modules.identity.domain.consent import Consent, ConsentDocument
 from app.modules.identity.domain.entities import User, UserRole, UserStatus
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
+    IncompleteConsentsError,
     InvalidStateError,
     InvalidTokenError,
     UnconfirmedEsiaAccountError,
+    UsernameAlreadyTakenError,
     UserNotFoundError,
 )
 from app.modules.identity.domain.value_objects import EsiaIdentity
@@ -38,6 +46,7 @@ from tests.identity.fakes import (
     FakeEsiaGateway,
     FakeRefreshTokenStore,
     FakeStateStore,
+    InMemoryConsentRepository,
     InMemoryUserRepository,
 )
 
@@ -501,9 +510,212 @@ async def test_update_profile_noop_when_none(repo) -> None:
 
 
 async def test_update_profile_unknown_user_raises(repo) -> None:
-    import uuid
-
     with pytest.raises(UserNotFoundError):
         await UpdateMyProfile(users=repo).execute(
             user_id=uuid.uuid4(), display_name="X"
         )
+
+
+async def test_update_profile_changes_username(repo) -> None:
+    user = _user(username="erik")
+    await repo.add(user)
+    updated = await UpdateMyProfile(users=repo).execute(
+        user_id=user.id, username="new-handle"
+    )
+    assert updated.username == "new-handle"
+
+
+async def test_update_profile_username_collision_raises(repo) -> None:
+    await repo.add(_user(username="taken"))
+    victim = _user(username="free")
+    await repo.add(victim)
+    with pytest.raises(UsernameAlreadyTakenError):
+        await UpdateMyProfile(users=repo).execute(
+            user_id=victim.id, username="taken"
+        )
+
+
+# ── Онбординг и согласия (152-ФЗ) ─────────────────────────────────────────
+
+
+_REQUIRED = [
+    ConsentDocument(document="offer", version="2026-07-05"),
+    ConsentDocument(document="pdn", version="2026-07-05"),
+]
+
+
+@pytest.fixture
+def consent_repo() -> InMemoryConsentRepository:
+    return InMemoryConsentRepository()
+
+
+async def test_onboarding_status_needs_onboarding_on_first_login(
+    repo, consent_repo
+) -> None:
+    """Первый вход: онбординг не пройден, обязательные согласия отсутствуют."""
+    user = _user(username="fresh")
+    await repo.add(user)
+
+    needs, missing = await GetOnboardingStatus(
+        consents=consent_repo, required=_REQUIRED
+    ).execute(user=user)
+
+    assert needs is True
+    assert {(m.document, m.version) for m in missing} == {
+        ("offer", "2026-07-05"),
+        ("pdn", "2026-07-05"),
+    }
+
+
+async def test_complete_onboarding_rejects_incomplete_consents(
+    repo, consent_repo
+) -> None:
+    """Если передана не вся обязательная подборка согласий — доменная ошибка."""
+    user = _user(username="incomplete")
+    await repo.add(user)
+    uc = CompleteOnboarding(
+        users=repo, consents=consent_repo, required=_REQUIRED, method="onboarding_web"
+    )
+
+    with pytest.raises(IncompleteConsentsError):
+        await uc.execute(
+            user_id=user.id,
+            username=None,
+            display_name=None,
+            provided_consents=[ConsentInput(document="offer", version="2026-07-05")],
+            ip=None,
+            user_agent=None,
+        )
+
+    stored = await repo.get_by_id(user.id)
+    assert stored is not None and stored.onboarded_at is None
+
+
+async def test_complete_onboarding_with_full_consents_succeeds(
+    repo, consent_repo
+) -> None:
+    """Полный набор согласий + псевдоним → онбординг пройден, согласия видны."""
+    user = _user(username="fullset")
+    await repo.add(user)
+    uc = CompleteOnboarding(
+        users=repo, consents=consent_repo, required=_REQUIRED, method="onboarding_web"
+    )
+
+    updated = await uc.execute(
+        user_id=user.id,
+        username="chosen-handle",
+        display_name="Выбранное имя",
+        provided_consents=[
+            ConsentInput(document="offer", version="2026-07-05"),
+            ConsentInput(document="pdn", version="2026-07-05"),
+        ],
+        ip="127.0.0.1",
+        user_agent="pytest",
+    )
+
+    assert updated.onboarded_at is not None
+    assert updated.username == "chosen-handle"
+    assert updated.display_name == "Выбранное имя"
+
+    consents = await GetMyConsents(consents=consent_repo).execute(user_id=user.id)
+    assert {(c.document, c.version) for c in consents} == {
+        ("offer", "2026-07-05"),
+        ("pdn", "2026-07-05"),
+    }
+    assert all(c.method == "onboarding_web" for c in consents)
+
+    needs, missing = await GetOnboardingStatus(
+        consents=consent_repo, required=_REQUIRED
+    ).execute(user=updated)
+    assert needs is False
+    assert missing == []
+
+
+async def test_complete_onboarding_idempotent_when_already_done(
+    repo, consent_repo
+) -> None:
+    """Повторный вызов при уже пройденном онбординге и полных согласиях — просто 200 (без ошибок)."""
+    user = _user(username="repeatable")
+    await repo.add(user)
+    uc = CompleteOnboarding(
+        users=repo, consents=consent_repo, required=_REQUIRED, method="onboarding_web"
+    )
+    provided = [
+        ConsentInput(document="offer", version="2026-07-05"),
+        ConsentInput(document="pdn", version="2026-07-05"),
+    ]
+    first = await uc.execute(
+        user_id=user.id,
+        username=None,
+        display_name=None,
+        provided_consents=provided,
+        ip=None,
+        user_agent=None,
+    )
+    onboarded_at = first.onboarded_at
+
+    # Повтор без новых согласий не ломается и не создаёт дублей.
+    second = await uc.execute(
+        user_id=user.id,
+        username=None,
+        display_name=None,
+        provided_consents=[],
+        ip=None,
+        user_agent=None,
+    )
+    assert second.onboarded_at == onboarded_at
+    consents = await consent_repo.list_for_user(user.id)
+    assert len(consents) == 2
+
+
+async def test_document_version_bump_reintroduces_missing_consent(
+    repo, consent_repo
+) -> None:
+    """Юрист поменял версию документа → согласие снова недостающее (needs_onboarding)."""
+    user = _user(username="versionbump")
+    await repo.add(user)
+    uc = CompleteOnboarding(
+        users=repo, consents=consent_repo, required=_REQUIRED, method="onboarding_web"
+    )
+    await uc.execute(
+        user_id=user.id,
+        username=None,
+        display_name=None,
+        provided_consents=[
+            ConsentInput(document="offer", version="2026-07-05"),
+            ConsentInput(document="pdn", version="2026-07-05"),
+        ],
+        ip=None,
+        user_agent=None,
+    )
+    stored = await repo.get_by_id(user.id)
+    assert stored is not None
+
+    bumped_required = [
+        ConsentDocument(document="offer", version="2026-08-01"),
+        ConsentDocument(document="pdn", version="2026-07-05"),
+    ]
+    needs, missing = await GetOnboardingStatus(
+        consents=consent_repo, required=bumped_required
+    ).execute(user=stored)
+
+    assert needs is True
+    assert [(m.document, m.version) for m in missing] == [("offer", "2026-08-01")]
+
+
+async def test_get_my_consents_empty_for_new_user(repo, consent_repo) -> None:
+    user = _user(username="none-yet")
+    await repo.add(user)
+    consents = await GetMyConsents(consents=consent_repo).execute(user_id=user.id)
+    assert consents == []
+
+
+def test_consent_domain_entity_defaults() -> None:
+    """Смоук: доменная сущность Consent создаётся с разумными дефолтами."""
+    consent = Consent(
+        user_id=uuid.uuid4(), document="offer", version="1", method="onboarding_web"
+    )
+    assert consent.id is not None
+    assert consent.accepted_at is not None
+    assert consent.satisfies(ConsentDocument(document="offer", version="1"))
+    assert not consent.satisfies(ConsentDocument(document="offer", version="2"))

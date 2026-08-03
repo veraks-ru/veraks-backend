@@ -52,6 +52,26 @@ class EsiaSettings(BaseSettings):
         return self.scopes.split()
 
 
+class ConsentsSettings(BaseSettings):
+    """Реестр обязательных юридических документов и их текущих версий (152-ФЗ).
+
+    Версия — дата редакции документа, опубликованного на ``/legal``. Юрист
+    меняет версию через env (``CONSENTS_OFFER_VERSION``/``CONSENTS_PDN_VERSION``)
+    — у всех пользователей, принявших более старую версию, тут же появляется
+    недостающее согласие (``needs_onboarding=true`` в ``GET /auth/me``).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="CONSENTS_", extra="ignore")
+
+    offer_version: str = "2026-07-05"
+    pdn_version: str = "2026-07-05"
+
+    @property
+    def required_documents(self) -> dict[str, str]:
+        """Пары «слаг документа → обязательная версия»."""
+        return {"offer": self.offer_version, "pdn": self.pdn_version}
+
+
 class ResolutionsSettings(BaseSettings):
     """Параметры разрешения событий и окна оспаривания."""
 
@@ -191,6 +211,7 @@ class Settings(BaseSettings):
 
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     esia: EsiaSettings = Field(default_factory=EsiaSettings)
+    consents: ConsentsSettings = Field(default_factory=ConsentsSettings)
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
     resolutions: ResolutionsSettings = Field(default_factory=ResolutionsSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
