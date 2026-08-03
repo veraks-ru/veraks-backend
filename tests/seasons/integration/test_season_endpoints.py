@@ -21,7 +21,7 @@ from tests.seasons.unit.test_use_cases import ENDS, NOW, STARTS
 
 def _user(role: UserRole) -> User:
     return User(
-        esia_oid="oid",
+        esia_oid_hash="oid",
         snils_hash="hash",
         username="boss",
         display_name="Босс",

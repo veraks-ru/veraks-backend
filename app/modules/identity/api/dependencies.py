@@ -23,6 +23,7 @@ from app.modules.identity.adapters.esia_gateway import EsiaOidcGateway
 from app.modules.identity.adapters.repository import SqlAlchemyUserRepository
 from app.modules.identity.adapters.security import (
     FernetFieldEncryptor,
+    HmacEsiaOidHasher,
     HmacSnilsHasher,
     JwtTokenIssuer,
 )
@@ -44,6 +45,7 @@ from app.modules.identity.domain.errors import IdentityError
 from app.modules.identity.ports.esia import EsiaGateway
 from app.modules.identity.ports.repositories import UserRepository
 from app.modules.identity.ports.security import (
+    EsiaOidHasher,
     FieldEncryptor,
     RefreshTokenStore,
     SnilsHasher,
@@ -95,6 +97,17 @@ def get_snils_hasher(settings: SettingsDep) -> SnilsHasher:
 
 
 @lru_cache
+def _esia_oid_hasher(key: str) -> HmacEsiaOidHasher:
+    return HmacEsiaOidHasher(key)
+
+
+def get_esia_oid_hasher(settings: SettingsDep) -> EsiaOidHasher:
+    """HMAC-хешер идентификатора ЕСИА (тот же ключ, что у СНИЛС; изоляция —
+    доменным префиксом сообщения, см. docstring ``HmacEsiaOidHasher``)."""
+    return _esia_oid_hasher(settings.security.snils_hmac_key)
+
+
+@lru_cache
 def _encryptor(key: str) -> FernetFieldEncryptor:
     return FernetFieldEncryptor(key)
 
@@ -141,6 +154,7 @@ def get_complete_login(
     esia: Annotated[EsiaGateway, Depends(get_esia_gateway)],
     users: Annotated[UserRepository, Depends(get_user_repository)],
     hasher: Annotated[SnilsHasher, Depends(get_snils_hasher)],
+    esia_oid_hasher: Annotated[EsiaOidHasher, Depends(get_esia_oid_hasher)],
     encryptor: Annotated[FieldEncryptor, Depends(get_field_encryptor)],
     tokens: Annotated[TokenIssuer, Depends(get_token_issuer)],
     refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
@@ -152,6 +166,7 @@ def get_complete_login(
         esia=esia,
         users=users,
         snils_hasher=hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         tokens=tokens,
         refresh_store=refresh_store,

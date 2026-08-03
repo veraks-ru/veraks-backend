@@ -46,7 +46,7 @@ from tests.resolutions.fakes import (
 def _user(role: UserRole) -> User:
     """Аутентифицированный пользователь с заданной ролью."""
     return User(
-        esia_oid=f"oid-{uuid.uuid4()}",
+        esia_oid_hash=f"oid-{uuid.uuid4()}",
         snils_hash=f"hash-{uuid.uuid4()}",
         username=f"user-{uuid.uuid4().hex[:8]}",
         display_name="Тест",

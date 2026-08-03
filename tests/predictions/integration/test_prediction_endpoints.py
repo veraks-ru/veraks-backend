@@ -39,7 +39,7 @@ from tests.predictions.fakes import (
 def _fake_user() -> User:
     """Минимальный аутентифицированный пользователь (роль user достаточно)."""
     return User(
-        esia_oid="oid",
+        esia_oid_hash="oid",
         snils_hash="hash",
         username="predictor1",
         display_name="Предсказатель",

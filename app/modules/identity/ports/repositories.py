@@ -24,8 +24,8 @@ class UserRepository(Protocol):
         """Аккаунт по HMAC-хешу СНИЛС (ключ инварианта «1 человек = 1 аккаунт»)."""
         ...
 
-    async def get_by_esia_oid(self, esia_oid: str) -> User | None:
-        """Аккаунт по стабильному идентификатору ЕСИА."""
+    async def get_by_esia_oid_hash(self, esia_oid_hash: str) -> User | None:
+        """Аккаунт по HMAC-хешу стабильного идентификатора ЕСИА."""
         ...
 
     async def get_by_username(self, username: str) -> User | None:

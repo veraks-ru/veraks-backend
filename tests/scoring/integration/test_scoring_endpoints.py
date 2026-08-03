@@ -49,7 +49,7 @@ from tests.seasons.fakes import FakeDisputeGuard, InMemorySeasonRepository
 
 def _user(role: UserRole = UserRole.USER) -> User:
     return User(
-        esia_oid="oid",
+        esia_oid_hash="oid",
         snils_hash="hash",
         username="predictor1",
         display_name="Предсказатель",

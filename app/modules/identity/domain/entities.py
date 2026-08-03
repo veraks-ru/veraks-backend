@@ -13,8 +13,6 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from app.modules.identity.domain.value_objects import EsiaIdentity
-
 
 class UserRole(str, enum.Enum):
     """RBAC-роли (см. раздел безопасности: разделение обязанностей)."""
@@ -55,10 +53,14 @@ class User:
     """Аккаунт, привязанный к верифицированному гражданину.
 
     ``snils_hash`` (HMAC от СНИЛС) — ключ инварианта «1 человек = 1 аккаунт».
+    ``esia_oid_hash`` (HMAC от идентификатора ЕСИА) хранится по той же логике,
+    что и ``snils_hash`` — сырой ``esia_oid`` в системе не персистится
+    (152-ФЗ, минимизация ПДн); домен работает только с уже посчитанным хэшем,
+    сам HMAC — забота адаптера (``HmacEsiaOidHasher``), не сущности.
     ``real_name_enc`` — зашифрованное ФИО; в публичный профиль не попадает.
     """
 
-    esia_oid: str
+    esia_oid_hash: str
     snils_hash: str
     username: str
     display_name: str
@@ -72,19 +74,23 @@ class User:
     def register_from_esia(
         cls,
         *,
-        identity: EsiaIdentity,
+        esia_oid_hash: str,
         snils_hash: str,
         username: str,
         real_name_enc: bytes | None,
     ) -> User:
         """Фабрика нового аккаунта по данным ЕСИА (find-or-create: ветка create).
 
+        Принимает уже посчитанные хэши (``esia_oid_hash``, ``snils_hash``) —
+        HMAC от сырых значений считает use-case через порты, домен сырых
+        ПДн не видит.
+
         ``display_name`` по умолчанию = псевдонимный ``username``: реальное ФИО
         (``real_name_enc``) публично не раскрывается (PRD §4.1/§7.6). Пользователь
         может задать отображаемое имя сам через ``PATCH /users/me``.
         """
         return cls(
-            esia_oid=identity.oid,
+            esia_oid_hash=esia_oid_hash,
             snils_hash=snils_hash,
             username=username,
             display_name=username,
@@ -111,7 +117,7 @@ class User:
         return True
 
     def apply_esia_refresh(
-        self, *, identity: EsiaIdentity, real_name_enc: bytes | None
+        self, *, esia_oid_hash: str, real_name_enc: bytes | None
     ) -> bool:
         """Обновляет данные при повторном входе (ЕСИА — источник истины по ФИО).
 
@@ -119,9 +125,9 @@ class User:
         Хэндл (username) пользователь меняет сам — здесь его не трогаем.
         """
         changed = False
-        if self.esia_oid != identity.oid:
-            # OID привязки не должен меняться при том же snils_hash, но фиксируем.
-            self.esia_oid = identity.oid
+        if self.esia_oid_hash != esia_oid_hash:
+            # Хэш привязки не должен меняться при том же snils_hash, но фиксируем.
+            self.esia_oid_hash = esia_oid_hash
             changed = True
         if real_name_enc is not None and real_name_enc != self.real_name_enc:
             self.real_name_enc = real_name_enc

@@ -33,9 +33,9 @@ class SqlAlchemyUserRepository:
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
-    async def get_by_esia_oid(self, esia_oid: str) -> User | None:
-        """Аккаунт по идентификатору ЕСИА."""
-        stmt = select(UserORM).where(UserORM.esia_oid == esia_oid)
+    async def get_by_esia_oid_hash(self, esia_oid_hash: str) -> User | None:
+        """Аккаунт по HMAC-хешу идентификатора ЕСИА."""
+        stmt = select(UserORM).where(UserORM.esia_oid_hash == esia_oid_hash)
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
@@ -73,7 +73,7 @@ class SqlAlchemyUserRepository:
         orm = await self._session.get(UserORM, user.id)
         if orm is None:  # pragma: no cover — вызывается только для существующих
             raise SnilsAlreadyExistsError("Аккаунт исчез во время обновления")
-        orm.esia_oid = user.esia_oid
+        orm.esia_oid_hash = user.esia_oid_hash
         orm.username = user.username
         orm.display_name = user.display_name
         orm.real_name_enc = user.real_name_enc

@@ -8,6 +8,7 @@ import pytest
 
 from app.modules.identity.adapters.security import (
     FernetFieldEncryptor,
+    HmacEsiaOidHasher,
     HmacSnilsHasher,
     JwtTokenIssuer,
 )
@@ -25,6 +26,29 @@ def test_snils_hash_is_deterministic_and_keyed() -> None:
     assert h1 == h2  # детерминированность → годится для UNIQUE
     assert h1 != h3  # зависит от ключа
     assert "11223344595" not in h1  # сырой СНИЛС не утекает
+
+
+def test_esia_oid_hash_is_deterministic_and_keyed() -> None:
+    h1 = HmacEsiaOidHasher("k1").hash("esia-oid-1")
+    h2 = HmacEsiaOidHasher("k1").hash("esia-oid-1")
+    h3 = HmacEsiaOidHasher("k2").hash("esia-oid-1")
+    assert h1 == h2  # детерминированность → годится для UNIQUE
+    assert h1 != h3  # зависит от ключа
+    assert "esia-oid-1" not in h1  # сырой oid не утекает
+
+
+def test_esia_oid_hash_differs_from_snils_hash_for_same_key_and_input() -> None:
+    """Доменная изоляция: одинаковый ключ и «сырой» вход — разные хэши.
+
+    ``HmacEsiaOidHasher`` добавляет контекстный префикс к сообщению, поэтому
+    даже если СНИЛС (11 цифр) и oid совпали бы как строки, их хэши под одним
+    ключом не совпадут.
+    """
+    key = "shared-key"
+    raw = "11223344595"
+    oid_hash = HmacEsiaOidHasher(key).hash(raw)
+    snils_hash = HmacSnilsHasher(key).hash(Snils.parse(raw))
+    assert oid_hash != snils_hash
 
 
 def test_field_encryptor_roundtrip(encryptor: FernetFieldEncryptor) -> None:

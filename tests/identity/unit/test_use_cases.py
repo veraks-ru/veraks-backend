@@ -12,6 +12,7 @@ import pytest
 
 from app.modules.identity.adapters.security import (
     FernetFieldEncryptor,
+    HmacEsiaOidHasher,
     HmacSnilsHasher,
     JwtTokenIssuer,
 )
@@ -48,6 +49,7 @@ def _build_complete_login(
     state_store: FakeStateStore,
     refresh_store: FakeRefreshTokenStore,
     hasher: HmacSnilsHasher,
+    esia_oid_hasher: HmacEsiaOidHasher,
     encryptor: FernetFieldEncryptor,
     token_issuer: JwtTokenIssuer,
     require_confirmed: bool = True,
@@ -56,6 +58,7 @@ def _build_complete_login(
         esia=FakeEsiaGateway(identity),
         users=repo,
         snils_hasher=hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         tokens=token_issuer,
         refresh_store=refresh_store,
@@ -84,7 +87,7 @@ def refresh_store() -> FakeRefreshTokenStore:
 
 
 async def test_first_login_creates_account(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     uc = _build_complete_login(
         identity=confirmed_identity,
@@ -92,6 +95,7 @@ async def test_first_login_creates_account(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -107,9 +111,49 @@ async def test_first_login_creates_account(
     # ФИО хранится зашифрованным, не открытым текстом.
     assert stored.real_name_enc is not None
     assert b"Petrov" not in stored.real_name_enc
+    # esia_oid хранится только как HMAC-хеш — сырой oid не персистится (152-ФЗ).
+    assert stored.esia_oid_hash == esia_oid_hasher.hash(confirmed_identity.oid)
+    assert stored.esia_oid_hash != confirmed_identity.oid
+    assert confirmed_identity.oid not in stored.esia_oid_hash
     # Access-токен валиден.
     claims = token_issuer.verify_access(result.tokens.access_token)
     assert claims.user_id == result.user_id
+
+
+async def test_stored_user_never_holds_raw_esia_oid(
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
+) -> None:
+    """Регрессия: сущность User не несёт сырой esia_oid — только его HMAC-хеш.
+
+    У доменной сущности вообще нет поля с сырым значением (оно называется
+    ``esia_oid_hash``), так что «утечка» возможна только если use-case
+    ошибочно передаст в него что-то, кроме хэша. Проверяем и на первом входе
+    (create), и на повторном (apply_esia_refresh), что сохранённое значение —
+    именно результат ``EsiaOidHasher.hash``, а не исходный oid.
+    """
+    uc = _build_complete_login(
+        identity=confirmed_identity,
+        repo=repo,
+        state_store=state_store,
+        refresh_store=refresh_store,
+        hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
+        encryptor=encryptor,
+        token_issuer=token_issuer,
+    )
+    first = await uc.execute(code="abc", state="valid-state")
+    stored = await repo.get_by_id(first.user_id)
+    assert stored is not None
+    expected_hash = esia_oid_hasher.hash(confirmed_identity.oid)
+    assert stored.esia_oid_hash == expected_hash
+    assert not hasattr(stored, "esia_oid")
+
+    # Повторный вход (apply_esia_refresh) не подменяет хэш на сырой oid.
+    state_store.seed("valid-state-2")
+    second = await uc.execute(code="def", state="valid-state-2")
+    stored_again = await repo.get_by_id(second.user_id)
+    assert stored_again is not None
+    assert stored_again.esia_oid_hash == expected_hash
 
 
 class _UsernameRaceRepo(InMemoryUserRepository):
@@ -127,7 +171,7 @@ class _UsernameRaceRepo(InMemoryUserRepository):
 
 
 async def test_login_retries_on_username_race(
-    confirmed_identity, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     """Гонка на UNIQUE(username) при регистрации не валит логин — хэндл переаллоцируется."""
     repo = _UsernameRaceRepo()
@@ -137,6 +181,7 @@ async def test_login_retries_on_username_race(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -149,7 +194,7 @@ async def test_login_retries_on_username_race(
 
 
 async def test_second_login_same_citizen_reuses_account(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     """Один человек = один аккаунт: повторный вход не создаёт второй аккаунт."""
     uc = _build_complete_login(
@@ -158,6 +203,7 @@ async def test_second_login_same_citizen_reuses_account(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -171,7 +217,7 @@ async def test_second_login_same_citizen_reuses_account(
 
 
 async def test_unconfirmed_account_rejected(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     identity = dataclasses.replace(confirmed_identity, trusted=False)
     uc = _build_complete_login(
@@ -180,6 +226,7 @@ async def test_unconfirmed_account_rejected(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -188,13 +235,13 @@ async def test_unconfirmed_account_rejected(
 
 
 async def test_deleted_account_is_tombstone(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     """Удалённый аккаунт нельзя пере-зарегистрировать тем же СНИЛС."""
     snils_hash = snils_hasher.hash(confirmed_identity.snils)
     await repo.add(
         User(
-            esia_oid="old-oid",
+            esia_oid_hash="old-oid-hash",
             snils_hash=snils_hash,
             username="старый",
             display_name="Старый",
@@ -208,6 +255,7 @@ async def test_deleted_account_is_tombstone(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -216,7 +264,7 @@ async def test_deleted_account_is_tombstone(
 
 
 async def test_invalid_state_rejected(
-    confirmed_identity, repo, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     uc = _build_complete_login(
         identity=confirmed_identity,
@@ -224,6 +272,7 @@ async def test_invalid_state_rejected(
         state_store=FakeStateStore(),  # пустой → state неизвестен
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -232,7 +281,7 @@ async def test_invalid_state_rejected(
 
 
 async def test_username_collision_gets_suffix(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     """Разные граждане с одинаковым ФИО получают разные хэндлы."""
     first_uc = _build_complete_login(
@@ -241,6 +290,7 @@ async def test_username_collision_gets_suffix(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -256,6 +306,7 @@ async def test_username_collision_gets_suffix(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -268,7 +319,7 @@ async def test_username_collision_gets_suffix(
 
 
 async def test_refresh_rotates_and_revokes_old(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     login = _build_complete_login(
         identity=confirmed_identity,
@@ -276,6 +327,7 @@ async def test_refresh_rotates_and_revokes_old(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -298,7 +350,7 @@ async def test_refresh_rotates_and_revokes_old(
 
 
 async def test_refresh_reuse_revokes_whole_family(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     """Детект кражи (M-REFRESH): повтор украденного токена рвёт всё семейство."""
     login = _build_complete_login(
@@ -307,6 +359,7 @@ async def test_refresh_reuse_revokes_whole_family(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -333,7 +386,7 @@ async def test_refresh_reuse_revokes_whole_family(
 
 
 async def test_logout_revokes_refresh(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     login = _build_complete_login(
         identity=confirmed_identity,
@@ -341,6 +394,7 @@ async def test_logout_revokes_refresh(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -361,7 +415,7 @@ async def test_logout_revokes_refresh(
 
 
 async def test_get_current_user_by_access_token(
-    confirmed_identity, repo, state_store, refresh_store, snils_hasher, encryptor, token_issuer
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
 ) -> None:
     login = _build_complete_login(
         identity=confirmed_identity,
@@ -369,6 +423,7 @@ async def test_get_current_user_by_access_token(
         state_store=state_store,
         refresh_store=refresh_store,
         hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
         token_issuer=token_issuer,
     )
@@ -391,7 +446,7 @@ def _other_snils():
 
 def _user(username="alice", display="Алиса", status=UserStatus.ACTIVE) -> User:
     return User(
-        esia_oid=f"oid-{username}",
+        esia_oid_hash=f"oid-hash-{username}",
         snils_hash=f"hash-{username}",
         username=username,
         display_name=display,

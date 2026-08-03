@@ -24,7 +24,7 @@ from sqlalchemy import select, text
 from app.config import get_settings
 from app.db.session import session_scope
 from app.modules.identity.adapters.orm import UserORM
-from app.modules.identity.adapters.security import HmacSnilsHasher
+from app.modules.identity.adapters.security import HmacEsiaOidHasher, HmacSnilsHasher
 from app.modules.identity.domain.entities import UserRole, UserStatus
 from app.modules.identity.domain.value_objects import Snils
 from app.modules.events.adapters.orm import CategoryORM, EventORM
@@ -160,6 +160,7 @@ async def reset(session) -> None:
 async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
     settings = get_settings()
     hasher = HmacSnilsHasher(settings.security.snils_hmac_key)
+    oid_hasher = HmacEsiaOidHasher(settings.security.snils_hmac_key)
     resolved_ids: list[uuid.UUID] = []
 
     async with session_scope() as session:
@@ -175,7 +176,7 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
             digits = f"{snils_num:09d}00"
             u = UserORM(
                 id=uuid.uuid4(),
-                esia_oid=f"oid-{username}",
+                esia_oid_hash=oid_hasher.hash(f"oid-{username}"),
                 snils_hash=hasher.hash(Snils.parse(digits)),
                 username=username,
                 display_name=display,

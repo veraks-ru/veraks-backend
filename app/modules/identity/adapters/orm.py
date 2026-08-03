@@ -35,7 +35,7 @@ class UserORM(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    esia_oid: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    esia_oid_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     snils_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     username: Mapped[str] = mapped_column(CITEXT, unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String, nullable=False)
@@ -48,7 +48,7 @@ class UserORM(Base):
         """ORM → доменная сущность."""
         return User(
             id=self.id,
-            esia_oid=self.esia_oid,
+            esia_oid_hash=self.esia_oid_hash,
             snils_hash=self.snils_hash,
             username=self.username,
             display_name=self.display_name,
@@ -63,7 +63,7 @@ class UserORM(Base):
         """Доменная сущность → новая ORM-строка."""
         return cls(
             id=user.id,
-            esia_oid=user.esia_oid,
+            esia_oid_hash=user.esia_oid_hash,
             snils_hash=user.snils_hash,
             username=user.username,
             display_name=user.display_name,

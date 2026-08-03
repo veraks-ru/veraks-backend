@@ -38,6 +38,7 @@ from app.modules.identity.ports.repositories import (
     UserRepository,
 )
 from app.modules.identity.ports.security import (
+    EsiaOidHasher,
     FieldEncryptor,
     RefreshTokenStore,
     SnilsHasher,
@@ -80,6 +81,7 @@ class CompleteEsiaLogin:
         esia: EsiaGateway,
         users: UserRepository,
         snils_hasher: SnilsHasher,
+        esia_oid_hasher: EsiaOidHasher,
         encryptor: FieldEncryptor,
         tokens: TokenIssuer,
         refresh_store: RefreshTokenStore,
@@ -91,6 +93,7 @@ class CompleteEsiaLogin:
         self._esia = esia
         self._users = users
         self._snils_hasher = snils_hasher
+        self._esia_oid_hasher = esia_oid_hasher
         self._encryptor = encryptor
         self._tokens = tokens
         self._refresh_store = refresh_store
@@ -109,26 +112,27 @@ class CompleteEsiaLogin:
 
         ensure_esia_confirmed(identity, require_confirmed=self._require_confirmed)
         snils_hash = self._snils_hasher.hash(identity.snils)
+        esia_oid_hash = self._esia_oid_hasher.hash(identity.oid)
 
-        user, is_new = await self._find_or_create(identity, snils_hash)
+        user, is_new = await self._find_or_create(identity, snils_hash, esia_oid_hash)
         session = await self._issue_session(user)
         return LoginResult(user_id=user.id, tokens=session, is_new_user=is_new)
 
     async def _find_or_create(
-        self, identity: EsiaIdentity, snils_hash: str
+        self, identity: EsiaIdentity, snils_hash: str, esia_oid_hash: str
     ) -> tuple[User, bool]:
         """Находит аккаунт по snils_hash или создаёт новый (с защитой от гонки)."""
         existing = await self._users.get_by_snils_hash(snils_hash)
         if existing is not None:
             ensure_account_can_authenticate(existing)
             if existing.apply_esia_refresh(
-                identity=identity, real_name_enc=self._encrypt_name(identity)
+                esia_oid_hash=esia_oid_hash, real_name_enc=self._encrypt_name(identity)
             ):
                 existing = await self._users.update(existing)
             return existing, False
 
         user = User.register_from_esia(
-            identity=identity,
+            esia_oid_hash=esia_oid_hash,
             snils_hash=snils_hash,
             username=await self._allocate_username(),
             real_name_enc=self._encrypt_name(identity),

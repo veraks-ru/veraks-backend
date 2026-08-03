@@ -30,6 +30,7 @@ import pytest  # noqa: E402
 
 from app.modules.identity.adapters.security import (  # noqa: E402
     FernetFieldEncryptor,
+    HmacEsiaOidHasher,
     HmacSnilsHasher,
     JwtTokenIssuer,
 )
@@ -42,6 +43,12 @@ VALID_SNILS = "11223344595"
 @pytest.fixture
 def snils_hasher() -> HmacSnilsHasher:
     return HmacSnilsHasher("test-snils-hmac-key-0123456789abcdef")
+
+
+@pytest.fixture
+def esia_oid_hasher() -> HmacEsiaOidHasher:
+    # Тот же ключ, что и у snils_hasher: изоляция — доменным префиксом сообщения.
+    return HmacEsiaOidHasher("test-snils-hmac-key-0123456789abcdef")
 
 
 @pytest.fixture

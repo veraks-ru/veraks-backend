@@ -48,7 +48,7 @@ async def add_user(
     session, *, username: str, role: UserRole = UserRole.USER
 ) -> User:
     user = User(
-        esia_oid=f"oid-{username}",
+        esia_oid_hash=f"oid-{username}",
         snils_hash=f"hash-{username}",
         username=username,
         display_name=username.title(),

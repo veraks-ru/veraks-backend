@@ -32,9 +32,9 @@ class InMemoryUserRepository:
                 return self._clone(user)
         return None
 
-    async def get_by_esia_oid(self, esia_oid: str) -> User | None:
+    async def get_by_esia_oid_hash(self, esia_oid_hash: str) -> User | None:
         for user in self._by_id.values():
-            if user.esia_oid == esia_oid:
+            if user.esia_oid_hash == esia_oid_hash:
                 return self._clone(user)
         return None
 
@@ -67,7 +67,7 @@ class InMemoryUserRepository:
             return None
         return User(
             id=user.id,
-            esia_oid=user.esia_oid,
+            esia_oid_hash=user.esia_oid_hash,
             snils_hash=user.snils_hash,
             username=user.username,
             display_name=user.display_name,

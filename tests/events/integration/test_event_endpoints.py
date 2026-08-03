@@ -53,7 +53,7 @@ class _NullNotifier:
 def _fake_user(role: UserRole) -> User:
     """Минимальный аутентифицированный пользователь с заданной ролью."""
     return User(
-        esia_oid="oid",
+        esia_oid_hash="oid",
         snils_hash="hash",
         username="editor1",
         display_name="Редактор",

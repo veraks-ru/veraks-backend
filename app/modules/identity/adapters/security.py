@@ -1,6 +1,7 @@
 """Криптографические адаптеры и JWT-выпуск токенов.
 
 - ``HmacSnilsHasher`` — детерминированный HMAC-SHA256 от СНИЛС (UNIQUE-ключ);
+- ``HmacEsiaOidHasher`` — то же для идентификатора ЕСИА (``esia_oid``);
 - ``FernetFieldEncryptor`` — симметричное шифрование ФИО (Fernet/AES-128-CBC+HMAC);
 - ``JwtTokenIssuer`` — выпуск/верификация access/refresh JWT.
 
@@ -37,6 +38,29 @@ class HmacSnilsHasher:
     def hash(self, snils: Snils) -> str:
         """Возвращает hex-дайджест HMAC от 11 цифр СНИЛС."""
         return hmac.new(self._key, snils.digits.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+class HmacEsiaOidHasher:
+    """HMAC-SHA256 хеширование идентификатора гражданина в ЕСИА (``oid``).
+
+    Использует тот же ключ и алгоритм, что и ``HmacSnilsHasher``, но с
+    доменным префиксом ``b"esia_oid:"`` в HMAC-сообщении, а не отдельным
+    ключом: HMAC — псевдослучайная функция от пары (ключ, сообщение), и при
+    разных сообщениях (СНИЛС хешируется без префикса, а oid — с ним) хэши
+    гарантированно не совпадут, даже если сырые значения СНИЛС и oid
+    случайно окажутся равны. Это проще эксплуатационно (не нужен ещё один
+    секрет в конфиге/секрет-менеджере) и достаточно для требуемой изоляции.
+    """
+
+    _CONTEXT_PREFIX = b"esia_oid:"
+
+    def __init__(self, key: str) -> None:
+        self._key = key.encode("utf-8")
+
+    def hash(self, oid: str) -> str:
+        """Возвращает hex-дайджест HMAC от идентификатора ЕСИА."""
+        message = self._CONTEXT_PREFIX + oid.encode("utf-8")
+        return hmac.new(self._key, message, hashlib.sha256).hexdigest()
 
 
 class FernetFieldEncryptor:

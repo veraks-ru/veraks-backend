@@ -1,9 +1,9 @@
 """Порты криптографии и сессий.
 
-``SnilsHasher`` и ``FieldEncryptor`` инкапсулируют требования 152-ФЗ
-(хеш для уникальности, шифрование ФИО). ``TokenIssuer`` выпускает/проверяет
-JWT-сессии. ``StateStore``/``RefreshTokenStore`` отвечают за CSRF-state и
-ротацию/отзыв refresh-токенов.
+``SnilsHasher``, ``EsiaOidHasher`` и ``FieldEncryptor`` инкапсулируют
+требования 152-ФЗ (хеш для уникальности, шифрование ФИО). ``TokenIssuer``
+выпускает/проверяет JWT-сессии. ``StateStore``/``RefreshTokenStore``
+отвечают за CSRF-state и ротацию/отзыв refresh-токенов.
 """
 
 from __future__ import annotations
@@ -20,6 +20,15 @@ class SnilsHasher(Protocol):
 
     def hash(self, snils: Snils) -> str:
         """Возвращает hex-строку HMAC от нормализованного СНИЛС."""
+        ...
+
+
+@runtime_checkable
+class EsiaOidHasher(Protocol):
+    """HMAC-хеширование идентификатора ЕСИА (детерминированно, для UNIQUE-ключа)."""
+
+    def hash(self, oid: str) -> str:
+        """Возвращает hex-строку HMAC от идентификатора ЕСИА."""
         ...
 
 
