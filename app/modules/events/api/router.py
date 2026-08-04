@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Query, status
 from app.modules.events.api.dependencies import (
     ActorDep,
     OptionalActorDep,
+    get_annul_event,
     get_approve_event,
     get_cancel_event,
     get_close_event,
@@ -27,10 +28,12 @@ from app.modules.events.api.dependencies import (
     get_lock_event_predictions,
     get_propose_event,
     get_publish_event,
+    get_recompute_ratings,
     get_reject_event,
     get_update_event,
 )
 from app.modules.events.api.schemas import (
+    AnnulEventRequest,
     CategoryResponse,
     CreateCategoryRequest,
     CreateEventRequest,
@@ -39,6 +42,7 @@ from app.modules.events.api.schemas import (
     UpdateEventRequest,
 )
 from app.modules.events.application.use_cases import (
+    AnnulEvent,
     ApproveEvent,
     CancelEvent,
     CloseEvent,
@@ -53,6 +57,7 @@ from app.modules.events.application.use_cases import (
     UpdateEvent,
 )
 from app.modules.predictions.application.use_cases import LockEventPredictions
+from app.modules.scoring.application.use_cases import RecomputeRatings
 from app.modules.events.domain.entities import EventStatus
 from app.modules.events.ports.repositories import EventFilter
 
@@ -253,4 +258,32 @@ async def cancel_event(
 ) -> EventResponse:
     """Отменяет событие (из draft/open/closed)."""
     event = await uc.execute(actor=actor, event_id=event_id)
+    return EventResponse.from_domain(event)
+
+
+@router.post(
+    "/events/{event_id}/annul",
+    response_model=EventResponse,
+    summary="Аннулировать событие (arbiter/admin): resolved|disputed → annulled",
+)
+async def annul_event(
+    event_id: uuid.UUID,
+    payload: AnnulEventRequest,
+    actor: ActorDep,
+    uc: Annotated[AnnulEvent, Depends(get_annul_event)],
+    recompute: Annotated[RecomputeRatings, Depends(get_recompute_ratings)],
+) -> EventResponse:
+    """Аннулирует некорректное событие и сразу пересчитывает затронутые срезы.
+
+    Аннулирование и пересчёт идут в одной транзакции запроса: событие выпадает
+    из выборок скоринга (они идут по статусу ``resolved``), поэтому рейтинги
+    global/категории/сезона надо перестроить по горячему следу — тем же
+    ``RecomputeRatings``, что и воркер после ``score_event``.
+    """
+    event = await uc.execute(actor=actor, event_id=event_id, reason=payload.reason)
+    await recompute.execute(
+        scopes=RecomputeRatings.touched_scopes(
+            category_id=event.category_id, season_id=event.season_id
+        )
+    )
     return EventResponse.from_domain(event)

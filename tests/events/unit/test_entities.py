@@ -14,6 +14,7 @@ import pytest
 from app.modules.events.domain.entities import Event, EventStatus
 from app.modules.events.domain.errors import (
     EventEditNotAllowedError,
+    InvalidEventDataError,
     InvalidEventTransitionError,
 )
 from app.modules.events.domain.value_objects import EventWindow
@@ -80,6 +81,57 @@ def test_cancelled_is_terminal(future_window) -> None:
     event.cancel(now=FIXED_NOW)
     with pytest.raises(InvalidEventTransitionError):
         event.publish(now=FIXED_NOW)
+
+
+def _make_resolved(window: EventWindow) -> Event:
+    """Событие, доведённое до ``resolved`` (предусловие аннулирования)."""
+    event = _make_draft(window)
+    event.publish(now=FIXED_NOW)
+    event.close(now=FIXED_NOW)
+    event.begin_resolution(now=FIXED_NOW)
+    event.record_outcome(
+        outcome=True, dispute_window_ends_at=window.resolves_at, now=FIXED_NOW
+    )
+    return event
+
+
+def test_annul_from_resolved(future_window) -> None:
+    """``resolved → annulled``; исход остаётся в истории, статус — терминальный."""
+    event = _make_resolved(future_window)
+    reason = event.annul(reason="  Двусмысленная формулировка  ", now=FIXED_NOW)
+    assert event.status is EventStatus.ANNULLED
+    assert reason == "Двусмысленная формулировка"  # нормализованная причина
+    assert event.outcome is True  # денормализованный исход не стирается
+    with pytest.raises(InvalidEventTransitionError):
+        event.open_dispute(now=FIXED_NOW)
+
+
+def test_annul_from_disputed(future_window) -> None:
+    """Неразрешимый спор тоже заканчивается аннулированием."""
+    event = _make_resolved(future_window)
+    event.open_dispute(now=FIXED_NOW)
+    event.annul(reason="Спор неразрешим", now=FIXED_NOW)
+    assert event.status is EventStatus.ANNULLED
+
+
+@pytest.mark.parametrize("reason", ["", "   "])
+def test_annul_requires_reason(future_window, reason: str) -> None:
+    """Пустая причина запрещена и НЕ меняет состояние события."""
+    event = _make_resolved(future_window)
+    with pytest.raises(InvalidEventDataError):
+        event.annul(reason=reason, now=FIXED_NOW)
+    assert event.status is EventStatus.RESOLVED
+
+
+def test_annul_forbidden_before_resolution(future_window) -> None:
+    """До фиксации исхода аннулирования нет — есть отмена (``cancelled``)."""
+    event = _make_draft(future_window)
+    event.publish(now=FIXED_NOW)
+    with pytest.raises(InvalidEventTransitionError):
+        event.annul(reason="Рано", now=FIXED_NOW)
+    event.close(now=FIXED_NOW)
+    with pytest.raises(InvalidEventTransitionError):
+        event.annul(reason="Всё ещё рано", now=FIXED_NOW)
 
 
 def test_edit_draft_changes_all_fields(future_window) -> None:

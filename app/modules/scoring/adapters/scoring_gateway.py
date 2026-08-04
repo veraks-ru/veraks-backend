@@ -103,6 +103,9 @@ class SqlAlchemyEventScoringGateway:
                 PredictionORM.user_id == user_id,
                 PredictionORM.scored_at.is_not(None),
                 EventORM.outcome.is_not(None),
+                # Аннулированное событие исключается из калибровки так же, как
+                # из рейтингов, хотя его прогнозы когда-то были засчитаны.
+                EventORM.status != EventStatus.ANNULLED,
             )
         )
         rows = (await self._session.execute(stmt)).all()
@@ -122,6 +125,9 @@ class SqlAlchemyEventScoringGateway:
                 EventORM.season_id == season_id,
                 PredictionORM.scored_at.is_not(None),
                 EventORM.outcome.is_not(None),
+                # Аннулированные события не участвуют и в межсезонной
+                # рекалибровке градаций (популяционные частоты «ДА»).
+                EventORM.status != EventStatus.ANNULLED,
             )
         )
         rows = (await self._session.execute(stmt)).all()

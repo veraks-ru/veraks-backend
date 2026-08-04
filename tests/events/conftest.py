@@ -47,6 +47,12 @@ def user_actor() -> Actor:
 
 
 @pytest.fixture
+def arbiter_actor() -> Actor:
+    """Арбитр — единственная (кроме админа) роль, вправе аннулировать событие."""
+    return Actor(user_id=uuid.uuid4(), role=UserRole.ARBITER)
+
+
+@pytest.fixture
 def category() -> Category:
     """Предзаведённая категория для привязки событий."""
     return Category.create(slug="politics", title="Политика")

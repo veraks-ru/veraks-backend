@@ -17,6 +17,7 @@ from app.modules.events.application.dto import (
     NewEventInput,
 )
 from app.modules.events.application.use_cases import (
+    AnnulEvent,
     CancelEvent,
     CloseEvent,
     CloseExpiredEvents,
@@ -28,7 +29,10 @@ from app.modules.events.application.use_cases import (
 from app.modules.events.domain.entities import EventStatus
 from app.modules.events.domain.errors import (
     CategoryNotFoundError,
+    EventNotFoundError,
     EventPermissionError,
+    InvalidEventDataError,
+    InvalidEventTransitionError,
     InvalidEventWindowError,
 )
 from tests.events.conftest import FIXED_NOW
@@ -219,6 +223,94 @@ async def test_close_expired_events_skips_not_yet_due(
     assert closed_ids == []
     stored = await events.get_by_id(event.id)
     assert stored is not None and stored.status is EventStatus.OPEN
+
+
+async def _resolved_event(events, categories, clock, audit, editor_actor, category):
+    """Готовит в фейковом репозитории событие в статусе ``resolved``."""
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    created = await create.execute(
+        actor=editor_actor, data=_new_event_input(category.id)
+    )
+    event = await events.get_by_id(created.id)
+    assert event is not None
+    event.publish(now=FIXED_NOW)
+    event.close(now=FIXED_NOW)
+    event.begin_resolution(now=FIXED_NOW)
+    event.record_outcome(
+        outcome=True,
+        dispute_window_ends_at=FIXED_NOW + timedelta(days=32),
+        now=FIXED_NOW,
+    )
+    return await events.update(event)
+
+
+async def test_annul_by_arbiter_writes_audit_with_reason(
+    events, categories, clock, audit, editor_actor, arbiter_actor, category
+) -> None:
+    """Арбитр аннулирует разрешённое событие; причина уходит в audit_log."""
+    event = await _resolved_event(
+        events, categories, clock, audit, editor_actor, category
+    )
+    uc = AnnulEvent(events=events, clock=clock, audit=audit)
+
+    annulled = await uc.execute(
+        actor=arbiter_actor, event_id=event.id, reason="Ошибка источника"
+    )
+
+    assert annulled.status is EventStatus.ANNULLED
+    stored = await events.get_by_id(event.id)
+    assert stored is not None and stored.status is EventStatus.ANNULLED
+    assert "event.annulled" in audit.actions()
+    record = next(r for r in audit.records if r["action"] == "event.annulled")
+    assert record["before"]["status"] == "resolved"
+    assert record["after"] == {"status": "annulled", "reason": "Ошибка источника"}
+    assert record["actor_id"] == arbiter_actor.user_id
+
+
+async def test_annul_forbidden_for_editor_and_user(
+    events, categories, clock, audit, editor_actor, user_actor, category
+) -> None:
+    """Редактор ведёт события, но аннулировать их после резолюции не вправе."""
+    event = await _resolved_event(
+        events, categories, clock, audit, editor_actor, category
+    )
+    uc = AnnulEvent(events=events, clock=clock, audit=audit)
+    for actor in (editor_actor, user_actor):
+        with pytest.raises(EventPermissionError):
+            await uc.execute(actor=actor, event_id=event.id, reason="Причина")
+    stored = await events.get_by_id(event.id)
+    assert stored is not None and stored.status is EventStatus.RESOLVED
+
+
+async def test_annul_requires_non_empty_reason(
+    events, categories, clock, audit, editor_actor, arbiter_actor, category
+) -> None:
+    event = await _resolved_event(
+        events, categories, clock, audit, editor_actor, category
+    )
+    uc = AnnulEvent(events=events, clock=clock, audit=audit)
+    with pytest.raises(InvalidEventDataError):
+        await uc.execute(actor=arbiter_actor, event_id=event.id, reason="   ")
+    stored = await events.get_by_id(event.id)
+    assert stored is not None and stored.status is EventStatus.RESOLVED
+    assert "event.annulled" not in audit.actions()
+
+
+async def test_annul_rejected_before_resolution(
+    events, categories, clock, audit, editor_actor, arbiter_actor, category
+) -> None:
+    """Событие до фиксации исхода отменяется (cancel), а не аннулируется."""
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
+    uc = AnnulEvent(events=events, clock=clock, audit=audit)
+    with pytest.raises(InvalidEventTransitionError):
+        await uc.execute(actor=arbiter_actor, event_id=event.id, reason="Рано")
+
+
+async def test_annul_unknown_event(events, clock, audit, arbiter_actor) -> None:
+    uc = AnnulEvent(events=events, clock=clock, audit=audit)
+    with pytest.raises(EventNotFoundError):
+        await uc.execute(actor=arbiter_actor, event_id=uuid.uuid4(), reason="Причина")
 
 
 async def test_create_category_slug_conflict(categories, editor_actor, category) -> None:

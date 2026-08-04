@@ -26,6 +26,16 @@ class RejectEventRequest(BaseModel):
     reason: str = Field(default="", max_length=1000)
 
 
+class AnnulEventRequest(BaseModel):
+    """Аннулирование события после резолюции: причина обязательна.
+
+    Причина уходит в неизменяемый ``audit_log`` и публично не раскрывается —
+    участникам показывается только сам факт аннулирования.
+    """
+
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class CreateEventRequest(BaseModel):
     """Тело запроса создания события (редакция)."""
 

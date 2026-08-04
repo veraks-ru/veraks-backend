@@ -32,8 +32,15 @@ class EventStatus(str, enum.Enum):
 
     Переходы:
         draft → open → closed → resolving → resolved → disputed
-    с возможностью ``cancelled`` из любого незавершённого статуса. Подробная
-    карта — в :data:`_ALLOWED_TRANSITIONS`.
+    с возможностью ``cancelled`` из любого незавершённого статуса и
+    ``annulled`` — уже ПОСЛЕ фиксации исхода. Подробная карта — в
+    :data:`_ALLOWED_TRANSITIONS`.
+
+    ``cancelled`` и ``annulled`` не путать: первое — отмена события до
+    подведения исхода (прогнозы ещё не оценивались), второе — аннулирование
+    некорректного события организатором после резолюции (ст. 1058 ГК РФ,
+    PRD §7.5/§4.8): исход был зафиксирован, но событие целиком исключается
+    из рейтингов и калибровки.
     """
 
     PROPOSED = "proposed"  # предложено пользователем, ждёт модерации
@@ -44,6 +51,7 @@ class EventStatus(str, enum.Enum):
     RESOLVED = "resolved"
     CANCELLED = "cancelled"
     DISPUTED = "disputed"
+    ANNULLED = "annulled"  # аннулировано организатором после резолюции
 
 
 # Декларативная карта допустимых переходов конечного автомата.
@@ -55,10 +63,14 @@ _ALLOWED_TRANSITIONS: dict[EventStatus, frozenset[EventStatus]] = {
     EventStatus.OPEN: frozenset({EventStatus.CLOSED, EventStatus.CANCELLED}),
     EventStatus.CLOSED: frozenset({EventStatus.RESOLVING, EventStatus.CANCELLED}),
     EventStatus.RESOLVING: frozenset({EventStatus.RESOLVED}),
-    EventStatus.RESOLVED: frozenset({EventStatus.DISPUTED}),
-    # Оспаривание может вернуть событие к разрешению (overturn → ре-скоринг).
-    EventStatus.DISPUTED: frozenset({EventStatus.RESOLVED}),
+    # Аннулирование доступно только после фиксации исхода (resolved/disputed).
+    EventStatus.RESOLVED: frozenset({EventStatus.DISPUTED, EventStatus.ANNULLED}),
+    # Оспаривание может вернуть событие к разрешению (overturn → ре-скоринг)
+    # либо, если спор неразрешим, закончиться аннулированием события.
+    EventStatus.DISPUTED: frozenset({EventStatus.RESOLVED, EventStatus.ANNULLED}),
     EventStatus.CANCELLED: frozenset(),
+    # Аннулирование терминально: событие уже исключено из всех рейтингов.
+    EventStatus.ANNULLED: frozenset(),
 }
 
 # Статусы, в которых редакция вправе править содержание события.
@@ -351,6 +363,23 @@ class Event:
     def dismiss_dispute(self, *, now: datetime | None = None) -> None:
         """``disputed → resolved``: спор отклонён, исход и окно сохраняются."""
         self._transition_to(EventStatus.RESOLVED, now=now)
+
+    def annul(self, *, reason: str, now: datetime | None = None) -> str:
+        """``resolved|disputed → annulled``: аннулирование события организатором.
+
+        Применяется, когда исход уже зафиксирован, но само событие оказалось
+        некорректным (двусмысленная формулировка, ошибка источника, спор
+        неразрешим). Аннулированное событие целиком выпадает из рейтингов и
+        калибровки; денормализованный ``outcome`` НЕ стирается — он остаётся
+        частью неизменяемой истории (журнал ``resolutions`` append-only).
+
+        Причина обязательна: возвращает её нормализованный текст (для записи в
+        ``audit_log``). Проверяется ДО перехода, поэтому пустая причина не
+        меняет состояние события.
+        """
+        text = require_text(reason, field="reason", max_length=1000)
+        self._transition_to(EventStatus.ANNULLED, now=now)
+        return text
 
     def _transition_to(self, target: EventStatus, *, now: datetime | None) -> None:
         """Проверяет переход по карте автомата и применяет его."""

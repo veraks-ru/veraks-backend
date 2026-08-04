@@ -27,12 +27,15 @@ from app.modules.events.api.dependencies import (
     get_lock_event_predictions,
     get_notifier,
     get_optional_actor,
+    get_recompute_ratings,
 )
 from app.modules.events.application.dto import Actor
-from app.modules.events.domain.entities import Category
+from app.modules.events.domain.entities import Category, Event, EventStatus
+from app.modules.events.domain.value_objects import EventWindow
 from app.modules.identity.api.dependencies import get_current_user
 from app.modules.identity.domain.entities import User, UserRole
 from app.modules.predictions.application.use_cases import LockEventPredictions
+from app.modules.scoring.application.use_cases import RecomputeRatings
 from tests.events.conftest import FIXED_NOW
 from tests.events.fakes import (
     FakeAuditTrail,
@@ -41,6 +44,12 @@ from tests.events.fakes import (
     InMemoryEventRepository,
 )
 from tests.predictions.fakes import InMemoryPredictionRepository
+from tests.scoring.fakes import (
+    FakeClock as ScoringFakeClock,
+    FakeEventScoringGateway,
+    FakeSeasonConfigGateway,
+    InMemoryRatingRepository,
+)
 
 
 class _NullNotifier:
@@ -87,6 +96,14 @@ def make_client(category: Category):
                 predictions=InMemoryPredictionRepository(),
                 clock=FakeClock(FIXED_NOW),
             )
+        )
+        # Пересчёт рейтингов после аннулирования — на фейках портов scoring
+        # (без Postgres), чтобы проверялась именно связка роутера.
+        app.dependency_overrides[get_recompute_ratings] = lambda: RecomputeRatings(
+            gateway=FakeEventScoringGateway(),
+            ratings=InMemoryRatingRepository(),
+            clock=ScoringFakeClock(FIXED_NOW),
+            season_config=FakeSeasonConfigGateway(),
         )
         if role is not None:
             user = _fake_user(role)
@@ -246,6 +263,83 @@ def test_create_category_slug_conflict_409(make_client) -> None:
 def test_get_missing_event_404(make_client) -> None:
     client, _, _ = make_client()
     resp = client.get(f"/events/{uuid.uuid4()}")
+    assert resp.status_code == 404
+
+
+def _seed_resolved_event(repo: InMemoryEventRepository, category: Category) -> Event:
+    """Кладёт в репозиторий событие в статусе ``resolved`` (с исходом)."""
+    event = Event.create_draft(
+        title="Разрешённое событие",
+        description="Исход зафиксирован",
+        category_id=category.id,
+        created_by=uuid.uuid4(),
+        window=EventWindow(
+            opens_at=FIXED_NOW + timedelta(days=1),
+            closes_at=FIXED_NOW + timedelta(days=30),
+            resolves_at=FIXED_NOW + timedelta(days=31),
+        ),
+        resolution_source="https://source.example",
+        resolution_criteria="Официальное подтверждение",
+        now=FIXED_NOW,
+    )
+    event.publish(now=FIXED_NOW)
+    event.close(now=FIXED_NOW)
+    event.begin_resolution(now=FIXED_NOW)
+    event.record_outcome(
+        outcome=True,
+        dispute_window_ends_at=FIXED_NOW + timedelta(days=32),
+        now=FIXED_NOW,
+    )
+    return repo.seed(event)
+
+
+def test_annul_event_by_arbiter(make_client, category) -> None:
+    """Арбитр аннулирует разрешённое событие; статус отдаётся в ответе."""
+    client, repo, _ = make_client(role=UserRole.ARBITER)
+    event = _seed_resolved_event(repo, category)
+
+    resp = client.post(
+        f"/events/{event.id}/annul", json={"reason": "Двусмысленная формулировка"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "annulled"
+
+    # Статус виден и в обычном чтении события.
+    assert client.get(f"/events/{event.id}").json()["status"] == "annulled"
+
+
+def test_annul_event_forbidden_for_editor(make_client, category) -> None:
+    client, repo, _ = make_client(role=UserRole.EDITOR)
+    event = _seed_resolved_event(repo, category)
+    resp = client.post(f"/events/{event.id}/annul", json={"reason": "Причина"})
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "EventPermissionError"
+
+
+def test_annul_event_requires_reason(make_client, category) -> None:
+    """Пустая причина отсекается схемой запроса (422)."""
+    client, repo, _ = make_client(role=UserRole.ARBITER)
+    event = _seed_resolved_event(repo, category)
+    assert client.post(f"/events/{event.id}/annul", json={"reason": ""}).status_code == 422
+    assert client.post(f"/events/{event.id}/annul", json={}).status_code == 422
+
+
+def test_annul_event_wrong_status_conflict(make_client, category) -> None:
+    """Черновик аннулировать нельзя — только отменить (cancelled)."""
+    client, repo, _ = make_client(role=UserRole.ARBITER)
+    event = _seed_resolved_event(repo, category)
+    event.annul(reason="Первое аннулирование", now=FIXED_NOW)
+    repo.seed(event)
+    assert event.status is EventStatus.ANNULLED
+
+    resp = client.post(f"/events/{event.id}/annul", json={"reason": "Повторно"})
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "InvalidEventTransitionError"
+
+
+def test_annul_missing_event_404(make_client) -> None:
+    client, _, _ = make_client(role=UserRole.ARBITER)
+    resp = client.post(f"/events/{uuid.uuid4()}/annul", json={"reason": "Причина"})
     assert resp.status_code == 404
 
 

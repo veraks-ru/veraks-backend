@@ -38,6 +38,11 @@ class InMemoryEventRepository:
     def __init__(self) -> None:
         self._by_id: dict[uuid.UUID, Event] = {}
 
+    def seed(self, event: Event) -> Event:
+        """Тестовый помощник: положить событие напрямую (синхронно)."""
+        self._by_id[event.id] = self._clone(event)
+        return event
+
     async def get_by_id(self, event_id: uuid.UUID) -> Event | None:
         return self._clone(self._by_id.get(event_id))
 

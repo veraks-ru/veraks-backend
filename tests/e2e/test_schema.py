@@ -41,6 +41,12 @@ async def test_event_status_enum_includes_proposed(session: AsyncSession) -> Non
     assert {"proposed", "draft", "open", "closed", "resolved"} <= values
 
 
+async def test_event_status_enum_includes_annulled(session: AsyncSession) -> None:
+    """0026: аннулирование после резолюции — отдельное значение enum."""
+    values = await _enum_values(session, "event_status")
+    assert {"annulled", "cancelled"} <= values
+
+
 async def test_rating_scope_enum_present(session: AsyncSession) -> None:
     values = await _enum_values(session, "rating_scope")
     assert {"global", "category", "season"} <= values

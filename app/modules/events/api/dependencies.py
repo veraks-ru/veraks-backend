@@ -21,6 +21,7 @@ from app.modules.events.adapters.repository import (
 )
 from app.modules.events.application.dto import Actor
 from app.modules.events.application.use_cases import (
+    AnnulEvent,
     ApproveEvent,
     CancelEvent,
     CreateCategory,
@@ -51,6 +52,15 @@ from app.modules.predictions.adapters.subscription_gate import (
     SqlAlchemySubscriptionGate,
 )
 from app.modules.predictions.application.use_cases import LockEventPredictions
+from app.modules.scoring.adapters.clock import SystemClock as ScoringClock
+from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
+from app.modules.scoring.adapters.scoring_gateway import (
+    SqlAlchemyEventScoringGateway,
+)
+from app.modules.scoring.adapters.season_config_gateway import (
+    SqlAlchemySeasonConfigGateway,
+)
+from app.modules.scoring.application.use_cases import RecomputeRatings
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from app.shared.audit.ports.audit_trail import AuditTrail
 
@@ -203,6 +213,29 @@ def get_lock_event_predictions(session: SessionDep) -> LockEventPredictions:
 def get_cancel_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> CancelEvent:
     """Use-case отмены события."""
     return CancelEvent(events=events, clock=clock, audit=audit)
+
+
+def get_annul_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> AnnulEvent:
+    """Use-case аннулирования события после резолюции (арбитр/админ)."""
+    return AnnulEvent(events=events, clock=clock, audit=audit)
+
+
+def get_recompute_ratings(session: SessionDep) -> RecomputeRatings:
+    """Композит-рут HTTP: пересчёт рейтингов после аннулирования события.
+
+    Аннулирование вычёркивает событие из выборок скоринга, поэтому затронутые
+    срезы (global + категория + сезон) надо перестроить сразу — тем же
+    ``RecomputeRatings``, каким это делает воркер после ``score_event``, а не
+    ждать ночного полного пересчёта. Второе (после ``LockEventPredictions``)
+    место, где events-API знает о соседнем домене.
+    """
+    clock = ScoringClock()
+    return RecomputeRatings(
+        gateway=SqlAlchemyEventScoringGateway(session, clock),
+        ratings=SqlAlchemyRatingRepository(session),
+        clock=clock,
+        season_config=SqlAlchemySeasonConfigGateway(session),
+    )
 
 
 def get_get_event(events: EventRepoDep) -> GetEvent:

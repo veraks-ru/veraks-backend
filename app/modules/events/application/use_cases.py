@@ -26,7 +26,10 @@ from app.modules.events.domain.errors import (
     EventSubscriptionRequiredError,
     InvalidEventWindowError,
 )
-from app.modules.events.domain.policies import ensure_can_manage_events
+from app.modules.events.domain.policies import (
+    ensure_can_annul_event,
+    ensure_can_manage_events,
+)
 from app.modules.events.domain.value_objects import EventWindow
 from app.modules.events.ports.clock import Clock
 from app.modules.events.ports.repositories import (
@@ -319,6 +322,53 @@ class CancelEvent(_TransitionUseCase):
 
     def _apply(self, event: Event) -> None:
         event.cancel(now=self._clock.now())
+
+
+class AnnulEvent:
+    """Аннулирование события после резолюции: ``resolved|disputed → annulled``.
+
+    Организатор конкурса вправе признать событие некорректным уже после
+    фиксации исхода (ст. 1058 ГК РФ, PRD §7.5/§4.8): двусмысленная
+    формулировка, ошибка источника, неразрешимый спор. Аннулированное событие
+    исключается из всех рейтингов и калибровки (выборки скоринга идут по
+    статусу ``resolved``).
+
+    Отличия от переходов семейства :class:`_TransitionUseCase`: своя роль
+    (арбитр/админ, см. ``ensure_can_annul_event``) и обязательная причина,
+    которая уходит в неизменяемый ``audit_log`` действием ``event.annulled``.
+    Существующие строки ``resolutions`` не правятся — журнал решений
+    append-only, аннулирование фиксируется только аудитом.
+
+    Пересчёт затронутых срезов рейтинга — забота вызывающего (композит-рут:
+    роутер events так же, как воркер после ``score_event``).
+    """
+
+    def __init__(
+        self, *, events: EventRepository, clock: Clock, audit: AuditTrail
+    ) -> None:
+        self._events = events
+        self._clock = clock
+        self._audit = audit
+
+    async def execute(
+        self, *, actor: Actor, event_id: uuid.UUID, reason: str
+    ) -> Event:
+        """Проверяет права и причину, аннулирует событие и пишет аудит."""
+        ensure_can_annul_event(actor.role)
+        event = await _require_event(self._events, event_id)
+        before = _status_value(event)
+        reason_text = event.annul(reason=reason, now=self._clock.now())
+        saved = await self._events.update(event)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action="event.annulled",
+            entity_type="event",
+            entity_id=saved.id,
+            before={"status": before, "outcome": saved.outcome},
+            after={"status": _status_value(saved), "reason": reason_text},
+        )
+        return saved
 
 
 class ApproveEvent:
