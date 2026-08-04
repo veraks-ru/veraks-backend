@@ -195,6 +195,12 @@ class Settings(BaseSettings):
     app_debug: bool = False
 
     database_url: str
+    # Владелец схемы — используется ТОЛЬКО для Alembic-миграций (T9: приложение
+    # в проде подключается непривилегированной ролью ``orakul_app`` через
+    # ``database_url``, а DDL и ``scripts/create_app_role.py`` требуют владельца).
+    # Если не задан — миграции тоже идут через ``database_url`` (локальный дев
+    # без разделения ролей, см. .env.example).
+    alembic_database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
 
     # Rate limiting (ARCHITECTURE.md §6): лимит запросов с одного IP в минуту.

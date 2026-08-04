@@ -12,10 +12,13 @@ COPY pyproject.toml ./
 COPY app ./app
 RUN pip install --upgrade pip && pip install -e .
 
-# Остальное (alembic, конфиги, сид) — отдельным слоем.
+# Остальное (alembic, конфиги, сид, bootstrap-скрипты) — отдельным слоем.
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY seed.py ./
+# scripts/create_app_role.py — бутстрап роли БД приложения orakul_app (T9),
+# запускается initContainer'ом в Helm-чарте (infra/helm/veraks).
+COPY scripts ./scripts
 
 EXPOSE 8000
 

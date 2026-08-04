@@ -34,14 +34,24 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+
+def _migrations_url() -> str:
+    """URL для DDL миграций: владелец схемы (``alembic_database_url``), если
+    задан отдельно от прикладного ``database_url`` (T9 — приложение в проде
+    ходит непривилегированной ролью ``orakul_app``, а миграции — владельцем).
+    """
+    settings = get_settings()
+    return settings.alembic_database_url or settings.database_url
+
+
+config.set_main_option("sqlalchemy.url", _migrations_url())
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
     """Генерация SQL без подключения к БД."""
     context.configure(
-        url=get_settings().database_url,
+        url=_migrations_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
