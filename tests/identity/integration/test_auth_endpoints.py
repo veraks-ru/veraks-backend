@@ -11,6 +11,7 @@ TODO(identity-infra): добавить end-to-end тест против реал
 
 from __future__ import annotations
 
+import uuid
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -130,3 +131,33 @@ def test_second_login_same_citizen_reuses_account(context) -> None:
     state2 = _login_and_get_state(client)
     second = client.get("/auth/esia/callback", params={"code": "b", "state": state2})
     assert second.status_code == 200  # существующий аккаунт, не создан новый
+
+
+async def test_deleted_account_login_rejected(context) -> None:
+    """Повторный вход через ЕСИА тем же СНИЛС после удаления аккаунта — отказ (T4).
+
+    ``ensure_account_can_authenticate`` уже запрещает вход в ``DELETED``-аккаунт;
+    здесь фиксируем это тестом сквозь реальный HTTP-эндпоинт callback'а, а не
+    только на уровне use-case (см. ``tests/identity/unit/test_use_cases.py``).
+    """
+    client, repo, _ = context
+
+    state1 = _login_and_get_state(client)
+    created = client.get("/auth/esia/callback", params={"code": "a", "state": state1})
+    assert created.status_code == 201
+    access = created.json()["access_token"]
+    user_id = client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {access}"}
+    ).json()["id"]
+
+    stored = await repo.get_by_id(uuid.UUID(user_id))
+    assert stored is not None
+    assert stored.anonymize_for_deletion() is True
+    await repo.update(stored)
+
+    state2 = _login_and_get_state(client)
+    resp = client.get("/auth/esia/callback", params={"code": "b", "state": state2})
+
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "AccountDeletedError"
+    assert "удал" in resp.json()["detail"].lower()

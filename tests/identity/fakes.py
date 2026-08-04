@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
+from datetime import datetime
+from typing import Any
 
 from app.modules.identity.domain.consent import Consent
 from app.modules.identity.domain.entities import User
@@ -16,6 +19,7 @@ from app.modules.identity.ports.repositories import (
     SnilsAlreadyExistsError,
     UsernameTakenError,
 )
+from app.shared.audit.domain.entities import AuditActorType, AuditEntry
 
 
 class InMemoryUserRepository:
@@ -166,3 +170,45 @@ class FakeRefreshTokenStore:
     async def revoke_all_for_user(self, user_id: str) -> None:
         for jti in self._family.pop(user_id, set()):
             self._active.pop(jti, None)
+
+
+class FakeAuditTrail:
+    """Запоминает записи аудита (без реальной хеш-цепочки)."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    async def record(
+        self,
+        *,
+        actor_id: uuid.UUID | None,
+        actor_type: AuditActorType,
+        action: str,
+        entity_type: str,
+        entity_id: uuid.UUID | None,
+        before: Mapping[str, Any] | None = None,
+        after: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> AuditEntry:
+        self.records.append(
+            {
+                "actor_id": actor_id,
+                "actor_type": actor_type,
+                "action": action,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+            }
+        )
+        return AuditEntry(
+            occurred_at=datetime(2026, 1, 1),  # noqa: DTZ001 — фейк, время не важно
+            actor_id=actor_id,
+            actor_type=actor_type,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            hash="fake",
+        )
+
+    def actions(self) -> list[str]:
+        """Список зафиксированных action'ов (для ассертов)."""
+        return [r["action"] for r in self.records]

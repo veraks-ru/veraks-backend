@@ -10,17 +10,29 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.http import client_ip
+from app.modules.billing.application.dto import Actor as BillingActor
+from app.modules.billing.application.use_cases import (
+    CancelSubscription as BillingCancelSubscription,
+)
+from app.modules.billing.domain.entities import SubscriptionStatus
+from app.modules.billing.ports.repositories import (
+    SubscriptionRepository as BillingSubscriptionRepository,
+)
 from app.modules.identity.api.dependencies import (
     CurrentUser,
+    get_billing_subscription_repository,
+    get_cancel_subscription_on_delete,
     get_complete_onboarding_uc,
+    get_delete_my_account_uc,
     get_my_consents_uc,
     get_public_profile_uc,
     get_update_profile_uc,
     get_user_repository,
 )
+from app.modules.identity.api.router import clear_session_cookies
 from app.modules.identity.api.schemas import (
     AuthMeResponse,
     ConsentResponse,
@@ -33,6 +45,7 @@ from app.modules.identity.api.schemas import (
 from app.modules.identity.application.dto import ConsentInput
 from app.modules.identity.application.use_cases import (
     CompleteOnboarding,
+    DeleteMyAccount,
     GetMyConsents,
     GetPublicProfile,
     UpdateMyProfile,
@@ -138,3 +151,40 @@ async def public_profile(
     """Возвращает псевдонимный публичный профиль; 404, если нет/неактивен."""
     user = await uc.execute(username=username)
     return PublicProfileResponse.from_domain(user)
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить аккаунт (самостоятельно, 152-ФЗ)",
+)
+async def delete_me(
+    response: Response,
+    current_user: CurrentUser,
+    delete_uc: Annotated[DeleteMyAccount, Depends(get_delete_my_account_uc)],
+    subscriptions: Annotated[
+        BillingSubscriptionRepository, Depends(get_billing_subscription_repository)
+    ],
+    cancel_subscription_uc: Annotated[
+        BillingCancelSubscription, Depends(get_cancel_subscription_on_delete)
+    ],
+) -> Response:
+    """Необратимо удаляет аккаунт: анонимизация профиля + отзыв сессий.
+
+    Активная подписка не блокирует удаление: автопродление отменяется тем же
+    путём, что и ручной ``POST /billing/subscriptions/{id}/cancel`` (уже
+    списанные средства не возвращаются — вопрос к юристу, не к коду). После
+    анонимизации отзывается всё семейство refresh-токенов; доступ по уже
+    выданному access-токену истечёт сам (TTL ≤ 15 мин). Cookie чистим так же,
+    как при обычном logout.
+    """
+    subscription = await subscriptions.get_latest_by_user(current_user.id)
+    if subscription is not None and subscription.status is SubscriptionStatus.ACTIVE:
+        await cancel_subscription_uc.execute(
+            subscription_id=subscription.id,
+            actor=BillingActor(user_id=current_user.id, role=current_user.role),
+        )
+    await delete_uc.execute(user_id=current_user.id)
+    clear_session_cookies(response)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response

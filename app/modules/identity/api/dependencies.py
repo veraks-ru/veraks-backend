@@ -37,6 +37,7 @@ from app.modules.identity.adapters.stores import (
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
     CompleteOnboarding,
+    DeleteMyAccount,
     GetCurrentUser,
     GetMyConsents,
     GetOnboardingStatus,
@@ -59,6 +60,24 @@ from app.modules.identity.ports.security import (
     SnilsHasher,
     StateStore,
     TokenIssuer,
+)
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
+from app.shared.audit.ports.audit_trail import AuditTrail
+
+# Отмена автопродления при самостоятельном удалении аккаунта (T4): identity
+# знает о billing ТОЛЬКО здесь, на уровне HTTP composition root — по тому же
+# паттерну, что events.api.dependencies.get_lock_event_predictions знает о
+# predictions (см. её докстринг). Ни domain, ни application identity billing
+# не импортируют.
+from app.modules.billing.adapters.clock import SystemClock as _BillingSystemClock
+from app.modules.billing.adapters.repositories import (
+    SqlAlchemySubscriptionRepository as _BillingSqlAlchemySubscriptionRepository,
+)
+from app.modules.billing.application.use_cases import (
+    CancelSubscription as BillingCancelSubscription,
+)
+from app.modules.billing.ports.repositories import (
+    SubscriptionRepository as BillingSubscriptionRepository,
 )
 
 # Способ фиксации согласий через веб-онбординг (PRD/т.з. T2).
@@ -272,6 +291,53 @@ def get_my_consents_uc(
 ) -> GetMyConsents:
     """Use-case списка согласий текущего пользователя."""
     return GetMyConsents(consents=consents)
+
+
+def get_audit_trail(session: SessionDep) -> AuditTrail:
+    """Общий append-only аудит-журнал (``app/shared/audit``).
+
+    Первое подключение identity к общему аудиту (T4) — пишем только
+    ``identity.user.deleted``; login/logout подключит следующая задача.
+    """
+    return SqlAlchemyAuditTrail(session)
+
+
+AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
+
+
+def get_delete_my_account_uc(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+    refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
+    audit: AuditDep,
+) -> DeleteMyAccount:
+    """Use-case самостоятельного удаления аккаунта (152-ФЗ)."""
+    return DeleteMyAccount(users=users, refresh_store=refresh_store, audit=audit)
+
+
+def get_billing_subscription_repository(
+    session: SessionDep,
+) -> BillingSubscriptionRepository:
+    """Композит-рут HTTP: репозиторий подписок billing.
+
+    Нужен только чтобы перед удалением аккаунта проверить, есть ли активная
+    подписка, которую нужно отменить (см. ``get_cancel_subscription_on_delete``).
+    """
+    return _BillingSqlAlchemySubscriptionRepository(session)
+
+
+def get_cancel_subscription_on_delete(session: SessionDep) -> BillingCancelSubscription:
+    """Композит-рут HTTP: отмена автопродления при удалении аккаунта.
+
+    Переиспользует use-case billing ``CancelSubscription`` — тот же путь, что
+    и ручной ``POST /billing/subscriptions/{id}/cancel``, чтобы у удалённого
+    аккаунта не продолжались списания. Возврат уже списанных средств не
+    делаем — это вопрос к юристу, не к коду.
+    """
+    return BillingCancelSubscription(
+        subscriptions=_BillingSqlAlchemySubscriptionRepository(session),
+        audit=SqlAlchemyAuditTrail(session),
+        clock=_BillingSystemClock(),
+    )
 
 
 # ── Аутентификация запроса ────────────────────────────────────────────────

@@ -21,6 +21,7 @@ from app.modules.identity.application.dto import ConsentInput
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
     CompleteOnboarding,
+    DeleteMyAccount,
     GetCurrentUser,
     GetMyConsents,
     GetOnboardingStatus,
@@ -43,6 +44,7 @@ from app.modules.identity.domain.errors import (
 from app.modules.identity.domain.value_objects import EsiaIdentity
 from app.modules.identity.ports.repositories import UsernameTakenError
 from tests.identity.fakes import (
+    FakeAuditTrail,
     FakeEsiaGateway,
     FakeRefreshTokenStore,
     FakeStateStore,
@@ -719,3 +721,85 @@ def test_consent_domain_entity_defaults() -> None:
     assert consent.accepted_at is not None
     assert consent.satisfies(ConsentDocument(document="offer", version="1"))
     assert not consent.satisfies(ConsentDocument(document="offer", version="2"))
+
+
+# ── Удаление аккаунта (T4, 152-ФЗ) ─────────────────────────────────────────
+
+
+def test_anonymize_for_deletion_clears_pii_keeps_hashes() -> None:
+    """Анонимизация стирает ФИО/публичный профиль, но хранит хэши-надгробия."""
+    user = _user(username="tobedeleted", display="Иван Петров")
+    user.real_name_enc = b"encrypted-fio"
+
+    changed = user.anonymize_for_deletion()
+
+    assert changed is True
+    assert user.status is UserStatus.DELETED
+    assert user.real_name_enc is None
+    assert user.display_name == "Удалённый аккаунт"
+    assert user.username == f"deleted-{user.id.hex[:8]}"
+    # snils_hash/esia_oid_hash — антиобход «1 человек = 1 аккаунт», не трогаем.
+    assert user.snils_hash == "hash-tobedeleted"
+    assert user.esia_oid_hash == "oid-hash-tobedeleted"
+
+
+def test_anonymize_for_deletion_idempotent() -> None:
+    """Повторный вызов для уже удалённого аккаунта — no-op."""
+    user = _user(username="already-gone")
+    assert user.anonymize_for_deletion() is True
+    tombstone_username = user.username
+
+    assert user.anonymize_for_deletion() is False
+    assert user.username == tombstone_username
+    assert user.status is UserStatus.DELETED
+
+
+async def test_delete_my_account_anonymizes_revokes_and_audits(repo) -> None:
+    user = _user(username="deleteme")
+    await repo.add(user)
+    refresh_store = FakeRefreshTokenStore()
+    await refresh_store.register("jti-1", 3600, str(user.id))
+    audit = FakeAuditTrail()
+    uc = DeleteMyAccount(users=repo, refresh_store=refresh_store, audit=audit)
+
+    await uc.execute(user_id=user.id)
+
+    stored = await repo.get_by_id(user.id)
+    assert stored is not None
+    assert stored.status is UserStatus.DELETED
+    assert stored.real_name_enc is None
+    assert stored.display_name == "Удалённый аккаунт"
+    assert stored.username == f"deleted-{user.id.hex[:8]}"
+    assert stored.snils_hash == user.snils_hash
+    assert stored.esia_oid_hash == user.esia_oid_hash
+    # Сессии отозваны.
+    assert await refresh_store.is_active("jti-1") is False
+    # Аудит — без ПДн: только action/entity, никакого ФИО/хэндла в payload.
+    assert audit.actions() == ["identity.user.deleted"]
+    entry = audit.records[0]
+    assert entry["entity_id"] == user.id
+    assert entry["actor_id"] == user.id
+
+
+async def test_delete_my_account_idempotent(repo) -> None:
+    """Повторный вызов не пишет второй раз в аудит и не падает."""
+    user = _user(username="twice")
+    await repo.add(user)
+    refresh_store = FakeRefreshTokenStore()
+    audit = FakeAuditTrail()
+    uc = DeleteMyAccount(users=repo, refresh_store=refresh_store, audit=audit)
+
+    await uc.execute(user_id=user.id)
+    await uc.execute(user_id=user.id)
+
+    assert audit.actions() == ["identity.user.deleted"]
+    stored = await repo.get_by_id(user.id)
+    assert stored is not None and stored.status is UserStatus.DELETED
+
+
+async def test_delete_my_account_unknown_user_raises(repo) -> None:
+    uc = DeleteMyAccount(
+        users=repo, refresh_store=FakeRefreshTokenStore(), audit=FakeAuditTrail()
+    )
+    with pytest.raises(UserNotFoundError):
+        await uc.execute(user_id=uuid.uuid4())

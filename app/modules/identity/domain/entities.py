@@ -144,6 +144,31 @@ class User:
         """
         return self.onboarded_at is None or missing_consents
 
+    def anonymize_for_deletion(self) -> bool:
+        """Необратимо переводит аккаунт в ``DELETED`` и анонимизирует профиль (152-ФЗ).
+
+        Стирает ФИО (``real_name_enc``) и освобождает публичный псевдоним
+        (``username`` → детерминированное «надгробие» вида ``deleted-<8 hex
+        от id>``, ``display_name`` → «Удалённый аккаунт»).
+
+        ``snils_hash``/``esia_oid_hash`` НЕ трогаем — это ключ инварианта
+        «1 человек = 1 аккаунт»: без них повторная регистрация того же
+        гражданина после удаления обошла бы ограничение. Правомерность и срок
+        хранения этих хэшей после удаления — вопрос к юристу (см.
+        ``audit/04-human-playbooks.md`` §3 п.7); пока решение по умолчанию —
+        хранить бессрочно, т.к. хэш необратим и сам по себе не раскрывает ПДн.
+
+        Идемпотентна: для уже удалённого аккаунта — no-op, возвращает
+        ``False`` (повторный вызов ничего не меняет и не проваливается).
+        """
+        if self.status is UserStatus.DELETED:
+            return False
+        self.status = UserStatus.DELETED
+        self.real_name_enc = None
+        self.display_name = "Удалённый аккаунт"
+        self.username = f"deleted-{self.id.hex[:8]}"
+        return True
+
     def apply_esia_refresh(
         self, *, esia_oid_hash: str, real_name_enc: bytes | None
     ) -> bool:

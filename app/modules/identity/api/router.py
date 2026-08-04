@@ -70,8 +70,8 @@ def _set_session_cookies(
     )
 
 
-def _clear_session_cookies(response: Response) -> None:
-    """Удаляет сессионные cookie при logout."""
+def clear_session_cookies(response: Response) -> None:
+    """Удаляет сессионные cookie (logout и самостоятельное удаление аккаунта)."""
     response.delete_cookie(_ACCESS_COOKIE)
     response.delete_cookie(_REFRESH_COOKIE, path="/auth")
 
@@ -170,7 +170,7 @@ async def logout(
 ) -> Response:
     """Отзывает refresh-токен и очищает cookie."""
     await uc.execute(refresh_token=refresh_token)
-    _clear_session_cookies(response)
+    clear_session_cookies(response)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 

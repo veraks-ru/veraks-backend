@@ -52,6 +52,8 @@ from app.modules.identity.ports.security import (
     StateStore,
     TokenIssuer,
 )
+from app.shared.audit.domain.entities import AuditActorType
+from app.shared.audit.ports.audit_trail import AuditTrail
 
 _STATE_TTL_SECONDS = 600
 _MAX_USERNAME_ATTEMPTS = 1000
@@ -448,3 +450,60 @@ class GetMyConsents:
 
     async def execute(self, *, user_id: uuid.UUID) -> list[Consent]:
         return await self._consents.list_for_user(user_id)
+
+
+class DeleteMyAccount:
+    """Самостоятельное удаление аккаунта (152-ФЗ, право субъекта ПДн на удаление).
+
+    Переводит аккаунт в ``DELETED`` и анонимизирует профиль (см.
+    ``User.anonymize_for_deletion`` — там же обоснование, почему
+    ``snils_hash``/``esia_oid_hash`` сохраняются как «надгробие» инварианта
+    «1 человек = 1 аккаунт»). Активная подписка не блокирует удаление —
+    её отмену (если есть) оркеструет вызывающий (API-слой identity вызывает
+    use-case billing напрямую через его composition root — см.
+    ``identity.api.dependencies.get_cancel_subscription_on_delete``; identity
+    не импортирует billing в domain/application, только на уровне HTTP-слоя,
+    по аналогии с тем, как events.api вызывает predictions).
+
+    Отзывает всё семейство refresh-токенов пользователя (доступ по уже
+    выданному access-токену истечёт сам, TTL ≤ 15 мин) и пишет запись в
+    аудит без ПДн (payload — только ``user_id``).
+
+    Идемпотентна: повторный вызов для уже удалённого аккаунта не меняет
+    профиль повторно и не пишет второй раз в аудит, но всё равно отзывает
+    refresh-токены (защитно, на случай что они переживают анонимизацию).
+    """
+
+    def __init__(
+        self,
+        *,
+        users: UserRepository,
+        refresh_store: RefreshTokenStore,
+        audit: AuditTrail,
+    ) -> None:
+        self._users = users
+        self._refresh_store = refresh_store
+        self._audit = audit
+
+    async def execute(self, *, user_id: uuid.UUID) -> None:
+        user = await self._users.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError("Пользователь не найден")
+
+        if user.anonymize_for_deletion():
+            try:
+                await self._users.update(user)
+            except UsernameTakenError:
+                # Крайне маловероятная коллизия по первым 8 hex символам id —
+                # берём id целиком (коллизия исключена).
+                user.username = f"deleted-{user.id.hex}"
+                await self._users.update(user)
+            await self._audit.record(
+                actor_id=user_id,
+                actor_type=AuditActorType.USER,
+                action="identity.user.deleted",
+                entity_type="user",
+                entity_id=user_id,
+            )
+
+        await self._refresh_store.revoke_all_for_user(str(user_id))
