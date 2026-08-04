@@ -19,16 +19,16 @@ from app.modules.resolutions.domain.policies import (
 )
 
 
-@pytest.mark.parametrize(
-    "role", [UserRole.EDITOR, UserRole.ARBITER, UserRole.ADMIN]
-)
+@pytest.mark.parametrize("role", [UserRole.ARBITER, UserRole.ADMIN])
 def test_resolve_allowed_for_staff(role: UserRole) -> None:
     ensure_can_resolve(role)  # не поднимает
 
 
-def test_resolve_forbidden_for_user() -> None:
+@pytest.mark.parametrize("role", [UserRole.USER, UserRole.EDITOR])
+def test_resolve_forbidden_for_non_arbiter(role: UserRole) -> None:
+    """Фиксация исхода — только арбитр/админ; редактор ведёт события, но не судит их."""
     with pytest.raises(ResolutionPermissionError):
-        ensure_can_resolve(UserRole.USER)
+        ensure_can_resolve(role)
 
 
 @pytest.mark.parametrize(

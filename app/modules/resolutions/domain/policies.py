@@ -14,10 +14,10 @@ from app.modules.resolutions.domain.errors import (
     SelfDisputeDecisionError,
 )
 
-# Кто вправе фиксировать/пересматривать исход события.
-_RESOLVE_ROLES: frozenset[UserRole] = frozenset(
-    {UserRole.EDITOR, UserRole.ARBITER, UserRole.ADMIN}
-)
+# Кто вправе фиксировать/пересматривать исход события. Редактор ведёт события
+# (создаёт, публикует), но фиксация исхода — независимая проверка (PRD §3.4):
+# конфликт интересов не позволяет автору события подводить его итог.
+_RESOLVE_ROLES: frozenset[UserRole] = frozenset({UserRole.ARBITER, UserRole.ADMIN})
 # Кто вправе выносить решение по спору (арбитраж).
 _ARBITRATE_ROLES: frozenset[UserRole] = frozenset(
     {UserRole.ARBITER, UserRole.ADMIN}
@@ -25,10 +25,10 @@ _ARBITRATE_ROLES: frozenset[UserRole] = frozenset(
 
 
 def ensure_can_resolve(role: UserRole) -> None:
-    """Фиксация исхода — редактор/арбитр/админ."""
+    """Фиксация исхода — только арбитр/админ (PRD §3.4)."""
     if role not in _RESOLVE_ROLES:
         raise ResolutionPermissionError(
-            "Фиксация исхода доступна только редактору, арбитру или администратору"
+            "Фиксация исхода доступна только арбитру или администратору"
         )
 
 

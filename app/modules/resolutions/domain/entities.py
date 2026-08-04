@@ -200,10 +200,14 @@ class Dispute:
 
         Уже закрытый спор трогать не нужно — это no-op, чтобы аннулирование
         оставалось идемпотентным.
+
+        Причина проверяется ДО мутации (как в ``Event.annul``), поэтому пустая
+        причина не оставляет спор частично изменённым.
         """
         if not self.is_open():
             return
+        reason_text = _require_text(reason, field_name="reason")
         self.status = DisputeStatus.VOIDED
         self.decided_by = voided_by
-        self.decision_notes = _require_text(reason, field_name="reason")
+        self.decision_notes = reason_text
         self.decided_at = now or _utcnow()

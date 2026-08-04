@@ -29,6 +29,7 @@ from app.modules.events.application.use_cases import (
 from app.modules.events.domain.entities import EventStatus
 from app.modules.events.domain.errors import (
     CategoryNotFoundError,
+    EventEditNotAllowedError,
     EventNotFoundError,
     EventPermissionError,
     InvalidEventDataError,
@@ -152,6 +153,54 @@ async def test_update_event_partial_window_rejected(
             event_id=event.id,
             patch=EventPatchInput(closes_at=FIXED_NOW + timedelta(days=5)),
         )
+
+
+async def test_update_event_writes_audit_diff(
+    events, categories, clock, audit, editor_actor, category
+) -> None:
+    """``event.updated`` фиксирует диф «было→стало» только изменённых полей."""
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
+
+    update = UpdateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    await update.execute(
+        actor=editor_actor,
+        event_id=event.id,
+        patch=EventPatchInput(
+            title="Новая формулировка", description="Новое описание"
+        ),
+    )
+
+    record = next(r for r in audit.records if r["action"] == "event.updated")
+    assert record["before"] == {"title": event.title, "description": event.description}
+    assert record["after"] == {
+        "title": "Новая формулировка",
+        "description": "Новое описание",
+    }
+    # Неизменённые поля (категория, окно, источник, критерий) в диф не попали.
+    assert "category_id" not in record["before"]
+    assert "window" not in record["before"]
+
+
+async def test_update_event_locks_conditions_after_publish(
+    events, categories, clock, audit, editor_actor, category
+) -> None:
+    """После публикации правка формулировки/критерия/источника запрещена."""
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
+    await PublishEvent(events=events, clock=clock, audit=audit).execute(
+        actor=editor_actor, event_id=event.id
+    )
+
+    update = UpdateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    for patch in (
+        EventPatchInput(title="Другая формулировка"),
+        EventPatchInput(description="Другое описание"),
+        EventPatchInput(resolution_source="https://other.example"),
+        EventPatchInput(resolution_criteria="Другой критерий"),
+    ):
+        with pytest.raises(EventEditNotAllowedError):
+            await update.execute(actor=editor_actor, event_id=event.id, patch=patch)
 
 
 async def test_publish_close_cancel_flow(

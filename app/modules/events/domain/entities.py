@@ -231,14 +231,15 @@ class Event:
 
         Правила по статусам:
           * редактировать можно только в ``draft`` и ``open``;
-          * после публикации (``open``) категория и окно фиксируются — менять
-            нельзя, чтобы не подрывать честность уже принятых прогнозов;
+          * после публикации (``open``) условия конкурса фиксируются целиком —
+            категория, окно, сезон, формулировка (``title``/``description``) и
+            порядок разрешения (``resolution_source``/``resolution_criteria``)
+            менять нельзя (ст. 1058 ГК РФ: условия публичного конкурса нельзя
+            менять после начала);
           * в ``draft`` правится всё.
 
         Возвращает ``True``, если что-то реально изменилось (нужен ли UPDATE
-        и запись в audit_log).
-
-        TODO(events-audit): фиксировать diff (before/after) в audit_log.
+        и запись в audit_log — diff «было→стало» строит вызывающий use-case).
         """
         if self.status not in _EDITABLE_STATUSES:
             raise EventEditNotAllowedError(
@@ -259,6 +260,28 @@ class Event:
                 # начала приёма прогнозов менять принадлежность к сезону нельзя.
                 raise EventEditNotAllowedError(
                     "Сезон нельзя менять после публикации события"
+                )
+            if title is not None and title.strip() != self.title:
+                raise EventEditNotAllowedError(
+                    "Формулировку нельзя менять после публикации события"
+                )
+            if description is not None and description.strip() != self.description:
+                raise EventEditNotAllowedError(
+                    "Описание нельзя менять после публикации события"
+                )
+            if (
+                resolution_source is not None
+                and resolution_source.strip() != self.resolution_source
+            ):
+                raise EventEditNotAllowedError(
+                    "Источник разрешения нельзя менять после публикации события"
+                )
+            if (
+                resolution_criteria is not None
+                and resolution_criteria.strip() != self.resolution_criteria
+            ):
+                raise EventEditNotAllowedError(
+                    "Критерий разрешения нельзя менять после публикации события"
                 )
 
         changed = False

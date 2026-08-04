@@ -220,18 +220,27 @@ def test_invalid_transition_conflict(make_client, category) -> None:
     assert resp.json()["error"] == "InvalidEventTransitionError"
 
 
-def test_patch_locks_window_after_publish(make_client, category) -> None:
+def test_patch_locks_conditions_after_publish(make_client, category) -> None:
+    """Ст. 1058 ГК РФ: условия опубликованного события неизменны."""
     client, _, _, _ = make_client()
     event_id = client.post("/events", json=_event_payload(category.id)).json()["id"]
     client.post(f"/events/{event_id}/publish")
 
-    # Заголовок правится в open.
-    ok = client.patch(f"/events/{event_id}", json={"title": "Уточнённый заголовок"})
-    assert ok.status_code == 200
-    assert ok.json()["title"] == "Уточнённый заголовок"
+    # Формулировка после публикации заблокирована → 409.
+    locked_title = client.patch(
+        f"/events/{event_id}", json={"title": "Уточнённый заголовок"}
+    )
+    assert locked_title.status_code == 409
+    assert locked_title.json()["error"] == "EventEditNotAllowedError"
+
+    # Критерий/источник разрешения тоже заблокированы.
+    locked_criteria = client.patch(
+        f"/events/{event_id}", json={"resolution_criteria": "Другой критерий"}
+    )
+    assert locked_criteria.status_code == 409
 
     # Окно после публикации заблокировано → 409.
-    locked = client.patch(
+    locked_window = client.patch(
         f"/events/{event_id}",
         json={
             "opens_at": (FIXED_NOW + timedelta(days=2)).isoformat(),
@@ -239,7 +248,7 @@ def test_patch_locks_window_after_publish(make_client, category) -> None:
             "resolves_at": (FIXED_NOW + timedelta(days=41)).isoformat(),
         },
     )
-    assert locked.status_code == 409
+    assert locked_window.status_code == 409
 
 
 def test_list_events_filters_by_status(make_client, category) -> None:

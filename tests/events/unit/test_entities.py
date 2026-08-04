@@ -152,8 +152,6 @@ def test_edit_draft_changes_all_fields(future_window) -> None:
 def test_edit_open_event_locks_window_and_category(future_window) -> None:
     event = _make_draft(future_window)
     event.publish(now=FIXED_NOW)
-    # Заголовок/критерии правятся.
-    assert event.apply_edits(title="Уточнение", now=FIXED_NOW) is True
     # Категория заблокирована после публикации.
     with pytest.raises(EventEditNotAllowedError):
         event.apply_edits(category_id=uuid.uuid4(), now=FIXED_NOW)
@@ -168,6 +166,51 @@ def test_edit_open_event_locks_window_and_category(future_window) -> None:
     # Сезон заблокирован после публикации (честность сезонного зачёта).
     with pytest.raises(EventEditNotAllowedError):
         event.apply_edits(season_id=uuid.uuid4(), now=FIXED_NOW)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("title", "Новая формулировка"),
+        ("description", "Новое описание"),
+        ("resolution_source", "https://other-source.example"),
+        ("resolution_criteria", "Другой критерий засчитывания"),
+    ],
+)
+def test_edit_open_event_locks_condition_fields(
+    future_window, field: str, value: str
+) -> None:
+    """Ст. 1058 ГК РФ: условия конкурса после публикации не меняются."""
+    event = _make_draft(future_window)
+    event.publish(now=FIXED_NOW)
+    with pytest.raises(EventEditNotAllowedError):
+        event.apply_edits(now=FIXED_NOW, **{field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("title", "Новая формулировка"),
+        ("description", "Новое описание"),
+        ("resolution_source", "https://other-source.example"),
+        ("resolution_criteria", "Другой критерий засчитывания"),
+    ],
+)
+def test_edit_draft_allows_condition_fields(
+    future_window, field: str, value: str
+) -> None:
+    """В ``draft`` (до публикации) условия конкурса ещё свободно правятся."""
+    event = _make_draft(future_window)
+    changed = event.apply_edits(now=FIXED_NOW, **{field: value})
+    assert changed is True
+    assert getattr(event, field) == value
+
+
+def test_edit_open_event_allows_noop_condition_fields(future_window) -> None:
+    """Повтор того же значения после публикации — не правка, а no-op."""
+    event = _make_draft(future_window)
+    event.publish(now=FIXED_NOW)
+    assert event.apply_edits(title=event.title, now=FIXED_NOW) is False
 
 
 def test_edit_draft_allows_season_change(future_window) -> None:

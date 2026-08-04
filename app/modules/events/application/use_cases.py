@@ -61,6 +61,42 @@ def _status_value(event: Event) -> str:
     return event.status.value
 
 
+def _window_snapshot(window: EventWindow) -> dict[str, str]:
+    """JSON-сериализуемый снимок временного окна для аудита."""
+    return {
+        "opens_at": window.opens_at.isoformat(),
+        "closes_at": window.closes_at.isoformat(),
+        "resolves_at": window.resolves_at.isoformat(),
+    }
+
+
+def _event_snapshot(event: Event) -> dict[str, object]:
+    """Снимок редактируемых полей события для дифа аудита ``event.updated``."""
+    return {
+        "title": event.title,
+        "description": event.description,
+        "category_id": str(event.category_id),
+        "season_id": str(event.season_id) if event.season_id else None,
+        "window": _window_snapshot(event.window),
+        "resolution_source": event.resolution_source,
+        "resolution_criteria": event.resolution_criteria,
+    }
+
+
+def _diff_snapshots(
+    before: dict[str, object], after: dict[str, object]
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Оставляет в дифе только реально изменившиеся поля («было» / «стало»)."""
+    changed_before: dict[str, object] = {}
+    changed_after: dict[str, object] = {}
+    for field_name, old_value in before.items():
+        new_value = after[field_name]
+        if new_value != old_value:
+            changed_before[field_name] = old_value
+            changed_after[field_name] = new_value
+    return changed_before, changed_after
+
+
 def _window_from_patch(patch: EventPatchInput) -> EventWindow | None:
     """Собирает окно из патча: либо все три отметки, либо ни одной.
 
@@ -225,6 +261,7 @@ class UpdateEvent:
         ):
             raise CategoryNotFoundError("Указанная категория не существует")
 
+        before_snapshot = _event_snapshot(event)
         changed = event.apply_edits(
             title=patch.title,
             description=patch.description,
@@ -237,17 +274,17 @@ class UpdateEvent:
         )
         if changed:
             saved = await self._events.update(event)
+            diff_before, diff_after = _diff_snapshots(
+                before_snapshot, _event_snapshot(saved)
+            )
             await self._audit.record(
                 actor_id=actor.user_id,
                 actor_type=_actor_type(actor.role),
                 action="event.updated",
                 entity_type="event",
                 entity_id=saved.id,
-                after={
-                    "title": saved.title,
-                    "category_id": str(saved.category_id),
-                    "status": _status_value(saved),
-                },
+                before=diff_before,
+                after=diff_after,
             )
             return saved
         return event

@@ -129,10 +129,23 @@ def test_fix_forbidden_for_user(ctx) -> None:
     assert resp.json()["error"] == "ResolutionPermissionError"
 
 
-def test_fix_and_get_resolution(ctx) -> None:
+def test_fix_forbidden_for_editor(ctx) -> None:
+    """Редактор ведёт события, но фиксировать исход не вправе (PRD §3.4)."""
     event_id = uuid.uuid4()
     ctx.events.seed(event_id, status=EventStatus.CLOSED)
     _act_as(ctx, _user(UserRole.EDITOR))
+    resp = ctx.client.post(
+        f"/events/{event_id}/resolution",
+        json={"outcome": True, "source_reference": "src"},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "ResolutionPermissionError"
+
+
+def test_fix_and_get_resolution(ctx) -> None:
+    event_id = uuid.uuid4()
+    ctx.events.seed(event_id, status=EventStatus.CLOSED)
+    _act_as(ctx, _user(UserRole.ARBITER))
 
     created = ctx.client.post(
         f"/events/{event_id}/resolution",
@@ -151,7 +164,7 @@ def test_fix_and_get_resolution(ctx) -> None:
 def test_fix_unresolvable_event_conflict(ctx) -> None:
     event_id = uuid.uuid4()
     ctx.events.seed(event_id, status=EventStatus.OPEN)
-    _act_as(ctx, _user(UserRole.EDITOR))
+    _act_as(ctx, _user(UserRole.ARBITER))
     resp = ctx.client.post(
         f"/events/{event_id}/resolution",
         json={"outcome": True, "source_reference": "src"},
@@ -169,8 +182,8 @@ def test_get_missing_resolution_404(ctx) -> None:
 
 
 def _resolve(ctx: Ctx, event_id: uuid.UUID) -> None:
-    """Фиксирует исход события редактором (через API)."""
-    _act_as(ctx, _user(UserRole.EDITOR))
+    """Фиксирует исход события арбитром (через API)."""
+    _act_as(ctx, _user(UserRole.ARBITER))
     resp = ctx.client.post(
         f"/events/{event_id}/resolution",
         json={"outcome": True, "source_reference": "https://src.example"},
