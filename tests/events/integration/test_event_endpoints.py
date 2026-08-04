@@ -273,6 +273,25 @@ def test_patch_locks_conditions_after_publish(make_client, category) -> None:
     assert locked_window.status_code == 409
 
 
+def test_patch_move_to_restricted_category_422(
+    make_client, category, restricted_category
+) -> None:
+    """PRD §7.5: PATCH не даёт обойти запрет переносом черновика в запрещённую категорию."""
+    client, _, _, _ = make_client()
+    event_id = client.post("/events", json=_event_payload(category.id)).json()["id"]
+
+    resp = client.patch(
+        f"/events/{event_id}",
+        json={"category_id": str(restricted_category.id)},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "RestrictedCategoryError"
+
+    # Категория события не поменялась.
+    fetched = client.get(f"/events/{event_id}")
+    assert fetched.json()["category_id"] == str(category.id)
+
+
 def test_list_events_filters_by_status(make_client, category) -> None:
     client, _, _, _ = make_client()
     a = client.post("/events", json=_event_payload(category.id)).json()["id"]

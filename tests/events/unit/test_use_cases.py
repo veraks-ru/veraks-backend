@@ -172,6 +172,28 @@ async def test_update_event_partial_window_rejected(
         )
 
 
+async def test_update_event_move_to_restricted_category_rejected(
+    events, categories, clock, audit, editor_actor, category, restricted_category
+) -> None:
+    """PRD §7.5: PATCH не должен позволять обойти запрет переносом категории."""
+    create = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    event = await create.execute(actor=editor_actor, data=_new_event_input(category.id))
+
+    audit.records.clear()
+    update = UpdateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    with pytest.raises(RestrictedCategoryError):
+        await update.execute(
+            actor=editor_actor,
+            event_id=event.id,
+            patch=EventPatchInput(category_id=restricted_category.id),
+        )
+    # Отказ до сохранения: событие осталось в исходной категории, аудит пуст.
+    unchanged = await events.get_by_id(event.id)
+    assert unchanged is not None
+    assert unchanged.category_id == category.id
+    assert audit.actions() == []
+
+
 async def test_update_event_writes_audit_diff(
     events, categories, clock, audit, editor_actor, category
 ) -> None:

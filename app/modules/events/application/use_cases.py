@@ -272,10 +272,11 @@ class UpdateEvent:
         """Применяет правки с учётом статуса и прав; сохраняет при изменениях."""
         ensure_can_manage_events(actor.role)
         event = await self._load(event_id)
-        if patch.category_id is not None and not await self._categories.exists(
-            patch.category_id
-        ):
-            raise CategoryNotFoundError("Указанная категория не существует")
+        if patch.category_id is not None:
+            # Та же проверка, что при создании/предложении: переносить
+            # событие в запрещённую категорию (PRD §7.5) правкой нельзя —
+            # иначе это был бы обход запрета через PATCH.
+            await _ensure_category_allowed(self._categories, patch.category_id)
 
         before_snapshot = _event_snapshot(event)
         changed = event.apply_edits(
