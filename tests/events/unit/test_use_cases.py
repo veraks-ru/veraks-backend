@@ -23,6 +23,7 @@ from app.modules.events.application.use_cases import (
     CloseExpiredEvents,
     CreateCategory,
     CreateEvent,
+    ProposeEvent,
     PublishEvent,
     UpdateEvent,
 )
@@ -32,14 +33,17 @@ from app.modules.events.domain.errors import (
     EventEditNotAllowedError,
     EventNotFoundError,
     EventPermissionError,
+    EventSubscriptionRequiredError,
     InvalidEventDataError,
     InvalidEventTransitionError,
     InvalidEventWindowError,
+    RestrictedCategoryError,
 )
 from tests.events.conftest import FIXED_NOW
 from tests.events.fakes import (
     FakeAuditTrail,
     FakeClock,
+    FakeSubscriptionGate,
     InMemoryCategoryRepository,
     InMemoryEventRepository,
 )
@@ -56,9 +60,10 @@ def audit() -> FakeAuditTrail:
 
 
 @pytest.fixture
-def categories(category) -> InMemoryCategoryRepository:
+def categories(category, restricted_category) -> InMemoryCategoryRepository:
     repo = InMemoryCategoryRepository()
     repo.seed(category)
+    repo.seed(restricted_category)
     return repo
 
 
@@ -109,6 +114,18 @@ async def test_create_event_unknown_category(
     uc = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
     with pytest.raises(CategoryNotFoundError):
         await uc.execute(actor=editor_actor, data=_new_event_input(uuid.uuid4()))
+
+
+async def test_create_event_restricted_category_rejected(
+    events, categories, clock, audit, editor_actor, restricted_category
+) -> None:
+    """PRD §7.5: событие в запрещённой категории не создаётся, даже редакцией."""
+    uc = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    with pytest.raises(RestrictedCategoryError):
+        await uc.execute(
+            actor=editor_actor, data=_new_event_input(restricted_category.id)
+        )
+    assert audit.actions() == []  # отказ до какой-либо записи в аудит
 
 
 async def test_create_event_invalid_window(
@@ -369,3 +386,59 @@ async def test_create_category_slug_conflict(categories, editor_actor, category)
             actor=editor_actor,
             data=NewCategoryInput(slug=category.slug, title="Дубль"),
         )
+
+
+async def test_create_category_is_restricted_flag_persisted(categories, editor_actor) -> None:
+    uc = CreateCategory(categories=categories)
+    created = await uc.execute(
+        actor=editor_actor,
+        data=NewCategoryInput(slug="new-restricted", title="Новая", is_restricted=True),
+    )
+    assert created.is_restricted is True
+
+
+async def test_propose_event_as_user_with_subscription(
+    events, categories, clock, audit, user_actor, category
+) -> None:
+    uc = ProposeEvent(
+        events=events,
+        categories=categories,
+        clock=clock,
+        audit=audit,
+        subscriptions=FakeSubscriptionGate(active=True),
+    )
+    event = await uc.execute(actor=user_actor, data=_new_event_input(category.id))
+    assert event.status is EventStatus.PROPOSED
+    assert audit.actions() == ["event.proposed"]
+
+
+async def test_propose_event_requires_subscription(
+    events, categories, clock, audit, user_actor, category
+) -> None:
+    uc = ProposeEvent(
+        events=events,
+        categories=categories,
+        clock=clock,
+        audit=audit,
+        subscriptions=FakeSubscriptionGate(active=False),
+    )
+    with pytest.raises(EventSubscriptionRequiredError):
+        await uc.execute(actor=user_actor, data=_new_event_input(category.id))
+
+
+async def test_propose_event_restricted_category_rejected(
+    events, categories, clock, audit, user_actor, restricted_category
+) -> None:
+    """PRD §7.5: пользователь не может предложить событие в запрещённой категории."""
+    uc = ProposeEvent(
+        events=events,
+        categories=categories,
+        clock=clock,
+        audit=audit,
+        subscriptions=FakeSubscriptionGate(active=True),
+    )
+    with pytest.raises(RestrictedCategoryError):
+        await uc.execute(
+            actor=user_actor, data=_new_event_input(restricted_category.id)
+        )
+    assert audit.actions() == []

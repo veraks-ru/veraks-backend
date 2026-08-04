@@ -146,6 +146,10 @@ class CreateCategoryRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = ""
     parent_id: uuid.UUID | None = None
+    is_restricted: bool = Field(
+        default=False,
+        description="Запрещённая тематика (PRD §7.5): события в такой категории не создаются",
+    )
 
     def to_input(self) -> NewCategoryInput:
         """Трансляция в прикладной DTO."""
@@ -154,6 +158,7 @@ class CreateCategoryRequest(BaseModel):
             title=self.title,
             description=self.description,
             parent_id=self.parent_id,
+            is_restricted=self.is_restricted,
         )
 
 
@@ -167,6 +172,7 @@ class CategoryResponse(BaseModel):
     title: str
     description: str
     parent_id: uuid.UUID | None
+    is_restricted: bool
 
     @classmethod
     def from_domain(cls, category: Category) -> CategoryResponse:
@@ -177,4 +183,5 @@ class CategoryResponse(BaseModel):
             title=category.title,
             description=category.description,
             parent_id=category.parent_id,
+            is_restricted=category.is_restricted,
         )

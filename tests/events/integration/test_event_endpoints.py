@@ -29,6 +29,7 @@ from app.modules.events.api.dependencies import (
     get_notifier,
     get_optional_actor,
     get_recompute_ratings,
+    get_subscription_gate,
     get_void_event_disputes,
 )
 from app.modules.events.application.dto import Actor
@@ -44,6 +45,7 @@ from tests.events.conftest import FIXED_NOW
 from tests.events.fakes import (
     FakeAuditTrail,
     FakeClock,
+    FakeSubscriptionGate,
     InMemoryCategoryRepository,
     InMemoryEventRepository,
 )
@@ -81,7 +83,7 @@ def _fake_user(role: UserRole) -> User:
 
 
 @pytest.fixture
-def make_client(category: Category):
+def make_client(category: Category, restricted_category: Category):
     """Фабрика клиента: настраивает роль актора и общие фейки.
 
     ``role=None`` оставляет реальную аутентификацию (для проверки 401).
@@ -94,6 +96,7 @@ def make_client(category: Category):
         category_repo = InMemoryCategoryRepository()
         dispute_repo = InMemoryDisputeRepository()
         category_repo.seed(category)
+        category_repo.seed(restricted_category)
 
         app = create_app()
         app.dependency_overrides[get_event_repository] = lambda: event_repo
@@ -101,6 +104,9 @@ def make_client(category: Category):
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
         app.dependency_overrides[get_audit_trail] = lambda: FakeAuditTrail()
         app.dependency_overrides[get_notifier] = lambda: _NullNotifier()
+        app.dependency_overrides[get_subscription_gate] = lambda: FakeSubscriptionGate(
+            active=True
+        )
         app.dependency_overrides[get_lock_event_predictions] = (
             lambda: LockEventPredictions(
                 predictions=InMemoryPredictionRepository(),
@@ -184,6 +190,22 @@ def test_create_event_unknown_category_404(make_client) -> None:
     resp = client.post("/events", json=_event_payload(uuid.uuid4()))
     assert resp.status_code == 404
     assert resp.json()["error"] == "CategoryNotFoundError"
+
+
+def test_create_event_restricted_category_422(make_client, restricted_category) -> None:
+    """PRD §7.5: создание события в запрещённой категории отклоняется."""
+    client, _, _, _ = make_client()
+    resp = client.post("/events", json=_event_payload(restricted_category.id))
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "RestrictedCategoryError"
+
+
+def test_propose_event_restricted_category_422(make_client, restricted_category) -> None:
+    """PRD §7.5: пользователь не может предложить событие в запрещённой категории."""
+    client, _, _, _ = make_client(role=UserRole.USER)
+    resp = client.post("/events/propose", json=_event_payload(restricted_category.id))
+    assert resp.status_code == 422
+    assert resp.json()["error"] == "RestrictedCategoryError"
 
 
 def test_create_event_invalid_window_400(make_client, category) -> None:
@@ -270,13 +292,37 @@ def test_categories_list_and_create(make_client) -> None:
     client, _, _, _ = make_client()
     listed = client.get("/categories")
     assert listed.status_code == 200
-    assert any(c["slug"] == "politics" for c in listed.json())
+    politics = next(c for c in listed.json() if c["slug"] == "politics")
+    assert politics["is_restricted"] is False
 
     created = client.post(
         "/categories", json={"slug": "sport", "title": "Спорт"}
     )
     assert created.status_code == 201
     assert created.json()["slug"] == "sport"
+    assert created.json()["is_restricted"] is False
+
+
+def test_categories_list_carries_is_restricted_flag(
+    make_client, restricted_category
+) -> None:
+    """Флаг запрещённой категории отдаётся в списке — фронт скрывает/дизейблит её."""
+    client, _, _, _ = make_client()
+    listed = client.get("/categories")
+    restricted = next(
+        c for c in listed.json() if c["slug"] == restricted_category.slug
+    )
+    assert restricted["is_restricted"] is True
+
+
+def test_create_category_with_is_restricted_flag(make_client) -> None:
+    client, _, _, _ = make_client()
+    created = client.post(
+        "/categories",
+        json={"slug": "health", "title": "Здоровье", "is_restricted": True},
+    )
+    assert created.status_code == 201
+    assert created.json()["is_restricted"] is True
 
 
 def test_create_category_slug_conflict_409(make_client) -> None:

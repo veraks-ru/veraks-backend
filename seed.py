@@ -88,6 +88,14 @@ CATEGORIES = [
     ("society", "Общество"),
 ]
 
+# Запрещённые категории (PRD §7.5): такие темы не проходят модерацию, события
+# в них не создаются и не предлагаются. Заведены в демо-данных, чтобы
+# поведение (скрытая/недоступная категория в форме) было видно в UI.
+RESTRICTED_CATEGORIES = [
+    ("health-persons", "Здоровье и жизнь персон"),
+    ("violence-extremism", "Насилие, теракты и экстремизм"),
+]
+
 # (username, display_name, skill 0..1, snils_number). Первые три совпадают с
 # «гражданами» мок-ЕСИА → вход под ними попадает в этот аккаунт.
 USERS = [
@@ -216,6 +224,17 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
             c = CategoryORM(id=uuid.uuid4(), slug=slug, title=title, description="", parent_id=None)
             cats[slug] = c.id
             session.add(c)
+        for slug, title in RESTRICTED_CATEGORIES:
+            session.add(
+                CategoryORM(
+                    id=uuid.uuid4(),
+                    slug=slug,
+                    title=title,
+                    description="",
+                    parent_id=None,
+                    is_restricted=True,
+                )
+            )
         await session.flush()
 
         # ── Сезон (для UI; события к нему не привязываем) ──
@@ -384,7 +403,9 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
                     )
                 )
 
-    print(f"✓ Засеяно: {len(USERS)} участников, {len(CATEGORIES)} категорий, "
+    print(f"✓ Засеяно: {len(USERS)} участников, "
+          f"{len(CATEGORIES) + len(RESTRICTED_CATEGORIES)} категорий "
+          f"(из них {len(RESTRICTED_CATEGORIES)} запрещённых), "
           f"{len(RESOLVED)} разрешённых, {len(OPEN)} открытых событий")
     return resolved_ids, season.id
 

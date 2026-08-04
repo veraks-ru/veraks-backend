@@ -146,6 +146,18 @@ class InMemoryCategoryRepository:
         return sorted(self._by_id.values(), key=lambda c: c.slug)
 
 
+class FakeSubscriptionGate:
+    """Подписочный гейт: управляемый флаг активной подписки (по умолчанию есть)."""
+
+    def __init__(self, active: bool = True) -> None:
+        self._active = active
+
+    async def has_active_subscription(
+        self, user_id: uuid.UUID, now: datetime
+    ) -> bool:
+        return self._active
+
+
 class FakeAuditTrail:
     """Запоминает записи аудита (без реальной хеш-цепочки)."""
 

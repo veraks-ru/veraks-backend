@@ -67,3 +67,4 @@ class NewCategoryInput:
     title: str
     description: str = ""
     parent_id: uuid.UUID | None = None
+    is_restricted: bool = False

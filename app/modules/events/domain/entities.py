@@ -86,12 +86,19 @@ def _utcnow() -> datetime:
 
 @dataclass(slots=True)
 class Category:
-    """Категория событий; дерево строится через ``parent_id`` (FK на себя)."""
+    """Категория событий; дерево строится через ``parent_id`` (FK на себя).
+
+    ``is_restricted`` — флаг запрещённой тематики (PRD §7.5: смерть/здоровье
+    конкретных лиц, насилие, теракты, экстремизм, частная жизнь). В такой
+    категории нельзя ни создать событие редакции, ни предложить его —
+    проверка в ``CreateEvent``/``ProposeEvent`` (см. ``RestrictedCategoryError``).
+    """
 
     slug: str
     title: str
     description: str
     parent_id: uuid.UUID | None = None
+    is_restricted: bool = False
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
@@ -102,6 +109,7 @@ class Category:
         title: str,
         description: str = "",
         parent_id: uuid.UUID | None = None,
+        is_restricted: bool = False,
     ) -> Category:
         """Фабрика категории с валидацией slug и обязательного заголовка."""
         return cls(
@@ -109,6 +117,7 @@ class Category:
             title=require_text(title, field="title", max_length=200),
             description=description.strip(),
             parent_id=parent_id,
+            is_restricted=is_restricted,
         )
 
 

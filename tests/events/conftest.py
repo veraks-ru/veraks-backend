@@ -56,3 +56,13 @@ def arbiter_actor() -> Actor:
 def category() -> Category:
     """Предзаведённая категория для привязки событий."""
     return Category.create(slug="politics", title="Политика")
+
+
+@pytest.fixture
+def restricted_category() -> Category:
+    """Запрещённая категория (PRD §7.5) — события в ней создавать нельзя."""
+    return Category.create(
+        slug="health-persons",
+        title="Здоровье и жизнь персон",
+        is_restricted=True,
+    )

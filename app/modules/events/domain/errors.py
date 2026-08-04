@@ -40,6 +40,16 @@ class CategorySlugTakenError(EventError):
     """Нарушение ``UNIQUE(slug)`` категории."""
 
 
+class RestrictedCategoryError(EventError):
+    """Категория запрещена для событий (PRD §7.5).
+
+    Поднимается при создании (``CreateEvent``) или предложении
+    (``ProposeEvent``) события в категории с ``is_restricted=true``: смерть/
+    здоровье конкретных лиц, насилие, теракты, экстремизм, частная жизнь —
+    такие темы не проходят модерацию по определению.
+    """
+
+
 class EventPermissionError(EventError):
     """У актора недостаточно прав (RBAC) для операции над событиями."""
 

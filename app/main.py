@@ -24,6 +24,7 @@ from app.modules.events.domain.errors import (
     InvalidEventDataError,
     InvalidEventTransitionError,
     InvalidEventWindowError,
+    RestrictedCategoryError,
 )
 from app.modules.predictions.api.router import router as predictions_router
 from app.modules.predictions.domain.errors import (
@@ -158,6 +159,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     EventEditNotAllowedError: status.HTTP_409_CONFLICT,
     InvalidEventWindowError: status.HTTP_400_BAD_REQUEST,
     InvalidEventDataError: status.HTTP_400_BAD_REQUEST,
+    RestrictedCategoryError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     # predictions
     PredictionTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
     ProfileUserNotFoundError: status.HTTP_404_NOT_FOUND,

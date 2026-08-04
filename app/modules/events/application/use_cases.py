@@ -25,6 +25,7 @@ from app.modules.events.domain.errors import (
     EventNotFoundError,
     EventSubscriptionRequiredError,
     InvalidEventWindowError,
+    RestrictedCategoryError,
 )
 from app.modules.events.domain.policies import (
     ensure_can_annul_event,
@@ -97,6 +98,23 @@ def _diff_snapshots(
     return changed_before, changed_after
 
 
+async def _ensure_category_allowed(
+    categories: CategoryRepository, category_id: uuid.UUID
+) -> None:
+    """Проверяет, что категория существует и не запрещена (PRD §7.5).
+
+    Общая проверка для :class:`CreateEvent` и :class:`ProposeEvent`: событие
+    не может быть создано/предложено в категории с ``is_restricted=true``.
+    """
+    category = await categories.get_by_id(category_id)
+    if category is None:
+        raise CategoryNotFoundError("Указанная категория не существует")
+    if category.is_restricted:
+        raise RestrictedCategoryError(
+            f"Категория «{category.title}» запрещена для событий по правилам платформы"
+        )
+
+
 def _window_from_patch(patch: EventPatchInput) -> EventWindow | None:
     """Собирает окно из патча: либо все три отметки, либо ни одной.
 
@@ -138,8 +156,7 @@ class CreateEvent:
     async def execute(self, *, actor: Actor, data: NewEventInput) -> Event:
         """Проверяет права и категорию, валидирует окно и сохраняет черновик."""
         ensure_can_manage_events(actor.role)
-        if not await self._categories.exists(data.category_id):
-            raise CategoryNotFoundError("Указанная категория не существует")
+        await _ensure_category_allowed(self._categories, data.category_id)
 
         window = EventWindow(
             opens_at=data.opens_at,
@@ -203,8 +220,7 @@ class ProposeEvent:
             raise EventSubscriptionRequiredError(
                 "Предлагать события можно только с активной подпиской"
             )
-        if not await self._categories.exists(data.category_id):
-            raise CategoryNotFoundError("Указанная категория не существует")
+        await _ensure_category_allowed(self._categories, data.category_id)
 
         window = EventWindow(
             opens_at=data.opens_at,
@@ -608,6 +624,7 @@ class CreateCategory:
             title=data.title,
             description=data.description,
             parent_id=data.parent_id,
+            is_restricted=data.is_restricted,
         )
         return await self._categories.add(category)
 

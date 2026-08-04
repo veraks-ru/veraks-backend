@@ -41,6 +41,9 @@ class CategoryORM(Base):
         nullable=True,
         index=True,
     )
+    is_restricted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     def to_domain(self) -> Category:
         """ORM → доменная сущность."""
@@ -50,6 +53,7 @@ class CategoryORM(Base):
             title=self.title,
             description=self.description,
             parent_id=self.parent_id,
+            is_restricted=self.is_restricted,
         )
 
     @classmethod
@@ -61,6 +65,7 @@ class CategoryORM(Base):
             title=category.title,
             description=category.description,
             parent_id=category.parent_id,
+            is_restricted=category.is_restricted,
         )
 
 
