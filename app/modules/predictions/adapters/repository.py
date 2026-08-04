@@ -11,6 +11,8 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.events.adapters.orm import EventORM
+from app.modules.events.domain.entities import EventStatus
 from app.modules.predictions.adapters.orm import PredictionORM
 from app.modules.predictions.domain.entities import Prediction
 from app.modules.predictions.ports.repositories import PredictionAlreadyExistsError
@@ -96,6 +98,19 @@ class SqlAlchemyPredictionRepository:
             .order_by(PredictionORM.created_at.desc())
         )
         if resolved_only:
-            stmt = stmt.where(PredictionORM.brier_score.is_not(None))
+            # Публичный трек-рекорд: аннулированное событие не участвует нигде,
+            # поэтому его прогнозы не показываются как «засчитанные», хотя
+            # brier_score у них остался с момента скоринга (история не
+            # переписывается). В «своих» прогнозах (resolved_only=False) они
+            # видны — там рядом стоит статус события.
+            stmt = stmt.where(
+                PredictionORM.brier_score.is_not(None),
+                ~select(EventORM.id)
+                .where(
+                    EventORM.id == PredictionORM.event_id,
+                    EventORM.status == EventStatus.ANNULLED,
+                )
+                .exists(),
+            )
         rows = (await self._session.execute(stmt)).scalars().all()
         return [row.to_domain() for row in rows]

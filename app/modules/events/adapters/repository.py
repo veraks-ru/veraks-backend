@@ -22,9 +22,18 @@ class SqlAlchemyEventRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_by_id(self, event_id: uuid.UUID) -> Event | None:
-        """Событие по PK."""
-        orm = await self._session.get(EventORM, event_id)
+    async def get_by_id(
+        self, event_id: uuid.UUID, *, for_update: bool = False
+    ) -> Event | None:
+        """Событие по PK (опц. с блокировкой строки).
+
+        ``for_update=True`` — ``SELECT … FOR UPDATE``: конкурентная смена
+        статуса (например подача спора) ждёт коммита текущей транзакции и
+        затем видит уже изменённый статус.
+        """
+        orm = await self._session.get(
+            EventORM, event_id, with_for_update=True if for_update else None
+        )
         return orm.to_domain() if orm else None
 
     async def add(self, event: Event) -> Event:

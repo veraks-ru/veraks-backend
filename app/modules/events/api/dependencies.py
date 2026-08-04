@@ -52,6 +52,11 @@ from app.modules.predictions.adapters.subscription_gate import (
     SqlAlchemySubscriptionGate,
 )
 from app.modules.predictions.application.use_cases import LockEventPredictions
+from app.modules.resolutions.adapters.clock import SystemClock as ResolutionsClock
+from app.modules.resolutions.adapters.repositories import (
+    SqlAlchemyDisputeRepository,
+)
+from app.modules.resolutions.application.use_cases import VoidEventDisputes
 from app.modules.scoring.adapters.clock import SystemClock as ScoringClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
 from app.modules.scoring.adapters.scoring_gateway import (
@@ -218,6 +223,21 @@ def get_cancel_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> 
 def get_annul_event(events: EventRepoDep, clock: ClockDep, audit: AuditDep) -> AnnulEvent:
     """Use-case аннулирования события после резолюции (арбитр/админ)."""
     return AnnulEvent(events=events, clock=clock, audit=audit)
+
+
+def get_void_event_disputes(session: SessionDep) -> VoidEventDisputes:
+    """Композит-рут HTTP: снятие открытых споров аннулированного события.
+
+    Аннулирование ``disputed``-события обязано закрыть его спор в той же
+    транзакции: решить спор потом невозможно (обе ветки решения арбитра ведут
+    через запрещённый переход ``annulled → resolved``), а открытый спор
+    навсегда заблокировал бы финализацию сезона.
+    """
+    return VoidEventDisputes(
+        disputes=SqlAlchemyDisputeRepository(session),
+        audit=SqlAlchemyAuditTrail(session),
+        clock=ResolutionsClock(),
+    )
 
 
 def get_recompute_ratings(session: SessionDep) -> RecomputeRatings:

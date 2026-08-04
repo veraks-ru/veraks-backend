@@ -339,8 +339,9 @@ class AnnulEvent:
     Существующие строки ``resolutions`` не правятся — журнал решений
     append-only, аннулирование фиксируется только аудитом.
 
-    Пересчёт затронутых срезов рейтинга — забота вызывающего (композит-рут:
-    роутер events так же, как воркер после ``score_event``).
+    Пересчёт затронутых срезов рейтинга и снятие открытых споров события —
+    забота вызывающего (композит-рут: роутер events так же, как воркер после
+    ``score_event``).
     """
 
     def __init__(
@@ -353,9 +354,14 @@ class AnnulEvent:
     async def execute(
         self, *, actor: Actor, event_id: uuid.UUID, reason: str
     ) -> Event:
-        """Проверяет права и причину, аннулирует событие и пишет аудит."""
+        """Проверяет права и причину, аннулирует событие и пишет аудит.
+
+        Строка события читается ``FOR UPDATE``: иначе гонка «аннулирование ↔
+        подача спора» могла бы оставить открытый спор у уже аннулированного
+        события — тот самый тупик, который снимает ``VoidEventDisputes``.
+        """
         ensure_can_annul_event(actor.role)
-        event = await _require_event(self._events, event_id)
+        event = await _require_event(self._events, event_id, for_update=True)
         before = _status_value(event)
         reason_text = event.annul(reason=reason, now=self._clock.now())
         saved = await self._events.update(event)
@@ -580,9 +586,11 @@ class ListCategories:
         return await self._categories.list_all()
 
 
-async def _require_event(events: EventRepository, event_id: uuid.UUID) -> Event:
+async def _require_event(
+    events: EventRepository, event_id: uuid.UUID, *, for_update: bool = False
+) -> Event:
     """Загружает событие или поднимает :class:`EventNotFoundError`."""
-    event = await events.get_by_id(event_id)
+    event = await events.get_by_id(event_id, for_update=for_update)
     if event is None:
         raise EventNotFoundError("Событие не найдено")
     return event

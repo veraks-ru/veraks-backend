@@ -22,6 +22,7 @@ from app.modules.resolutions.application.use_cases import (
     GetResolution,
     ListDisputes,
     RaiseDispute,
+    VoidEventDisputes,
 )
 from tests.resolutions.fakes import (
     FakeAuditTrail,
@@ -55,6 +56,7 @@ class Stand:
     list_disputes: ListDisputes
     raise_dispute: RaiseDispute
     decide: DecideDispute
+    void_disputes: VoidEventDisputes
     close_windows: CloseDisputeWindows
 
 
@@ -102,6 +104,9 @@ def stand() -> Stand:
             audit=audit,
             clock=clock,
             dispute_window=DISPUTE_WINDOW,
+        ),
+        void_disputes=VoidEventDisputes(
+            disputes=disputes, audit=audit, clock=clock
         ),
         close_windows=CloseDisputeWindows(
             events=events,

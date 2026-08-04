@@ -31,6 +31,7 @@ from app.modules.events.api.dependencies import (
     get_recompute_ratings,
     get_reject_event,
     get_update_event,
+    get_void_event_disputes,
 )
 from app.modules.events.api.schemas import (
     AnnulEventRequest,
@@ -57,6 +58,8 @@ from app.modules.events.application.use_cases import (
     UpdateEvent,
 )
 from app.modules.predictions.application.use_cases import LockEventPredictions
+from app.modules.resolutions.application.dto import Actor as ResolutionActor
+from app.modules.resolutions.application.use_cases import VoidEventDisputes
 from app.modules.scoring.application.use_cases import RecomputeRatings
 from app.modules.events.domain.entities import EventStatus
 from app.modules.events.ports.repositories import EventFilter
@@ -271,16 +274,36 @@ async def annul_event(
     payload: AnnulEventRequest,
     actor: ActorDep,
     uc: Annotated[AnnulEvent, Depends(get_annul_event)],
+    void_disputes: Annotated[VoidEventDisputes, Depends(get_void_event_disputes)],
     recompute: Annotated[RecomputeRatings, Depends(get_recompute_ratings)],
 ) -> EventResponse:
-    """Аннулирует некорректное событие и сразу пересчитывает затронутые срезы.
+    """Аннулирует некорректное событие, снимает его споры и пересчитывает рейтинги.
 
-    Аннулирование и пересчёт идут в одной транзакции запроса: событие выпадает
-    из выборок скоринга (они идут по статусу ``resolved``), поэтому рейтинги
-    global/категории/сезона надо перестроить по горячему следу — тем же
-    ``RecomputeRatings``, что и воркер после ``score_event``.
+    Все три шага — в одной транзакции запроса, порядок обязателен:
+
+    1. ``AnnulEvent`` — переход ``resolved|disputed → annulled`` (события);
+    2. ``VoidEventDisputes`` — снятие открытых споров (resolutions). Без него
+       аннулирование ``disputed``-события оставляло бы вечно открытый спор:
+       решить его уже нельзя (обе ветки решения арбитра ведут через
+       запрещённый переход ``annulled → resolved``), а он навсегда блокировал
+       бы финализацию сезона;
+    3. ``RecomputeRatings`` — событие выпало из выборок скоринга (они идут по
+       статусу ``resolved``), поэтому срезы global/категории/сезона надо
+       перестроить по горячему следу.
+
+    Пересчёт здесь синхронный, а не фоновый, — намеренно: у HTTP-приложения
+    нет ARQ-пула (постановка задач живёт в воркере), а оставлять рейтинги
+    расходящимися с фактом аннулирования до ночного прогона нельзя. Механика
+    та же, что у воркера после ``score_event`` и у
+    ``POST /admin/ratings/recompute``; аннулирование — редкая операция, так
+    что цена полного прохода по разрешённым событиям приемлема.
     """
     event = await uc.execute(actor=actor, event_id=event_id, reason=payload.reason)
+    await void_disputes.execute(
+        actor=ResolutionActor(user_id=actor.user_id, role=actor.role),
+        event_id=event_id,
+        reason=payload.reason,
+    )
     await recompute.execute(
         scopes=RecomputeRatings.touched_scopes(
             category_id=event.category_id, season_id=event.season_id

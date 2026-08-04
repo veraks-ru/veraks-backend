@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.events.adapters.orm import EventORM
+from app.modules.events.domain.entities import EventStatus
 from app.modules.identity.adapters.orm import UserORM
 from app.modules.predictions.adapters.orm import PredictionORM
 from app.modules.social.adapters.orm import CommentORM
@@ -77,6 +78,10 @@ class SqlAlchemyFeedGateway:
                     PredictionORM.user_id.in_(ids),
                     PredictionORM.scored_at.is_not(None),
                     PredictionORM.brier_score.is_not(None),
+                    # Аннулированное событие не участвует нигде: показывать по
+                    # нему Brier и исход в ленте нельзя, хотя оценки остались
+                    # в predictions с момента скоринга.
+                    EventORM.status != EventStatus.ANNULLED,
                 )
                 .order_by(PredictionORM.scored_at.desc())
                 .limit(window)

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.modules.events.adapters.orm import EventORM
+from app.modules.events.domain.entities import EventStatus
 from app.modules.resolutions.adapters.orm import (
     DisputeORM,
     ResolutionORM,
@@ -120,6 +121,19 @@ class SqlAlchemyDisputeRepository:
         rows = (await self._session.execute(stmt)).scalars().all()
         return [row.to_domain() for row in rows]
 
+    async def list_open_for_event(self, event_id: uuid.UUID) -> list[Dispute]:
+        """Незакрытые споры события (новые выше)."""
+        stmt = (
+            select(DisputeORM)
+            .where(
+                DisputeORM.event_id == event_id,
+                DisputeORM.status.in_(_OPEN_DISPUTE_STATUSES),
+            )
+            .order_by(DisputeORM.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]
+
     async def has_open_for_event(self, event_id: uuid.UUID) -> bool:
         """Есть ли по событию незакрытый спор."""
         stmt = select(
@@ -131,15 +145,27 @@ class SqlAlchemyDisputeRepository:
         return bool((await self._session.execute(stmt)).scalar())
 
     async def has_open_in_season(self, season_id: uuid.UUID) -> bool:
-        """Есть ли незакрытые споры по событиям сезона (join на ``events``)."""
+        """Есть ли незакрытые споры по событиям сезона (join на ``events``).
+
+        Аннулированные события исключены: их споры снимаются в ту же
+        транзакцию (``VoidEventDisputes``), но фильтр по статусу оставлен
+        подстраховкой — иначе один зависший спор по вычеркнутому из рейтингов
+        событию навсегда блокировал бы финализацию сезона.
+
+        Форма запроса — ``select(<подзапрос>.exists())``: у ``exists()`` нет
+        метода ``join``, поэтому джойн строится внутри подзапроса (прежняя
+        цепочка ``exists().select_from(...).join(...)`` падала бы
+        ``AttributeError`` на любом реальном вызове).
+        """
         stmt = select(
-            exists()
-            .select_from(DisputeORM)
+            select(DisputeORM.id)
             .join(EventORM, EventORM.id == DisputeORM.event_id)
             .where(
                 EventORM.season_id == season_id,
+                EventORM.status != EventStatus.ANNULLED,
                 DisputeORM.status.in_(_OPEN_DISPUTE_STATUSES),
             )
+            .exists()
         )
         return bool((await self._session.execute(stmt)).scalar())
 

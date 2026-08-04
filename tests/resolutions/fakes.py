@@ -191,6 +191,13 @@ class InMemoryDisputeRepository:
         rows.sort(key=lambda d: d.created_at, reverse=True)
         return [replace(d) for d in rows]
 
+    async def list_open_for_event(self, event_id: uuid.UUID) -> list[Dispute]:
+        rows = [
+            d for d in self._by_id.values() if d.event_id == event_id and d.is_open()
+        ]
+        rows.sort(key=lambda d: d.created_at, reverse=True)
+        return [replace(d) for d in rows]
+
     async def has_open_for_event(self, event_id: uuid.UUID) -> bool:
         return any(
             d.event_id == event_id and d.is_open() for d in self._by_id.values()

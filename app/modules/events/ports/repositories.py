@@ -30,8 +30,15 @@ class EventFilter:
 class EventRepository(Protocol):
     """Хранилище событий."""
 
-    async def get_by_id(self, event_id: uuid.UUID) -> Event | None:
-        """Событие по PK или ``None``."""
+    async def get_by_id(
+        self, event_id: uuid.UUID, *, for_update: bool = False
+    ) -> Event | None:
+        """Событие по PK или ``None``.
+
+        ``for_update=True`` берёт строку с блокировкой (``SELECT … FOR UPDATE``)
+        — для переходов, которые обязаны быть атомарны относительно
+        конкурентных изменений статуса (паттерн M-RESRACE из resolutions).
+        """
         ...
 
     async def add(self, event: Event) -> Event:

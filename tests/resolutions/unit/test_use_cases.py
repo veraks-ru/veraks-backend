@@ -348,3 +348,86 @@ async def test_raise_dispute_locks_event_row(stand, editor, participant) -> None
         event_id=event_id, actor=participant, reason="Источник противоречит исходу"
     )
     assert event_id in stand.events.locked_reads
+
+
+# ── Снятие споров при аннулировании события ──────────────────────────────────
+
+
+async def test_void_disputes_closes_open_dispute_with_audit(
+    stand, editor, participant, arbiter
+):
+    """Спор снимается терминально, с причиной аннулирования и записью аудита."""
+    event_id, dispute = await _open_dispute(stand, editor, participant)
+
+    voided = await stand.void_disputes.execute(
+        actor=arbiter, event_id=event_id, reason="Формулировка двусмысленна"
+    )
+
+    assert voided == 1
+    stored = await stand.disputes.get_by_id(dispute.id)
+    assert stored is not None
+    assert stored.status is DisputeStatus.VOIDED
+    assert stored.is_open() is False
+    assert stored.decided_by == arbiter.user_id
+    assert stored.decision_notes == "Формулировка двусмысленна"
+    assert "dispute.voided" in stand.audit.actions()
+    # Главное последствие: сезон больше не заблокирован этим спором.
+    assert await stand.disputes.has_open_for_event(event_id) is False
+
+
+async def test_void_disputes_is_idempotent(stand, editor, participant, arbiter):
+    """Повторный вызов ничего не меняет и не пишет в аудит."""
+    event_id, _ = await _open_dispute(stand, editor, participant)
+    await stand.void_disputes.execute(
+        actor=arbiter, event_id=event_id, reason="Спор неразрешим"
+    )
+    actions_after_first = list(stand.audit.actions())
+
+    assert (
+        await stand.void_disputes.execute(
+            actor=arbiter, event_id=event_id, reason="Спор неразрешим"
+        )
+        == 0
+    )
+    assert stand.audit.actions() == actions_after_first
+
+
+async def test_void_disputes_does_not_touch_decided_ones(
+    stand, editor, participant, arbiter
+):
+    """Уже решённый спор сохраняет своё решение — переписывать историю нельзя."""
+    event_id, dispute = await _open_dispute(stand, editor, participant)
+    await stand.decide.execute(
+        dispute_id=dispute.id, actor=arbiter, accept=False, decision_notes="без оснований"
+    )
+
+    assert (
+        await stand.void_disputes.execute(
+            actor=arbiter, event_id=event_id, reason="Позднее аннулирование"
+        )
+        == 0
+    )
+    stored = await stand.disputes.get_by_id(dispute.id)
+    assert stored is not None and stored.status is DisputeStatus.REJECTED
+
+
+async def test_void_disputes_forbidden_for_editor(stand, editor, participant):
+    """Снятие спора — арбитраж: редактору недоступно."""
+    event_id, dispute = await _open_dispute(stand, editor, participant)
+    with pytest.raises(ResolutionPermissionError):
+        await stand.void_disputes.execute(
+            actor=editor, event_id=event_id, reason="Причина"
+        )
+    stored = await stand.disputes.get_by_id(dispute.id)
+    assert stored is not None and stored.is_open() is True
+
+
+async def test_void_disputes_requires_reason(stand, editor, participant, arbiter):
+    """Причина обязательна: пустая не проходит и спор остаётся открытым."""
+    event_id, dispute = await _open_dispute(stand, editor, participant)
+    with pytest.raises(InvalidResolutionDataError):
+        await stand.void_disputes.execute(
+            actor=arbiter, event_id=event_id, reason="   "
+        )
+    stored = await stand.disputes.get_by_id(dispute.id)
+    assert stored is not None and stored.is_open() is True

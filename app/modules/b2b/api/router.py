@@ -146,5 +146,16 @@ async def signal_events(
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[EventSignalResponse]:
+    """Лента событий для B2B-потребителей.
+
+    Контракт: события отдаются со своим статусом как есть (кроме ``proposed``
+    — предложения на модерации скрыты, как и в публичном списке). В частности,
+    у события в статусе ``annulled`` поле ``outcome`` остаётся заполненным —
+    исход когда-то был зафиксирован и остаётся в истории, но событие
+    аннулировано и **не участвует ни в рейтингах, ни в калибровке**.
+    Потребитель, строящий свои метрики по этой ленте, обязан отфильтровать
+    ``status = "annulled"`` сам — иначе получит расхождение с нашим
+    лидербордом.
+    """
     signals = await uc.execute(status=status_filter, limit=limit)
     return [EventSignalResponse.from_signal(s) for s in signals]

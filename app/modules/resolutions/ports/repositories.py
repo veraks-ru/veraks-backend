@@ -52,6 +52,10 @@ class DisputeRepository(Protocol):
         """Все споры события (новые выше)."""
         ...
 
+    async def list_open_for_event(self, event_id: uuid.UUID) -> list[Dispute]:
+        """Незакрытые споры события (для снятия при аннулировании)."""
+        ...
+
     async def has_open_for_event(self, event_id: uuid.UUID) -> bool:
         """Есть ли по событию незакрытый спор."""
         ...

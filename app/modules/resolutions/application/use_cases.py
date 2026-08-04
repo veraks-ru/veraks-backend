@@ -381,6 +381,62 @@ class DecideDispute:
         )
 
 
+class VoidEventDisputes:
+    """Снятие открытых споров события вместе с его аннулированием.
+
+    Без этого шага аннулирование ``disputed``-события создавало бы тупик:
+    спор остаётся открытым навсегда (решить его нельзя — обе ветки
+    :class:`DecideDispute` ведут через запрещённый переход
+    ``annulled → resolved``), а ``has_open_in_season`` из-за него вечно
+    возвращает ``True`` и намертво блокирует финализацию сезона — и в воркере
+    (``RollSeasons``), и в ручном ``POST /admin/seasons/{id}/finalize``.
+
+    Спор не решается по существу, а снимается: событие вычеркнуто из
+    рейтингов, предмета спора нет. Каждый снятый спор фиксируется в
+    неизменяемом ``audit_log`` действием ``dispute.voided`` с причиной
+    аннулирования. Идемпотентно: закрытые споры не трогаются, повторный вызов
+    ничего не меняет и ничего не пишет.
+
+    Вызывается композит-рутом (роутер events) сразу после ``AnnulEvent``, в
+    той же транзакции запроса — как соседний ``RecomputeRatings``.
+    """
+
+    def __init__(
+        self,
+        *,
+        disputes: DisputeRepository,
+        audit: AuditTrail,
+        clock: Clock,
+    ) -> None:
+        self._disputes = disputes
+        self._audit = audit
+        self._clock = clock
+
+    async def execute(
+        self, *, actor: Actor, event_id: uuid.UUID, reason: str
+    ) -> int:
+        """Снимает все открытые споры события; возвращает их число."""
+        ensure_can_decide_dispute(actor.role)
+        now = self._clock.now()
+        voided = 0
+        for dispute in await self._disputes.list_open_for_event(event_id):
+            before = dispute.status.value
+            dispute.void(voided_by=actor.user_id, reason=reason, now=now)
+            saved = await self._disputes.update(dispute)
+            await self._audit.record(
+                actor_id=actor.user_id,
+                actor_type=_actor_type(actor.role),
+                action="dispute.voided",
+                entity_type="dispute",
+                entity_id=saved.id,
+                before={"status": before},
+                after={"status": saved.status.value, "reason": reason},
+                metadata={"event_id": str(event_id)},
+            )
+            voided += 1
+        return voided
+
+
 class CloseDisputeWindows:
     """Фоновое закрытие окон оспаривания и постановка скоринга.
 

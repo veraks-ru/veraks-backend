@@ -53,12 +53,18 @@ class ResolutionStatus(str, enum.Enum):
 
 
 class DisputeStatus(str, enum.Enum):
-    """Жизненный цикл спора."""
+    """Жизненный цикл спора.
+
+    ``voided`` — спор снят вместе с аннулированием события: предмета спора
+    больше нет (событие вычеркнуто из рейтингов), решать его по существу
+    незачем и невозможно. Это терминальный статус, как ``accepted``/``rejected``.
+    """
 
     OPEN = "open"
     UNDER_REVIEW = "under_review"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+    VOIDED = "voided"
 
 
 _OPEN_DISPUTE_STATUSES: frozenset[DisputeStatus] = frozenset(
@@ -175,4 +181,29 @@ class Dispute:
         self.status = DisputeStatus.ACCEPTED if accepted else DisputeStatus.REJECTED
         self.decided_by = decided_by
         self.decision_notes = decision_notes.strip()
+        self.decided_at = now or _utcnow()
+
+    def void(
+        self,
+        *,
+        voided_by: uuid.UUID,
+        reason: str,
+        now: datetime | None = None,
+    ) -> None:
+        """Снимает спор вместе с аннулированием события (терминально).
+
+        Спор не решается по существу: событие аннулировано, его прогнозы
+        вычеркнуты из рейтингов — предмета спора больше нет. Оставлять спор
+        открытым нельзя (он вечно блокировал бы финализацию сезона), а решить
+        его через ``decide`` невозможно: обе ветки ведут к переходу
+        ``annulled → resolved``, запрещённому автоматом events.
+
+        Уже закрытый спор трогать не нужно — это no-op, чтобы аннулирование
+        оставалось идемпотентным.
+        """
+        if not self.is_open():
+            return
+        self.status = DisputeStatus.VOIDED
+        self.decided_by = voided_by
+        self.decision_notes = _require_text(reason, field_name="reason")
         self.decided_at = now or _utcnow()

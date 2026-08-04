@@ -43,7 +43,11 @@ class InMemoryEventRepository:
         self._by_id[event.id] = self._clone(event)
         return event
 
-    async def get_by_id(self, event_id: uuid.UUID) -> Event | None:
+    async def get_by_id(
+        self, event_id: uuid.UUID, *, for_update: bool = False
+    ) -> Event | None:
+        # Блокировки строк в памяти нет — фейк однопоточный; параметр принимаем
+        # ради совместимости с портом.
         return self._clone(self._by_id.get(event_id))
 
     async def add(self, event: Event) -> Event:
