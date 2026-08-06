@@ -43,8 +43,17 @@ class RatingRepository(Protocol):
         limit: int = 50,
         offset: int = 0,
         qualified_only: bool = False,
+        min_resolved: int | None = None,
     ) -> list[Rating]:
-        """Топ области по предрасчитанному ``rank``; опц. только квалифицированные."""
+        """Топ области по предрасчитанному ``rank``.
+
+        ``qualified_only`` — фильтр по сохранённому флагу приза (сезон, см.
+        ``Rating.qualified``). ``min_resolved`` — фильтр по числу разрешённых
+        прогнозов пользователя (порог участия глобального/категорийного
+        лидерборда, см. ``domain.constants.LEADERBOARD_MIN_RESOLVED_*``). В
+        обоих случаях ``rank`` отдаётся сохранённым, без пересчёта — после
+        фильтрации в последовательности рангов возможны разрывы.
+        """
         ...
 
     async def get_for_user(

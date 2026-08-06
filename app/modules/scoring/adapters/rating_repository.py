@@ -99,11 +99,15 @@ class SqlAlchemyRatingRepository:
         limit: int = 50,
         offset: int = 0,
         qualified_only: bool = False,
+        min_resolved: int | None = None,
     ) -> list[Rating]:
         """Топ области по предрасчитанному рангу (по возрастанию).
 
-        ``qualified_only`` оставляет только квалифицированных участников —
-        фильтр на уровне запроса, чтобы пагинация была корректной.
+        ``qualified_only`` оставляет только квалифицированных к призам сезона
+        (``qualified = true``); ``min_resolved`` — только тех, у кого
+        ``n_resolved`` не меньше порога участия (глобал/категория). Оба —
+        фильтры на уровне запроса, чтобы пагинация была корректной; ``rank``
+        при этом не пересчитывается (в выдаче возможны разрывы рангов).
         """
         stmt = (
             select(RatingORM)
@@ -117,6 +121,8 @@ class SqlAlchemyRatingRepository:
         )
         if qualified_only:
             stmt = stmt.where(RatingORM.qualified.is_(True))
+        if min_resolved is not None:
+            stmt = stmt.where(RatingORM.n_resolved >= min_resolved)
         rows = (await self._session.execute(stmt)).scalars().all()
         return [row.to_domain() for row in rows]
 

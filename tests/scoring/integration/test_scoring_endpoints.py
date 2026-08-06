@@ -33,6 +33,10 @@ from app.modules.scoring.api.dependencies import (
 )
 from app.modules.scoring.application.dto import EventScoringStatus, SeasonConfigView
 from app.modules.scoring.application.use_cases import RecomputeRatings
+from app.modules.scoring.domain.constants import (
+    LEADERBOARD_MIN_RESOLVED_CATEGORY,
+    LEADERBOARD_MIN_RESOLVED_GLOBAL,
+)
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.seasons.domain.entities import Season, SeasonStatus
 from app.modules.seasons.domain.value_objects import LeagueConfig
@@ -138,12 +142,16 @@ async def test_global_leaderboard_returns_ranked_entries(make_client) -> None:
     _, ids = await _seed_ratings(repo)
     client, _, _, _ = make_client(repo=repo)
 
-    resp = client.get("/leaderboards/global")
+    # У каждого участника n_resolved=1 (одно событие) — ниже дефолтного порога
+    # участия (10), поэтому здесь проверяем чистое ранжирование с фильтром
+    # выключенным; сам порог — отдельными тестами ниже.
+    resp = client.get("/leaderboards/global?qualified_only=false")
     assert resp.status_code == 200
     body = resp.json()
     assert body["scope_type"] == "global"
     assert body["entries"][0]["rank"] == 1
     assert body["entries"][0]["user_id"] == str(ids[4])  # игрок с 0.3 — №1
+    assert body["min_resolved"] is None
 
 
 async def test_category_leaderboard_scoped(make_client) -> None:
@@ -151,11 +159,42 @@ async def test_category_leaderboard_scoped(make_client) -> None:
     category_id, _ = await _seed_ratings(repo)
     client, _, _, _ = make_client(repo=repo)
 
-    resp = client.get(f"/leaderboards/categories/{category_id}?limit=3")
+    resp = client.get(
+        f"/leaderboards/categories/{category_id}?limit=3&qualified_only=false"
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["scope_type"] == "category"
     assert len(body["entries"]) == 3
+
+
+async def test_global_leaderboard_hides_below_threshold_by_default(make_client) -> None:
+    """Порог участия (PRD §4.6): дефолт ``qualified_only=true`` прячет новичков."""
+    repo = InMemoryRatingRepository()
+    await _seed_ratings(repo)  # 5 участников с n_resolved=1 каждый
+    client, _, _, _ = make_client(repo=repo)
+
+    resp = client.get("/leaderboards/global")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["entries"] == []
+    assert body["min_resolved"] == LEADERBOARD_MIN_RESOLVED_GLOBAL
+
+    resp_all = client.get("/leaderboards/global?qualified_only=false")
+    assert len(resp_all.json()["entries"]) == 5
+    assert resp_all.json()["min_resolved"] is None
+
+
+async def test_category_leaderboard_hides_below_threshold_by_default(make_client) -> None:
+    repo = InMemoryRatingRepository()
+    category_id, _ = await _seed_ratings(repo)  # n_resolved=1 каждый, порог — 5
+    client, _, _, _ = make_client(repo=repo)
+
+    resp = client.get(f"/leaderboards/categories/{category_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["entries"] == []
+    assert body["min_resolved"] == LEADERBOARD_MIN_RESOLVED_CATEGORY
 
 
 # ── Калибровка ──────────────────────────────────────────────────────────────

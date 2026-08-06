@@ -67,15 +67,27 @@ async def global_leaderboard(
     uc: Annotated[GetLeaderboard, Depends(get_leaderboard_uc)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    qualified_only: Annotated[bool, Query()] = True,
 ) -> LeaderboardResponse:
-    """Топ по усаженному превышению над толпой (больше ``skill_score`` = выше)."""
-    ratings = await uc.execute(
-        scope_type=ScopeType.GLOBAL, scope_id=None, limit=limit, offset=offset
+    """Топ по усаженному превышению над толпой (больше ``skill_score`` = выше).
+
+    ``qualified_only`` (по умолчанию ``true``) — порог участия (PRD §4.6):
+    скрывает предсказателей с числом разрешённых прогнозов ниже
+    ``LEADERBOARD_MIN_RESOLVED_GLOBAL``; ``false`` отдаёт всех — для
+    админки/отладки.
+    """
+    ratings, min_resolved = await uc.execute(
+        scope_type=ScopeType.GLOBAL,
+        scope_id=None,
+        limit=limit,
+        offset=offset,
+        qualified_only=qualified_only,
     )
     return LeaderboardResponse(
         scope_type=ScopeType.GLOBAL,
         scope_id=None,
         entries=[RatingResponse.from_domain(r) for r in ratings],
+        min_resolved=min_resolved,
     )
 
 
@@ -89,22 +101,30 @@ async def category_leaderboard(
     uc: Annotated[GetLeaderboard, Depends(get_leaderboard_uc)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    qualified_only: Annotated[bool, Query()] = True,
 ) -> LeaderboardResponse:
     """Топ в категории.
+
+    ``qualified_only`` (по умолчанию ``true``) — порог участия (PRD §4.6):
+    скрывает предсказателей с числом разрешённых прогнозов в категории ниже
+    ``LEADERBOARD_MIN_RESOLVED_CATEGORY``; ``false`` отдаёт всех — для
+    админки/отладки.
 
     TODO(categories-integration): принимать ``slug`` и резолвить в id через
     домен categories (сейчас — прямой ``category_id``).
     """
-    ratings = await uc.execute(
+    ratings, min_resolved = await uc.execute(
         scope_type=ScopeType.CATEGORY,
         scope_id=category_id,
         limit=limit,
         offset=offset,
+        qualified_only=qualified_only,
     )
     return LeaderboardResponse(
         scope_type=ScopeType.CATEGORY,
         scope_id=category_id,
         entries=[RatingResponse.from_domain(r) for r in ratings],
+        min_resolved=min_resolved,
     )
 
 

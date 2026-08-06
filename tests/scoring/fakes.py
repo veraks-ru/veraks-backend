@@ -199,6 +199,7 @@ class InMemoryRatingRepository:
         limit: int = 50,
         offset: int = 0,
         qualified_only: bool = False,
+        min_resolved: int | None = None,
     ) -> list[Rating]:
         rows = [
             r
@@ -207,6 +208,8 @@ class InMemoryRatingRepository:
         ]
         if qualified_only:
             rows = [r for r in rows if r.qualified is True]
+        if min_resolved is not None:
+            rows = [r for r in rows if r.n_resolved >= min_resolved]
         rows.sort(key=lambda r: r.rank)
         return rows[offset : offset + limit]
 

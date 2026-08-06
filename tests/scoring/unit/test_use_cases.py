@@ -22,6 +22,10 @@ from app.modules.scoring.application.use_cases import (
     RecomputeRatings,
     ScoreEvent,
 )
+from app.modules.scoring.domain.constants import (
+    LEADERBOARD_MIN_RESOLVED_CATEGORY,
+    LEADERBOARD_MIN_RESOLVED_GLOBAL,
+)
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.errors import (
     EventNotResolvedError,
@@ -346,9 +350,95 @@ async def test_get_leaderboard_returns_ranked_scope() -> None:
     ).execute()
 
     uc = GetLeaderboard(ratings=repo)
-    board = await uc.execute(scope_type=ScopeType.CATEGORY, scope_id=category_id, limit=3)
+    # Каждый участник тут с n_resolved=1 (одно событие) — ниже порога участия
+    # категории (5), поэтому дефолтный qualified_only=True всех бы спрятал;
+    # для проверки чистого ранжирования отключаем фильтр явно.
+    board, min_resolved = await uc.execute(
+        scope_type=ScopeType.CATEGORY,
+        scope_id=category_id,
+        limit=3,
+        qualified_only=False,
+    )
     assert len(board) == 3
     assert board[0].rank == 1
+    assert min_resolved is None
+
+
+async def test_get_leaderboard_hides_users_below_participation_threshold() -> None:
+    """Дефолт ``qualified_only=True`` скрывает n_resolved < порога; граница — видна."""
+    repo = InMemoryRatingRepository()
+    below_id, at_id, above_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    await repo.upsert_many(
+        [
+            _rating(
+                below_id,
+                ScopeType.GLOBAL,
+                None,
+                rank=1,
+                n_resolved=LEADERBOARD_MIN_RESOLVED_GLOBAL - 1,
+            ),
+            _rating(
+                at_id,
+                ScopeType.GLOBAL,
+                None,
+                rank=2,
+                n_resolved=LEADERBOARD_MIN_RESOLVED_GLOBAL,
+            ),
+            _rating(
+                above_id,
+                ScopeType.GLOBAL,
+                None,
+                rank=3,
+                n_resolved=LEADERBOARD_MIN_RESOLVED_GLOBAL + 5,
+            ),
+        ]
+    )
+    uc = GetLeaderboard(ratings=repo)
+
+    board, min_resolved = await uc.execute(scope_type=ScopeType.GLOBAL, scope_id=None)
+    ids = {r.user_id for r in board}
+    assert below_id not in ids
+    assert at_id in ids  # ровно порог — уже участвует
+    assert above_id in ids
+    assert min_resolved == LEADERBOARD_MIN_RESOLVED_GLOBAL
+
+    full_board, no_threshold = await uc.execute(
+        scope_type=ScopeType.GLOBAL, scope_id=None, qualified_only=False
+    )
+    assert {r.user_id for r in full_board} == {below_id, at_id, above_id}
+    assert no_threshold is None
+
+
+async def test_get_leaderboard_category_threshold_lower_than_global() -> None:
+    """Категорийный порог (5) ниже глобального (10) — своя граница."""
+    repo = InMemoryRatingRepository()
+    category_id = uuid.uuid4()
+    below_id, at_id = uuid.uuid4(), uuid.uuid4()
+    await repo.upsert_many(
+        [
+            _rating(
+                below_id,
+                ScopeType.CATEGORY,
+                category_id,
+                rank=1,
+                n_resolved=LEADERBOARD_MIN_RESOLVED_CATEGORY - 1,
+            ),
+            _rating(
+                at_id,
+                ScopeType.CATEGORY,
+                category_id,
+                rank=2,
+                n_resolved=LEADERBOARD_MIN_RESOLVED_CATEGORY,
+            ),
+        ]
+    )
+    uc = GetLeaderboard(ratings=repo)
+
+    board, min_resolved = await uc.execute(
+        scope_type=ScopeType.CATEGORY, scope_id=category_id
+    )
+    assert {r.user_id for r in board} == {at_id}
+    assert min_resolved == LEADERBOARD_MIN_RESOLVED_CATEGORY
 
 
 async def test_get_user_calibration_resolves_username_and_delegates() -> None:
@@ -409,7 +499,12 @@ async def test_recalibrate_enforces_monotonicity_on_inversions() -> None:
 
 
 def _rating(
-    user_id: uuid.UUID, scope_type: ScopeType, scope_id: uuid.UUID | None, *, rank: int
+    user_id: uuid.UUID,
+    scope_type: ScopeType,
+    scope_id: uuid.UUID | None,
+    *,
+    rank: int,
+    n_resolved: int = 10,
 ) -> Rating:
     return Rating(
         user_id=user_id,
@@ -418,7 +513,7 @@ def _rating(
         mean_brier=Decimal("0.15000"),
         skill_score=Decimal("0.05000"),
         calibration_error=Decimal("0.02000"),
-        n_resolved=10,
+        n_resolved=n_resolved,
         rank=rank,
     )
 

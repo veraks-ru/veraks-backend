@@ -35,6 +35,8 @@ from app.modules.scoring.domain.calibration import CalibrationReport, calibrate
 from app.modules.scoring.domain.constants import (
     DEFAULT_GRADATIONS,
     K_SHRINK,
+    LEADERBOARD_MIN_RESOLVED_CATEGORY,
+    LEADERBOARD_MIN_RESOLVED_GLOBAL,
     MIN_PREDICTORS,
 )
 from app.modules.scoring.domain.recalibration import recalibrate
@@ -434,7 +436,16 @@ class RecomputeRatings:
 
 
 class GetLeaderboard:
-    """Чтение готового лидерборда области (ничего не считает на чтении)."""
+    """Чтение готового лидерборда области — global/category (ничего не считает).
+
+    ``qualified_only`` здесь — порог УЧАСТИЯ (PRD §4.6): по умолчанию скрывает
+    предсказателей с числом разрешённых прогнозов ниже
+    ``LEADERBOARD_MIN_RESOLVED_GLOBAL``/``_CATEGORY`` (шум и лёгкая манипуляция
+    с одним удачным прогнозом). Это отдельное понятие от сезонной квалификации
+    к призам (``Rating.qualified`` — многофакторная, см. ``GetSeasonLeaderboard``).
+    Как и там, ``rank`` при фильтрации не пересчитывается — отдаётся
+    сохранённый (в выдаче возможны разрывы рангов).
+    """
 
     def __init__(self, *, ratings: RatingRepository) -> None:
         self._ratings = ratings
@@ -446,16 +457,31 @@ class GetLeaderboard:
         scope_id: uuid.UUID | None,
         limit: int = 50,
         offset: int = 0,
-        qualified_only: bool = False,
-    ) -> list[Rating]:
-        """Топ области по предрасчитанному рангу (опц. только квалифицированные)."""
-        return await self._ratings.leaderboard(
+        qualified_only: bool = True,
+    ) -> tuple[list[Rating], int | None]:
+        """Возвращает ``(рейтинги, применённый порог n_resolved)``.
+
+        Порог — ``None``, если ``qualified_only=False`` (отдаём всех — для
+        админки/отладки).
+        """
+        min_resolved = (
+            self._min_resolved(scope_type) if qualified_only else None
+        )
+        ratings = await self._ratings.leaderboard(
             scope_type,
             scope_id,
             limit=limit,
             offset=offset,
-            qualified_only=qualified_only,
+            min_resolved=min_resolved,
         )
+        return ratings, min_resolved
+
+    @staticmethod
+    def _min_resolved(scope_type: ScopeType) -> int:
+        """Порог участия для области (категорийный ниже — меньше событий)."""
+        if scope_type is ScopeType.CATEGORY:
+            return LEADERBOARD_MIN_RESOLVED_CATEGORY
+        return LEADERBOARD_MIN_RESOLVED_GLOBAL
 
 
 class GetSeasonLeaderboard:

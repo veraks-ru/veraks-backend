@@ -51,11 +51,19 @@ class RatingResponse(BaseModel):
 
 
 class LeaderboardResponse(BaseModel):
-    """Страница лидерборда области."""
+    """Страница лидерборда области.
+
+    ``min_resolved`` — применённый порог участия (число разрешённых прогнозов,
+    ``LEADERBOARD_MIN_RESOLVED_GLOBAL``/``_CATEGORY``): только для
+    global/category при ``qualified_only=true``; ``null`` — если фильтр не
+    применялся (``qualified_only=false`` или сезонный лидерборд, у которого
+    своя многофакторная квалификация к призам).
+    """
 
     scope_type: ScopeType
     scope_id: uuid.UUID | None
     entries: list[RatingResponse]
+    min_resolved: int | None = None
 
 
 class GradationRecalibrationResponse(BaseModel):
