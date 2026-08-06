@@ -5,8 +5,10 @@
 events/predictions в отдельные сервисы заменяется на сетевой контракт, а
 порты и use-cases не меняются.
 
-TODO(scoring-infra): заменить N+1 (событие → его прогнозы) на единый JOIN с
-агрегацией; для пер-событийной записи Brier — bulk ``UPDATE … FROM (VALUES …)``.
+Батчинг горячего пути пересчёта: ``list_resolved_events`` грузит прогнозы всех
+подходящих событий одним запросом (``_load_predictions_by_event``) вместо
+запроса на каждое событие; ``save_event_scores`` проставляет Brier одним
+``UPDATE … FROM unnest(...)`` вместо цикла из отдельных ``UPDATE`` на прогноз.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import select, text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +37,22 @@ def _to_outcome(value: bool | None) -> int | None:
     if value is None:
         return None
     return 1 if value else 0
+
+
+def _group_predictions_by_event(
+    predictions: Sequence[PredictionORM],
+) -> dict[uuid.UUID, list[PredictionORM]]:
+    """Группирует плоский список прогнозов по ``event_id``, сохраняя порядок.
+
+    Чистая функция без I/O — ядро батч-загрузки
+    (:meth:`SqlAlchemyEventScoringGateway._load_predictions_by_event`),
+    вынесенное отдельно для юнит-тестирования без БД. Пустой ввод даёт пустой
+    словарь (ключи для событий без прогнозов не создаются).
+    """
+    by_event: dict[uuid.UUID, list[PredictionORM]] = {}
+    for prediction in predictions:
+        by_event.setdefault(prediction.event_id, []).append(prediction)
+    return by_event
 
 
 class SqlAlchemyEventScoringGateway:
@@ -72,12 +90,20 @@ class SqlAlchemyEventScoringGateway:
         event = await self._session.get(EventORM, event_id)
         if event is None or not self._is_scoreable(event):
             return None
-        return await self._build_resolved(event)
+        predictions_by_event = await self._load_predictions_by_event([event.id])
+        return await self._build_resolved(
+            event, predictions_by_event.get(event.id, ())
+        )
 
     async def list_resolved_events(
         self, *, season_id: uuid.UUID | None = None
     ) -> list[ResolvedEvent]:
-        """Все финально разрешённые события (опц. сезон) с их прогнозами."""
+        """Все финально разрешённые события (опц. сезон) с их прогнозами.
+
+        Прогнозы всех событий грузятся одним батч-запросом
+        (:meth:`_load_predictions_by_event`), а не по одному на событие —
+        это горячий путь `RecomputeRatings` (полный пересчёт рейтингов).
+        """
         stmt = select(EventORM).where(
             EventORM.status == EventStatus.RESOLVED,
             EventORM.outcome.is_not(None),
@@ -86,11 +112,16 @@ class SqlAlchemyEventScoringGateway:
             stmt = stmt.where(EventORM.season_id == season_id)
         events = (await self._session.execute(stmt)).scalars().all()
 
-        resolved: list[ResolvedEvent] = []
-        for event in events:
-            if self._is_scoreable(event):
-                resolved.append(await self._build_resolved(event))
-        return resolved
+        scoreable = [event for event in events if self._is_scoreable(event)]
+        predictions_by_event = await self._load_predictions_by_event(
+            [event.id for event in scoreable]
+        )
+        return [
+            await self._build_resolved(
+                event, predictions_by_event.get(event.id, ())
+            )
+            for event in scoreable
+        ]
 
     async def list_user_calibration_entries(
         self, user_id: uuid.UUID
@@ -171,12 +202,29 @@ class SqlAlchemyEventScoringGateway:
         self._grid_cache[season_id] = grid
         return grid
 
-    async def _build_resolved(self, event: EventORM) -> ResolvedEvent:
+    async def _load_predictions_by_event(
+        self, event_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, list[PredictionORM]]:
+        """Заблокированные прогнозы множества событий одним запросом.
+
+        Заменяет запрос «прогнозы события» на цикл: раньше
+        :meth:`_build_resolved` дёргал БД на каждое событие, здесь — один
+        ``SELECT … WHERE event_id IN (…)`` с группировкой по ``event_id`` в
+        Python. Событий без единого заблокированного прогноза в результате
+        нет — на стороне вызывающего им подставляется пустой список.
+        """
+        if not event_ids:
+            return {}
         stmt = select(PredictionORM).where(
-            PredictionORM.event_id == event.id,
+            PredictionORM.event_id.in_(event_ids),
             PredictionORM.is_locked.is_(True),
         )
         predictions = (await self._session.execute(stmt)).scalars().all()
+        return _group_predictions_by_event(predictions)
+
+    async def _build_resolved(
+        self, event: EventORM, predictions: Sequence[PredictionORM]
+    ) -> ResolvedEvent:
         grid = await self._season_grid(event.season_id)
         # Тайм-вейтинг по времени подачи в рейтинг НЕ вкладывается: в
         # scoring_system_design.md §3.2 его нет (R = Σ(wΔ)/(Σw+k) без множителя
@@ -208,6 +256,25 @@ class SqlAlchemyPredictionScoreWriter:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    # Один ``UPDATE`` вместо цикла из отдельных операторов на прогноз: PostgreSQL
+    # разворачивает переданные массивы через ``unnest`` во временный набор строк
+    # ``(user_id, brier_score)`` и джойнит его с ``predictions`` по событию и
+    # пользователю. Явные ``CAST`` нужны, чтобы asyncpg знал целевой тип массива
+    # при кодировании параметров (без него Postgres не может вывести тип у
+    # «голого» плейсхолдера).
+    _BULK_SCORE_UPDATE = text(
+        """
+        UPDATE predictions AS p
+        SET brier_score = data.brier_score, scored_at = :now
+        FROM (
+            SELECT * FROM unnest(
+                CAST(:user_ids AS uuid[]), CAST(:briers AS numeric(6,5)[])
+            ) AS data(user_id, brier_score)
+        ) AS data
+        WHERE p.event_id = :event_id AND p.user_id = data.user_id
+        """
+    )
+
     async def save_event_scores(
         self,
         event_id: uuid.UUID,
@@ -215,17 +282,19 @@ class SqlAlchemyPredictionScoreWriter:
         *,
         now: datetime,
     ) -> int:
-        """Обновляет ``brier_score``/``scored_at`` по каждому прогнозу события."""
-        updated = 0
-        for score in scores:
-            stmt = (
-                sa_update(PredictionORM)
-                .where(
-                    PredictionORM.event_id == event_id,
-                    PredictionORM.user_id == score.user_id,
-                )
-                .values(brier_score=score.brier, scored_at=now)
-            )
-            result = cast("CursorResult[Any]", await self._session.execute(stmt))
-            updated += result.rowcount or 0
-        return updated
+        """Обновляет ``brier_score``/``scored_at`` по всем прогнозам события разом."""
+        if not scores:
+            return 0
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                self._BULK_SCORE_UPDATE,
+                {
+                    "user_ids": [score.user_id for score in scores],
+                    "briers": [score.brier for score in scores],
+                    "now": now,
+                    "event_id": event_id,
+                },
+            ),
+        )
+        return result.rowcount or 0
