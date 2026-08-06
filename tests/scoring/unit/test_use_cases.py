@@ -17,6 +17,7 @@ from app.modules.scoring.application.dto import EventScoringStatus
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
     GetProfileSummary,
+    GetSeasonLeaderboard,
     GetUserCalibration,
     RecalibrateSeasonGradations,
     RecomputeRatings,
@@ -349,7 +350,7 @@ async def test_get_leaderboard_returns_ranked_scope() -> None:
         season_config=FakeSeasonConfigGateway(),
     ).execute()
 
-    uc = GetLeaderboard(ratings=repo)
+    uc = GetLeaderboard(ratings=repo, users=FakeUserDirectory())
     # Каждый участник тут с n_resolved=1 (одно событие) — ниже порога участия
     # категории (5), поэтому дефолтный qualified_only=True всех бы спрятал;
     # для проверки чистого ранжирования отключаем фильтр явно.
@@ -393,7 +394,7 @@ async def test_get_leaderboard_hides_users_below_participation_threshold() -> No
             ),
         ]
     )
-    uc = GetLeaderboard(ratings=repo)
+    uc = GetLeaderboard(ratings=repo, users=FakeUserDirectory())
 
     board, min_resolved = await uc.execute(scope_type=ScopeType.GLOBAL, scope_id=None)
     ids = {r.user_id for r in board}
@@ -432,13 +433,81 @@ async def test_get_leaderboard_category_threshold_lower_than_global() -> None:
             ),
         ]
     )
-    uc = GetLeaderboard(ratings=repo)
+    uc = GetLeaderboard(ratings=repo, users=FakeUserDirectory())
 
     board, min_resolved = await uc.execute(
         scope_type=ScopeType.CATEGORY, scope_id=category_id
     )
     assert {r.user_id for r in board} == {at_id}
     assert min_resolved == LEADERBOARD_MIN_RESOLVED_CATEGORY
+
+
+async def test_get_leaderboard_hides_inactive_users() -> None:
+    """Удалённый/заблокированный аккаунт не показывается; активные — со своим rank.
+
+    Строка такого аккаунта выглядела бы как «@<uuid>» с мёртвой ссылкой:
+    публичный профиль отдаётся только для ACTIVE. Ранги остальных остаются
+    сохранёнными (в последовательности возможен разрыв).
+    """
+    repo = InMemoryRatingRepository()
+    top_id, deleted_id, third_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    await repo.upsert_many(
+        [
+            _rating(top_id, ScopeType.GLOBAL, None, rank=1),
+            _rating(deleted_id, ScopeType.GLOBAL, None, rank=2),
+            _rating(third_id, ScopeType.GLOBAL, None, rank=3),
+        ]
+    )
+    users = FakeUserDirectory(inactive_ids={deleted_id})
+    uc = GetLeaderboard(ratings=repo, users=users)
+
+    board, _ = await uc.execute(scope_type=ScopeType.GLOBAL, scope_id=None)
+
+    assert [(r.user_id, r.rank) for r in board] == [(top_id, 1), (third_id, 3)]
+
+
+async def test_get_leaderboard_hides_inactive_users_without_threshold() -> None:
+    """``qualified_only=False`` (админка/отладка) тоже не показывает неактивных."""
+    repo = InMemoryRatingRepository()
+    active_id, deleted_id = uuid.uuid4(), uuid.uuid4()
+    await repo.upsert_many(
+        [
+            _rating(active_id, ScopeType.GLOBAL, None, rank=1, n_resolved=1),
+            _rating(deleted_id, ScopeType.GLOBAL, None, rank=2, n_resolved=1),
+        ]
+    )
+    uc = GetLeaderboard(
+        ratings=repo, users=FakeUserDirectory(inactive_ids={deleted_id})
+    )
+
+    board, _ = await uc.execute(
+        scope_type=ScopeType.GLOBAL, scope_id=None, qualified_only=False
+    )
+
+    assert [r.user_id for r in board] == [active_id]
+
+
+async def test_get_season_leaderboard_hides_inactive_users() -> None:
+    """Сезонная лига — та же фильтрация неактивных аккаунтов."""
+    season_id = uuid.uuid4()
+    repo = InMemoryRatingRepository()
+    active_id, deleted_id = uuid.uuid4(), uuid.uuid4()
+    await repo.upsert_many(
+        [
+            _rating(active_id, ScopeType.SEASON, season_id, rank=1),
+            _rating(deleted_id, ScopeType.SEASON, season_id, rank=2),
+        ]
+    )
+    uc = GetSeasonLeaderboard(
+        ratings=repo,
+        season_config=FakeSeasonConfigGateway(by_slug={"s1": season_id}),
+        users=FakeUserDirectory(inactive_ids={deleted_id}),
+    )
+
+    resolved_id, board = await uc.execute(slug="s1")
+
+    assert resolved_id == season_id
+    assert [(r.user_id, r.rank) for r in board] == [(active_id, 1)]
 
 
 async def test_get_user_calibration_resolves_username_and_delegates() -> None:

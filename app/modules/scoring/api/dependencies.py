@@ -212,18 +212,6 @@ def get_recalibrate_gradations(gateway: GatewayDep) -> RecalibrateSeasonGradatio
     return RecalibrateSeasonGradations(gateway=gateway)
 
 
-def get_leaderboard_uc(ratings: RatingRepoDep) -> GetLeaderboard:
-    """Use-case чтения лидерборда области."""
-    return GetLeaderboard(ratings=ratings)
-
-
-def get_season_leaderboard_uc(
-    ratings: RatingRepoDep, season_config: SeasonConfigDep
-) -> GetSeasonLeaderboard:
-    """Use-case сезонного лидерборда по slug (с фильтром квалификации)."""
-    return GetSeasonLeaderboard(ratings=ratings, season_config=season_config)
-
-
 def get_season_qualification_uc(
     gateway: GatewayDep, season_config: SeasonConfigDep
 ) -> GetSeasonQualification:
@@ -245,6 +233,22 @@ def get_category_directory(session: SessionDep) -> CategoryDirectory:
 
 
 CategoryDirectoryDep = Annotated[CategoryDirectory, Depends(get_category_directory)]
+
+
+def get_leaderboard_uc(
+    ratings: RatingRepoDep, users: UserDirectoryDep
+) -> GetLeaderboard:
+    """Use-case чтения лидерборда области (без строк неактивных аккаунтов)."""
+    return GetLeaderboard(ratings=ratings, users=users)
+
+
+def get_season_leaderboard_uc(
+    ratings: RatingRepoDep, season_config: SeasonConfigDep, users: UserDirectoryDep
+) -> GetSeasonLeaderboard:
+    """Use-case сезонного лидерборда по slug (с фильтром квалификации)."""
+    return GetSeasonLeaderboard(
+        ratings=ratings, season_config=season_config, users=users
+    )
 
 
 def get_user_calibration_uc(

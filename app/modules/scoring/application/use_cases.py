@@ -435,6 +435,26 @@ class RecomputeRatings:
         return result.qualified
 
 
+async def _visible_ratings(
+    users: UserDirectory, ratings: list[Rating]
+) -> list[Rating]:
+    """Оставляет строки лидерборда, чьи авторы публично видимы (ACTIVE).
+
+    Рейтинги удалённых/заблокированных аккаунтов остаются в таблице (история
+    скоринга append-only и нужна пересчётам), но на витрине такая строка
+    выглядела бы как «@<uuid>» с мёртвой ссылкой: публичный профиль отдаётся
+    только для ACTIVE. Фильтруем на чтении — тем же приёмом, что доска лучших
+    прогнозов события (``predictions.GetEventTopPredictions``).
+
+    ``rank`` у оставшихся не пересчитывается: как и с порогом участия, это
+    просто фильтрация строк — в последовательности рангов возможны разрывы.
+    """
+    if not ratings:
+        return []
+    active = await users.list_active_ids([r.user_id for r in ratings])
+    return [r for r in ratings if r.user_id in active]
+
+
 class GetLeaderboard:
     """Чтение готового лидерборда области — global/category (ничего не считает).
 
@@ -445,10 +465,14 @@ class GetLeaderboard:
     к призам (``Rating.qualified`` — многофакторная, см. ``GetSeasonLeaderboard``).
     Как и там, ``rank`` при фильтрации не пересчитывается — отдаётся
     сохранённый (в выдаче возможны разрывы рангов).
+
+    Независимо от порога из выдачи исключаются неактивные аккаунты
+    (см. :func:`_visible_ratings`).
     """
 
-    def __init__(self, *, ratings: RatingRepository) -> None:
+    def __init__(self, *, ratings: RatingRepository, users: UserDirectory) -> None:
         self._ratings = ratings
+        self._users = users
 
     async def execute(
         self,
@@ -462,7 +486,8 @@ class GetLeaderboard:
         """Возвращает ``(рейтинги, применённый порог n_resolved)``.
 
         Порог — ``None``, если ``qualified_only=False`` (отдаём всех — для
-        админки/отладки).
+        админки/отладки). Скрытие неактивных аккаунтов флагом не управляется:
+        мёртвая строка не нужна и в админке.
         """
         min_resolved = (
             self._min_resolved(scope_type) if qualified_only else None
@@ -474,7 +499,7 @@ class GetLeaderboard:
             offset=offset,
             min_resolved=min_resolved,
         )
-        return ratings, min_resolved
+        return await _visible_ratings(self._users, ratings), min_resolved
 
     @staticmethod
     def _min_resolved(scope_type: ScopeType) -> int:
@@ -488,14 +513,20 @@ class GetSeasonLeaderboard:
     """Сезонный лидерборд по slug: резолвит сезон и читает готовые рейтинги.
 
     Резолв slug→id — через ``SeasonConfigGateway`` (направление ``scoring →
-    seasons``). ``qualified_only`` оставляет только квалифицированных к призам.
+    seasons``). ``qualified_only`` оставляет только квалифицированных к призам;
+    неактивные аккаунты скрываются всегда (см. :func:`_visible_ratings`).
     """
 
     def __init__(
-        self, *, ratings: RatingRepository, season_config: SeasonConfigGateway
+        self,
+        *,
+        ratings: RatingRepository,
+        season_config: SeasonConfigGateway,
+        users: UserDirectory,
     ) -> None:
         self._ratings = ratings
         self._season_config = season_config
+        self._users = users
 
     async def execute(
         self,
@@ -516,7 +547,7 @@ class GetSeasonLeaderboard:
             offset=offset,
             qualified_only=qualified_only,
         )
-        return season_id, ratings
+        return season_id, await _visible_ratings(self._users, ratings)
 
 
 class GetSeasonQualification:

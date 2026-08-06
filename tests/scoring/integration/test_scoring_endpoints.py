@@ -197,6 +197,27 @@ async def test_category_leaderboard_hides_below_threshold_by_default(make_client
     assert body["min_resolved"] == LEADERBOARD_MIN_RESOLVED_CATEGORY
 
 
+async def test_global_leaderboard_hides_inactive_users(make_client) -> None:
+    """Удалённый аккаунт исчезает из выдачи; у активных — их сохранённые rank."""
+    repo = InMemoryRatingRepository()
+    _, ids = await _seed_ratings(repo)
+    board = await repo.leaderboard(ScopeType.GLOBAL, None, limit=50)
+    deleted_id = board[1].user_id  # второй по рангу — «удалён»
+    users = FakeUserDirectory(inactive_ids={deleted_id})
+    client, _, _, _ = make_client(repo=repo, users=users)
+
+    resp = client.get("/leaderboards/global?qualified_only=false")
+    assert resp.status_code == 200
+    entries = resp.json()["entries"]
+
+    assert str(deleted_id) not in {e["user_id"] for e in entries}
+    assert len(entries) == len(ids) - 1
+    # Ранги остальных — сохранённые (после фильтрации возможен разрыв).
+    assert [e["rank"] for e in entries] == [
+        r.rank for r in board if r.user_id != deleted_id
+    ]
+
+
 # ── Калибровка ──────────────────────────────────────────────────────────────
 
 

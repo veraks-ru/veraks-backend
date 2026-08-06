@@ -43,16 +43,37 @@ class FakeClock:
 
 
 class FakeUserDirectory:
-    """Резолв username → user_id в памяти (только «активные»)."""
+    """Справочник пользователей в памяти (резолв хэндла + отбор активных).
 
-    def __init__(self, by_username: dict[str, uuid.UUID] | None = None) -> None:
+    ``inactive_ids`` — явно «скрытые» аккаунты (удалённые/заблокированные);
+    все остальные ``user_id`` считаются активными. Так тестам, которым
+    видимость безразлична, не нужно регистрировать каждый сгенерированный id,
+    а тесту про скрытие достаточно перечислить скрытых.
+    """
+
+    def __init__(
+        self,
+        by_username: dict[str, uuid.UUID] | None = None,
+        *,
+        inactive_ids: set[uuid.UUID] | None = None,
+    ) -> None:
         self._by_username = by_username or {}
+        self._inactive_ids = inactive_ids or set()
 
     def set(self, username: str, user_id: uuid.UUID) -> None:
         self._by_username[username] = user_id
 
+    def deactivate(self, user_id: uuid.UUID) -> None:
+        """Помечает аккаунт неактивным (удалён/заблокирован)."""
+        self._inactive_ids.add(user_id)
+
     async def resolve_username(self, username: str) -> uuid.UUID | None:
         return self._by_username.get(username)
+
+    async def list_active_ids(
+        self, user_ids: Sequence[uuid.UUID]
+    ) -> set[uuid.UUID]:
+        return {uid for uid in user_ids if uid not in self._inactive_ids}
 
 
 class FakeEventScoringGateway:
