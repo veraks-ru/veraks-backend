@@ -20,8 +20,12 @@ _STREAM_BATCH_SIZE = 500
 class SqlAlchemyAuditLogReader:
     """Чтение ``audit_log`` для верификации цепочки и админского списка."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, batch_size: int = _STREAM_BATCH_SIZE) -> None:
         self._session = session
+        # Настраиваемый размер пачки — по умолчанию боевой, юнит-тесты границы
+        # пагинации (см. tests/shared/audit/unit/test_reader_batching.py)
+        # уменьшают его, чтобы не гонять реальную БД с 500+ записями.
+        self._batch_size = batch_size
 
     async def stream_ordered(self) -> AsyncIterator[AuditEntry]:
         """Отдаёт все записи по возрастанию ``id`` пачками, не грузя всё разом."""
@@ -33,7 +37,7 @@ class SqlAlchemyAuditLogReader:
                         select(AuditLogORM)
                         .where(AuditLogORM.id > last_id)
                         .order_by(AuditLogORM.id.asc())
-                        .limit(_STREAM_BATCH_SIZE)
+                        .limit(self._batch_size)
                     )
                 )
                 .scalars()

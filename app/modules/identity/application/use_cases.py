@@ -254,6 +254,15 @@ class RefreshSession:
         отзываются (требуется повторный вход на всех устройствах). Само событие
         пишется в аудит (``identity.refresh.reuse_detected``) — сигнал для
         расследования компрометации, без ПДн в payload.
+
+        Запись пишется НЕПОСРЕДСТВЕННО ПЕРЕД ``raise`` ниже — это важно для
+        выбора реализации ``AuditTrail`` в композит-руте: обычная,
+        разделяющая сессию/транзакцию запроса, откатилась бы вместе с этим
+        исключением (``get_session`` делает rollback при любой ошибке), и
+        след инцидента терялся бы. Composition root (``identity.api.
+        dependencies.get_refresh_session``) поэтому инжектирует сюда
+        ``ImmediatelyCommittingAuditTrail`` — она коммитит запись в своей
+        отдельной транзакции сразу же, независимо от исхода этого запроса.
         """
         claims, jti = self._tokens.verify_refresh(refresh_token)
         if not await self._refresh_store.is_active(jti):

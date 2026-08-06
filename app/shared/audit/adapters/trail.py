@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.session import session_scope
 from app.shared.audit.adapters.orm import AuditLogORM
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
 from app.shared.audit.domain.hashing import chain_hash, entry_payload
@@ -87,3 +88,53 @@ class SqlAlchemyAuditTrail:
         self._session.add(orm)
         await self._session.flush()
         return orm.to_domain()
+
+
+class ImmediatelyCommittingAuditTrail:
+    """``AuditTrail``, коммитящий каждую запись в СВОЕЙ короткой транзакции.
+
+    Обычный ``SqlAlchemyAuditTrail`` делит сессию (и транзакцию) с вызывающим
+    use-case — это правильно по умолчанию: запись аудита коммитится атомарно
+    вместе с изменением состояния (§6.2), а откат операции откатывает и её.
+
+    Но для события БЕЗОПАСНОСТИ, которое пишется НЕПОСРЕДСТВЕННО ПЕРЕД тем,
+    как use-case намеренно поднимет исключение (детект повторного
+    использования refresh-токена — операция обязана провалиться), это
+    поведение — баг: FastAPI-зависимость ``get_session`` делает ``rollback``
+    всей транзакции запроса при любом исключении, и запись об инциденте
+    исчезает вместе с ней, хотя именно она должна пережить провал.
+
+    Каждый вызов ``record`` открывает отдельную сессию через
+    ``session_scope`` (тот же примитив, что использует воркер вне
+    request-scope) и коммитит её сразу по завершении записи — до того, как
+    управление вернётся к вызывающему коду. Это делает запись независимой от
+    судьбы «внешней» транзакции запроса: сколько бы она ни откатывалась
+    дальше, эта запись уже зафиксирована в БД. Композит-рут выбирает эту
+    реализацию точечно — там, где use-case пишет аудит прямо перед `raise`
+    (см. ``identity.api.dependencies.get_security_audit_trail``).
+    """
+
+    async def record(
+        self,
+        *,
+        actor_id: uuid.UUID | None,
+        actor_type: AuditActorType,
+        action: str,
+        entity_type: str,
+        entity_id: uuid.UUID | None,
+        before: Mapping[str, Any] | None = None,
+        after: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> AuditEntry:
+        """Пишет и коммитит запись в своей транзакции; возвращает сохранённое звено."""
+        async with session_scope() as session:
+            return await SqlAlchemyAuditTrail(session).record(
+                actor_id=actor_id,
+                actor_type=actor_type,
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                before=before,
+                after=after,
+                metadata=metadata,
+            )

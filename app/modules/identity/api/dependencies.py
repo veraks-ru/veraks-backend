@@ -61,7 +61,10 @@ from app.modules.identity.ports.security import (
     StateStore,
     TokenIssuer,
 )
-from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
+from app.shared.audit.adapters.trail import (
+    ImmediatelyCommittingAuditTrail,
+    SqlAlchemyAuditTrail,
+)
 from app.shared.audit.ports.audit_trail import AuditTrail
 
 # Отмена автопродления при самостоятельном удалении аккаунта (T4): identity
@@ -92,6 +95,23 @@ def get_audit_trail(session: SessionDep) -> AuditTrail:
 
 
 AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
+
+
+def get_security_audit_trail() -> AuditTrail:
+    """Аудит для событий безопасности, которые пишутся прямо перед ``raise``.
+
+    В отличие от :func:`get_audit_trail`, НЕ делит сессию/транзакцию запроса:
+    ``RefreshSession`` детектит повторное использование refresh-токена и сразу
+    поднимает ``InvalidTokenError`` — обычная запись через сессию запроса
+    откатилась бы вместе с ней (``get_session`` делает rollback при
+    исключении), и след инцидента терялся бы. ``ImmediatelyCommittingAuditTrail``
+    коммитит запись в своей короткой транзакции сразу же — она переживает
+    любой последующий откат (см. её докстринг).
+    """
+    return ImmediatelyCommittingAuditTrail()
+
+
+SecurityAuditDep = Annotated[AuditTrail, Depends(get_security_audit_trail)]
 
 
 def get_redis_client() -> Redis:
@@ -235,9 +255,15 @@ def get_refresh_session(
     users: Annotated[UserRepository, Depends(get_user_repository)],
     tokens: Annotated[TokenIssuer, Depends(get_token_issuer)],
     refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
-    audit: AuditDep,
+    audit: SecurityAuditDep,
 ) -> RefreshSession:
-    """Use-case обновления сессии."""
+    """Use-case обновления сессии.
+
+    Аудит — ``get_security_audit_trail`` (не сессия запроса, см. её докстринг):
+    единственная запись, которую пишет ``RefreshSession``
+    (``identity.refresh.reuse_detected``), делается прямо перед ``raise`` и
+    должна пережить откат транзакции запроса.
+    """
     sec = settings.security
     return RefreshSession(
         users=users,

@@ -23,6 +23,7 @@ from app.modules.identity.api.dependencies import (
     get_consent_repository,
     get_esia_gateway,
     get_refresh_store,
+    get_security_audit_trail,
     get_state_store,
     get_user_repository,
 )
@@ -45,6 +46,12 @@ def context(confirmed_identity):
     gateway = FakeEsiaGateway(confirmed_identity)
     consents = InMemoryConsentRepository()
     audit = FakeAuditTrail()
+    # Отдельный фейк для get_security_audit_trail (Critical-1, T10 фикс-раунд
+    # 1): в проде это НЕ сессия запроса (см. её докстринг) — здесь достаточно
+    # фейка, чтобы проверить, что RefreshSession вызывает именно эту
+    # зависимость с правильными данными; переживание реального отката
+    # транзакции проверяется e2e (tests/e2e/test_audit_chain.py).
+    security_audit = FakeAuditTrail()
 
     app = create_app()
     app.dependency_overrides[get_user_repository] = lambda: repo
@@ -53,8 +60,10 @@ def context(confirmed_identity):
     app.dependency_overrides[get_refresh_store] = lambda: refresh_store
     app.dependency_overrides[get_consent_repository] = lambda: consents
     app.dependency_overrides[get_audit_trail] = lambda: audit
+    app.dependency_overrides[get_security_audit_trail] = lambda: security_audit
 
     with TestClient(app) as client:
+        client.security_audit = security_audit  # type: ignore[attr-defined]
         yield client, repo, gateway
 
 
@@ -165,3 +174,34 @@ async def test_deleted_account_login_rejected(context) -> None:
     assert resp.status_code == 403
     assert resp.json()["error"] == "AccountDeletedError"
     assert "удал" in resp.json()["detail"].lower()
+
+
+def test_refresh_reuse_writes_security_audit_before_401(context) -> None:
+    """Повтор уже ротированного refresh → 401, но событие безопасности пишется.
+
+    Critical-1 (T10, ревью, фикс-раунд 1): раньше запись
+    ``identity.refresh.reuse_detected`` уходила через сессию запроса и
+    откатывалась вместе с последующим ``InvalidTokenError`` (``get_session``
+    делает rollback при исключении) — след инцидента терялся. Здесь
+    проверяем именно бизнес-wiring (``get_security_audit_trail`` реально
+    вызывается use-case'ом с правильными данными); что запись переживает
+    настоящий откат транзакции — доказывает
+    ``tests/e2e/test_audit_chain.py`` (нужен реальный Postgres).
+    """
+    client, _, _ = context
+
+    state = _login_and_get_state(client)
+    client.get("/auth/esia/callback", params={"code": "abc", "state": state})
+    old_refresh_cookie = client.cookies.get("refresh_token")
+    assert old_refresh_cookie
+
+    first = client.post("/auth/refresh")
+    assert first.status_code == 200
+    assert client.security_audit.actions() == []  # обычная ротация — не событие безопасности
+
+    # Подсовываем СТАРЫЙ (уже ротированный) refresh — детект повторного использования.
+    client.cookies.set("refresh_token", old_refresh_cookie)
+    reused = client.post("/auth/refresh")
+
+    assert reused.status_code == 401
+    assert client.security_audit.actions() == ["identity.refresh.reuse_detected"]

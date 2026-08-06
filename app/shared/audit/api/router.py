@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -28,6 +28,19 @@ from app.shared.audit.application.verify_chain import VerifyAuditChain
 router = APIRouter(prefix="/admin/audit-log", tags=["audit"])
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Наивный datetime из query (клиент не указал зону) — считаем UTC.
+
+    ``occurred_at`` в БД — ``timestamptz``; сравнение с наивным datetime либо
+    падает на уровне драйвера, либо (тише и хуже) молча трактуется не так,
+    как ожидал клиент. Явная нормализация здесь — на границе API, а не внутри
+    use-case: это про интерпретацию внешнего входа, а не бизнес-правило.
+    """
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 @router.get("", response_model=AuditLogPageResponse, summary="Журнал аудита (admin)")
 async def list_audit_log(
     _admin: AdminUser,
@@ -43,8 +56,8 @@ async def list_audit_log(
     page = await uc.execute(
         action=action,
         actor_id=actor_id,
-        occurred_from=occurred_from,
-        occurred_to=occurred_to,
+        occurred_from=_as_utc(occurred_from),
+        occurred_to=_as_utc(occurred_to),
         before_id=before_id,
         limit=limit,
     )

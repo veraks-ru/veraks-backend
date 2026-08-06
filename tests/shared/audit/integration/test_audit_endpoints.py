@@ -109,3 +109,22 @@ def test_actor_id_filter_matches_none_by_default(make_client) -> None:
     resp = client.get("/admin/audit-log", params={"actor_id": str(uuid.uuid4())})
     assert resp.status_code == 200
     assert resp.json()["items"] == []
+
+
+def test_naive_date_range_is_treated_as_utc(make_client) -> None:
+    """Наивные ``occurred_from``/``occurred_to`` (без зоны) не роняют сравнение
+    с ``timestamptz`` — трактуются как UTC (см. ``router._as_utc``).
+
+    Записи ``build_valid_chain`` имеют ``occurred_at`` = 2026-01-01 UTC
+    (aware); без нормализации сравнение aware/naive в фейк-ридере упало бы с
+    ``TypeError`` (как упало бы и в реальном драйвере), а не молча дало
+    неверный результат — так что 200 с непустым списком доказывает фикс.
+    """
+    client = make_client(entries=build_valid_chain(3))
+    resp = client.get(
+        "/admin/audit-log",
+        params={"occurred_from": "2025-12-31T00:00:00", "occurred_to": "2026-01-02T00:00:00"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 3
