@@ -91,6 +91,7 @@ from app.modules.billing.domain.errors import (
     SubscriptionPermissionError,
     UnbalancedTransactionError,
 )
+from app.modules.identity.api.admin_router import router as identity_admin_router
 from app.modules.identity.api.router import router as identity_router
 from app.modules.identity.api.users_router import router as users_router
 from app.modules.notifications.api.router import router as notifications_router
@@ -127,6 +128,8 @@ from app.shared.audit.api.router import router as audit_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
+    CannotSuspendAdminError,
+    CannotSuspendSelfError,
     EsiaAuthorizationDeniedError,
     EsiaExchangeError,
     IdentityError,
@@ -134,6 +137,7 @@ from app.modules.identity.domain.errors import (
     InvalidSnilsError,
     InvalidStateError,
     InvalidTokenError,
+    InvalidUserStatusError,
     UnconfirmedEsiaAccountError,
     UsernameAlreadyTakenError,
     UserNotFoundError,
@@ -155,6 +159,10 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     UserNotFoundError: status.HTTP_404_NOT_FOUND,
     UsernameAlreadyTakenError: status.HTTP_409_CONFLICT,
     IncompleteConsentsError: status.HTTP_422_UNPROCESSABLE_ENTITY,
+    # модерация пользователей (B7)
+    CannotSuspendSelfError: status.HTTP_403_FORBIDDEN,
+    CannotSuspendAdminError: status.HTTP_403_FORBIDDEN,
+    InvalidUserStatusError: status.HTTP_409_CONFLICT,
     # events
     EventNotFoundError: status.HTTP_404_NOT_FOUND,
     CategoryNotFoundError: status.HTTP_404_NOT_FOUND,
@@ -392,6 +400,7 @@ def create_app() -> FastAPI:
 
     app.include_router(identity_router)
     app.include_router(users_router)
+    app.include_router(identity_admin_router)
     app.include_router(events_router)
     app.include_router(predictions_router)
     app.include_router(scoring_router)

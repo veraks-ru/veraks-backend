@@ -11,6 +11,7 @@ import logging
 import secrets
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from app.modules.identity.application.dto import (
     AuthorizationRedirect,
@@ -36,6 +37,7 @@ from app.modules.identity.domain.errors import (
 )
 from app.modules.identity.domain.policies import (
     ensure_account_can_authenticate,
+    ensure_can_suspend,
     ensure_esia_confirmed,
     missing_consents,
 )
@@ -606,3 +608,95 @@ class DeleteMyAccount:
             )
 
         await self._refresh_store.revoke_all_for_user(str(user_id))
+
+
+class SuspendUser:
+    """Блокировка аккаунта модерацией (ADMIN, B7).
+
+    Правила «нельзя себя, нельзя другого админа» — ``ensure_can_suspend``;
+    сам переход статуса и его валидность (можно блокировать только активный
+    аккаунт) — ``User.suspend()``. Как и при самостоятельном удалении,
+    отзывается всё семейство refresh-токенов (доступ по уже выданному
+    access-токену истечёт сам по TTL). Причину проверяет на непустоту API-слой
+    (pydantic), здесь она только уходит в аудит без ПДн.
+    """
+
+    def __init__(
+        self,
+        *,
+        users: UserRepository,
+        refresh_store: RefreshTokenStore,
+        audit: AuditTrail,
+    ) -> None:
+        self._users = users
+        self._refresh_store = refresh_store
+        self._audit = audit
+
+    async def execute(self, *, actor: User, target_id: uuid.UUID, reason: str) -> User:
+        target = await self._users.get_by_id(target_id)
+        if target is None:
+            raise UserNotFoundError("Пользователь не найден")
+        ensure_can_suspend(actor=actor, target=target)
+        target.suspend()
+        saved = await self._users.update(target)
+        await self._refresh_store.revoke_all_for_user(str(target_id))
+        await self._audit.record(
+            actor_id=actor.id,
+            actor_type=_actor_type(actor.role),
+            action="identity.user.suspended",
+            entity_type="user",
+            entity_id=target_id,
+            metadata={"reason": reason},
+        )
+        return saved
+
+
+class ReinstateUser:
+    """Снятие блокировки модерацией (ADMIN, B7): ``suspended → active``."""
+
+    def __init__(self, *, users: UserRepository, audit: AuditTrail) -> None:
+        self._users = users
+        self._audit = audit
+
+    async def execute(self, *, actor: User, target_id: uuid.UUID) -> User:
+        target = await self._users.get_by_id(target_id)
+        if target is None:
+            raise UserNotFoundError("Пользователь не найден")
+        target.reinstate()
+        saved = await self._users.update(target)
+        await self._audit.record(
+            actor_id=actor.id,
+            actor_type=_actor_type(actor.role),
+            action="identity.user.reinstated",
+            entity_type="user",
+            entity_id=target_id,
+        )
+        return saved
+
+
+@dataclass(frozen=True, slots=True)
+class UserPage:
+    """Страница списка пользователей для админки + общее число совпадений."""
+
+    items: Sequence[User]
+    total: int
+
+
+class ListUsers:
+    """Список пользователей с пагинацией/фильтром/поиском (ADMIN, B7)."""
+
+    def __init__(self, *, users: UserRepository) -> None:
+        self._users = users
+
+    async def execute(
+        self,
+        *,
+        status: UserStatus | None,
+        search: str | None,
+        limit: int,
+        offset: int,
+    ) -> UserPage:
+        items, total = await self._users.list_page(
+            status=status, search=search, limit=limit, offset=offset
+        )
+        return UserPage(items=items, total=total)

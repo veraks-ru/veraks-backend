@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Protocol, runtime_checkable
 
-from app.modules.identity.domain.entities import User
+from app.modules.identity.domain.entities import User, UserStatus
 
 
 @runtime_checkable
@@ -46,6 +46,22 @@ class UserRepository(Protocol):
 
     async def update(self, user: User) -> User:
         """Сохраняет изменения существующего аккаунта."""
+        ...
+
+    async def list_page(
+        self,
+        *,
+        status: UserStatus | None,
+        search: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[User], int]:
+        """Страница пользователей для админки (``GET /admin/users``).
+
+        ``status`` — точный фильтр по жизненному циклу; ``search`` — простой
+        ``ILIKE`` по username/display_name (пусто/``None`` — без фильтра
+        поиска). Возвращает ``(страница, общее число совпадений)``.
+        """
         ...
 
 

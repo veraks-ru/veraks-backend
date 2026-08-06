@@ -9,10 +9,12 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 
 from app.modules.identity.domain.consent import Consent, ConsentDocument
-from app.modules.identity.domain.entities import User, UserStatus
+from app.modules.identity.domain.entities import User, UserRole, UserStatus
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
+    CannotSuspendAdminError,
+    CannotSuspendSelfError,
     UnconfirmedEsiaAccountError,
 )
 from app.modules.identity.domain.value_objects import EsiaIdentity
@@ -41,6 +43,23 @@ def ensure_account_can_authenticate(user: User) -> None:
         raise AccountDeletedError("Аккаунт удалён; повторная регистрация запрещена")
     if user.status is UserStatus.SUSPENDED:
         raise AccountSuspendedError("Аккаунт заблокирован")
+
+
+def ensure_can_suspend(*, actor: User, target: User) -> None:
+    """Проверяет, что ``actor`` вправе заблокировать ``target`` (B7, модерация).
+
+    - самоблокировка запрещена: заблокировавший себя администратор не смог бы
+      сам себя разблокировать;
+    - блокировка другого администратора запрещена: более серьёзная мера
+      требует отдельной процедуры, а не рядовой модерации через этот эндпоинт.
+
+    Сам переход статуса (в т.ч. «можно блокировать только активного») —
+    забота ``User.suspend()``, здесь проверяется только право актора.
+    """
+    if actor.id == target.id:
+        raise CannotSuspendSelfError("Нельзя заблокировать самого себя")
+    if target.role is UserRole.ADMIN:
+        raise CannotSuspendAdminError("Нельзя заблокировать администратора")
 
 
 def missing_consents(

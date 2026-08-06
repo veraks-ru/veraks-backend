@@ -13,6 +13,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from app.modules.identity.domain.errors import InvalidUserStatusError
+
 
 class UserRole(str, enum.Enum):
     """RBAC-роли (см. раздел безопасности: разделение обязанностей)."""
@@ -168,6 +170,31 @@ class User:
         self.display_name = "Удалённый аккаунт"
         self.username = f"deleted-{self.id.hex[:8]}"
         return True
+
+    def suspend(self) -> None:
+        """``active → suspended``: блокировка модерацией (B7).
+
+        Кто вправе заблокировать (не себя, не другого админа) проверяет
+        вызывающий — ``domain.policies.ensure_can_suspend``; сущность отвечает
+        только за сам переход состояния и не пускает его из «неактивного»
+        статуса (иначе неоднозначно, что означает повторная блокировка уже
+        удалённого или уже заблокированного аккаунта).
+        """
+        if self.status is not UserStatus.ACTIVE:
+            raise InvalidUserStatusError(
+                "Заблокировать можно только активный аккаунт (текущий статус: "
+                f"{self.status.value})"
+            )
+        self.status = UserStatus.SUSPENDED
+
+    def reinstate(self) -> None:
+        """``suspended → active``: снятие блокировки модерацией (B7)."""
+        if self.status is not UserStatus.SUSPENDED:
+            raise InvalidUserStatusError(
+                "Разблокировать можно только заблокированный аккаунт (текущий "
+                f"статус: {self.status.value})"
+            )
+        self.status = UserStatus.ACTIVE
 
     def apply_esia_refresh(
         self, *, esia_oid_hash: str, real_name_enc: bytes | None

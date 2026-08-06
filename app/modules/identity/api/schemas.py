@@ -179,6 +179,45 @@ class PublicUserRef(BaseModel):
     display_name: str
 
 
+class AdminUserResponse(BaseModel):
+    """Проекция пользователя для админки (без ПДн; с ролью/статусом/датой)."""
+
+    id: uuid.UUID
+    username: str
+    display_name: str
+    role: UserRole
+    status: UserStatus
+    created_at: datetime
+
+    @classmethod
+    def from_domain(cls, user: User) -> AdminUserResponse:
+        return cls(
+            id=user.id,
+            username=user.username,
+            display_name=user.display_name,
+            role=user.role,
+            status=user.status,
+            created_at=user.created_at,
+        )
+
+
+class UserPageResponse(BaseModel):
+    """Страница списка пользователей (``GET /admin/users``)."""
+
+    items: list[AdminUserResponse]
+    total: int
+
+
+class SuspendUserRequest(BaseModel):
+    """Тело ``POST /admin/users/{id}/suspend``."""
+
+    reason: str = Field(
+        min_length=1,
+        max_length=1000,
+        description="Причина блокировки — уходит в неизменяемый аудит, публично не видна",
+    )
+
+
 class UpdateProfileRequest(BaseModel):
     """Изменение собственного профиля. Поля опциональны (partial update)."""
 

@@ -73,3 +73,15 @@ class UsernameAlreadyTakenError(IdentityError):
 
 class IncompleteConsentsError(IdentityError):
     """При онбординге переданы не все обязательные согласия текущих версий."""
+
+
+class CannotSuspendSelfError(IdentityError):
+    """Нельзя заблокировать самого себя (иначе некому будет снять блокировку)."""
+
+
+class CannotSuspendAdminError(IdentityError):
+    """Нельзя заблокировать другого администратора рядовой модерацией."""
+
+
+class InvalidUserStatusError(IdentityError):
+    """Переход статуса аккаунта невозможен из текущего состояния."""

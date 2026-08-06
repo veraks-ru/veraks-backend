@@ -135,7 +135,11 @@ class EsiaIdTokenVerifier:
             audience=self._settings.client_id,
             issuer=self._settings.issuer,
             leeway=_CLOCK_SKEW_SECONDS,
-            options={"require": ["exp", "iss", "aud"]},
+            # "sub" обязателен по OIDC Core (§2): без него esia_gateway.py
+            # молча пропускает сверку субъекта с ответом /userinfo, и
+            # привязка личности к проверенному id_token отключается тихо,
+            # без ошибки (фикс-раунд ревью T12).
+            options={"require": ["exp", "iss", "aud", "sub"]},
         )
         return claims
 

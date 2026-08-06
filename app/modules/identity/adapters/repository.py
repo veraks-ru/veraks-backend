@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.identity.adapters.orm import ConsentORM, UserORM
 from app.modules.identity.domain.consent import Consent
-from app.modules.identity.domain.entities import User
+from app.modules.identity.domain.entities import User, UserStatus
 from app.modules.identity.ports.repositories import (
     SnilsAlreadyExistsError,
     UsernameTakenError,
@@ -96,6 +96,41 @@ class SqlAlchemyUserRepository:
                 raise UsernameTakenError(str(exc)) from exc
             raise
         return orm.to_domain()
+
+
+    async def list_page(
+        self,
+        *,
+        status: UserStatus | None,
+        search: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[User], int]:
+        """Страница для админки: фильтр по статусу + ``ILIKE`` по хэндлу/имени.
+
+        ``username`` — уже ``citext`` (регистронезависимый сам по себе), но
+        ``ILIKE`` работает и по нему, и по обычному ``display_name`` — единая
+        формулировка условия для обоих полей.
+        """
+        conditions = []
+        if status is not None:
+            conditions.append(UserORM.status == status)
+        if search:
+            pattern = f"%{search}%"
+            conditions.append(
+                or_(UserORM.username.ilike(pattern), UserORM.display_name.ilike(pattern))
+            )
+
+        count_stmt = select(func.count()).select_from(UserORM)
+        stmt = select(UserORM).order_by(UserORM.created_at.desc())
+        for condition in conditions:
+            count_stmt = count_stmt.where(condition)
+            stmt = stmt.where(condition)
+        stmt = stmt.limit(limit).offset(offset)
+
+        total = (await self._session.execute(count_stmt)).scalar_one()
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows], total
 
 
 def _constraint_name(exc: IntegrityError) -> str | None:

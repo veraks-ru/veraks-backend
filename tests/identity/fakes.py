@@ -15,7 +15,7 @@ from typing import Any
 from app.modules.identity.adapters.id_token import pkce_code_challenge
 from app.modules.identity.application.dto import OidcFlowState
 from app.modules.identity.domain.consent import Consent
-from app.modules.identity.domain.entities import User
+from app.modules.identity.domain.entities import User, UserStatus
 from app.modules.identity.domain.value_objects import EsiaIdentity, EsiaTokens
 from app.modules.identity.ports.repositories import (
     SnilsAlreadyExistsError,
@@ -69,6 +69,30 @@ class InMemoryUserRepository:
                 raise UsernameTakenError(user.username)
         self._by_id[user.id] = self._clone(user)
         return self._clone(user)
+
+    async def list_page(
+        self,
+        *,
+        status: UserStatus | None,
+        search: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[User], int]:
+        items = list(self._by_id.values())
+        if status is not None:
+            items = [u for u in items if u.status is status]
+        if search:
+            needle = search.lower()
+            items = [
+                u
+                for u in items
+                if needle in u.username.lower() or needle in u.display_name.lower()
+            ]
+        items.sort(key=lambda u: u.created_at, reverse=True)
+        total = len(items)
+        page = items[offset : offset + limit]
+        cloned = [self._clone(u) for u in page]
+        return [u for u in cloned if u is not None], total
 
     @staticmethod
     def _clone(user: User | None) -> User | None:

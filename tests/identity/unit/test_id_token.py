@@ -74,15 +74,17 @@ def _id_token(
     aud: str = _CLIENT_ID,
     nonce: str | None = "nonce-1",
     lifetime: int = 300,
+    sub: str | None = "esia-oid-1",
 ) -> str:
     now = int(time.time())
     claims: dict[str, Any] = {
         "iss": iss,
-        "sub": "esia-oid-1",
         "aud": aud,
         "iat": now - 1,
         "exp": now + lifetime,
     }
+    if sub is not None:
+        claims["sub"] = sub
     if nonce is not None:
         claims["nonce"] = nonce
     return jwt.encode(claims, key, algorithm="RS256", headers={"kid": kid})
@@ -221,6 +223,22 @@ async def test_missing_nonce_claim_rejected(signing_key) -> None:
         with pytest.raises(InvalidIdTokenError, match="nonce"):
             await verifier.verify(
                 _id_token(signing_key, nonce=None), nonce="nonce-1", client=client
+            )
+
+
+async def test_missing_sub_claim_rejected(signing_key) -> None:
+    """Маркер без ``sub`` отклоняется (фикс-раунд ревью T12).
+
+    Без этой проверки ``esia_gateway.py`` молча пропускал бы сверку субъекта
+    id_token с ответом ``/userinfo`` — привязка личности отключалась бы тихо.
+    """
+    server = _JwksServer(_jwks(signing_key))
+    verifier = EsiaIdTokenVerifier(_settings())
+
+    async with server.client() as client:
+        with pytest.raises(InvalidIdTokenError):
+            await verifier.verify(
+                _id_token(signing_key, sub=None), nonce="nonce-1", client=client
             )
 
 

@@ -44,12 +44,15 @@ from app.modules.identity.application.use_cases import (
     GetOnboardingStatus,
     GetPublicProfile,
     InitiateEsiaLogin,
+    ListUsers,
     LogoutSession,
     RefreshSession,
+    ReinstateUser,
+    SuspendUser,
     UpdateMyProfile,
 )
 from app.modules.identity.domain.consent import ConsentDocument
-from app.modules.identity.domain.entities import User
+from app.modules.identity.domain.entities import User, UserRole
 from app.modules.identity.domain.errors import IdentityError
 from app.modules.identity.ports.consents import ConsentRepository
 from app.modules.identity.ports.esia import EsiaGateway
@@ -368,6 +371,30 @@ def get_delete_my_account_uc(
     return DeleteMyAccount(users=users, refresh_store=refresh_store, audit=audit)
 
 
+def get_suspend_user_uc(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+    refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
+    audit: AuditDep,
+) -> SuspendUser:
+    """Use-case блокировки аккаунта модерацией (B7)."""
+    return SuspendUser(users=users, refresh_store=refresh_store, audit=audit)
+
+
+def get_reinstate_user_uc(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+    audit: AuditDep,
+) -> ReinstateUser:
+    """Use-case снятия блокировки (B7)."""
+    return ReinstateUser(users=users, audit=audit)
+
+
+def get_list_users_uc(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+) -> ListUsers:
+    """Use-case постраничного списка пользователей для админки (B7)."""
+    return ListUsers(users=users)
+
+
 def get_billing_subscription_repository(
     session: SessionDep,
 ) -> BillingSubscriptionRepository:
@@ -444,3 +471,16 @@ def _extract_bearer(header: str | None) -> str | None:
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 OptionalCurrentUser = Annotated[User | None, Depends(get_current_user_optional)]
+
+
+def require_admin(current_user: CurrentUser) -> User:
+    """Гард: модерация пользователей (``/admin/users/*``) — только администратору."""
+    if current_user.role is not UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Доступно только администратору",
+        )
+    return current_user
+
+
+AdminUser = Annotated[User, Depends(require_admin)]

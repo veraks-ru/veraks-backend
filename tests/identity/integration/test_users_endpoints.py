@@ -80,6 +80,21 @@ def test_public_profile_unknown_404(context) -> None:
     assert client.get("/users/ghost").status_code == 404
 
 
+async def test_public_profile_suspended_returns_404(context) -> None:
+    """Заблокированный аккаунт не отдаёт публичный профиль (T13): 404, как «нет
+    такого пользователя» — не «надгробие» и не намёк на модерацию."""
+    client, repo = context
+    _login(client)
+    username = client.get("/auth/me").json()["username"]
+    user = await repo.get_by_username(username)
+    assert user is not None
+    user.suspend()
+    await repo.update(user)
+
+    resp = client.get(f"/users/{username}")
+    assert resp.status_code == 404
+
+
 def test_patch_me_updates_display_name(context) -> None:
     client, _ = context
     _login(client)

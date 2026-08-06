@@ -27,21 +27,28 @@ from app.modules.identity.application.use_cases import (
     GetOnboardingStatus,
     GetPublicProfile,
     InitiateEsiaLogin,
+    ListUsers,
     LogoutSession,
     RefreshSession,
+    ReinstateUser,
+    SuspendUser,
     UpdateMyProfile,
 )
 from app.modules.identity.domain.consent import Consent, ConsentDocument
 from app.modules.identity.domain.entities import User, UserRole, UserStatus
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
+    CannotSuspendAdminError,
+    CannotSuspendSelfError,
     IncompleteConsentsError,
     InvalidStateError,
     InvalidTokenError,
+    InvalidUserStatusError,
     UnconfirmedEsiaAccountError,
     UsernameAlreadyTakenError,
     UserNotFoundError,
 )
+from app.modules.identity.domain.policies import ensure_can_suspend
 from app.modules.identity.domain.value_objects import EsiaIdentity
 from app.modules.identity.ports.repositories import UsernameTakenError
 from tests.identity.fakes import (
@@ -935,3 +942,185 @@ async def test_delete_my_account_unknown_user_raises(repo) -> None:
     )
     with pytest.raises(UserNotFoundError):
         await uc.execute(user_id=uuid.uuid4())
+
+
+# ── Модерация: блокировка/разблокировка/список пользователей (B7) ─────────
+
+
+def _make_admin(username="boss") -> User:
+    user = _user(username=username, display="Босс")
+    user.role = UserRole.ADMIN
+    return user
+
+
+async def test_suspend_user_revokes_sessions_and_audits(repo) -> None:
+    admin = _make_admin()
+    target = _user(username="troll")
+    await repo.add(admin)
+    await repo.add(target)
+    refresh_store = FakeRefreshTokenStore()
+    await refresh_store.register("jti-1", 3600, str(target.id))
+    audit = FakeAuditTrail()
+    uc = SuspendUser(users=repo, refresh_store=refresh_store, audit=audit)
+
+    result = await uc.execute(actor=admin, target_id=target.id, reason="спам")
+
+    assert result.status is UserStatus.SUSPENDED
+    stored = await repo.get_by_id(target.id)
+    assert stored is not None and stored.status is UserStatus.SUSPENDED
+    assert await refresh_store.is_active("jti-1") is False
+    assert audit.actions() == ["identity.user.suspended"]
+    entry = audit.records[0]
+    assert entry["actor_id"] == admin.id
+    assert entry["entity_id"] == target.id
+
+
+async def test_suspend_user_cannot_suspend_self(repo) -> None:
+    admin = _make_admin()
+    await repo.add(admin)
+    uc = SuspendUser(
+        users=repo, refresh_store=FakeRefreshTokenStore(), audit=FakeAuditTrail()
+    )
+    with pytest.raises(CannotSuspendSelfError):
+        await uc.execute(actor=admin, target_id=admin.id, reason="передумал быть админом")
+
+
+async def test_suspend_user_cannot_suspend_another_admin(repo) -> None:
+    admin = _make_admin(username="boss1")
+    other_admin = _make_admin(username="boss2")
+    await repo.add(admin)
+    await repo.add(other_admin)
+    uc = SuspendUser(
+        users=repo, refresh_store=FakeRefreshTokenStore(), audit=FakeAuditTrail()
+    )
+    with pytest.raises(CannotSuspendAdminError):
+        await uc.execute(actor=admin, target_id=other_admin.id, reason="конфликт")
+
+
+async def test_suspend_user_rejects_non_active_target(repo) -> None:
+    admin = _make_admin()
+    target = _user(username="already-suspended", status=UserStatus.SUSPENDED)
+    await repo.add(admin)
+    await repo.add(target)
+    uc = SuspendUser(
+        users=repo, refresh_store=FakeRefreshTokenStore(), audit=FakeAuditTrail()
+    )
+    with pytest.raises(InvalidUserStatusError):
+        await uc.execute(actor=admin, target_id=target.id, reason="повторно")
+
+
+async def test_suspend_user_unknown_target_raises(repo) -> None:
+    admin = _make_admin()
+    await repo.add(admin)
+    uc = SuspendUser(
+        users=repo, refresh_store=FakeRefreshTokenStore(), audit=FakeAuditTrail()
+    )
+    with pytest.raises(UserNotFoundError):
+        await uc.execute(actor=admin, target_id=uuid.uuid4(), reason="кто это")
+
+
+async def test_reinstate_user_returns_to_active_and_audits(repo) -> None:
+    admin = _make_admin()
+    target = _user(username="reformed", status=UserStatus.SUSPENDED)
+    await repo.add(admin)
+    await repo.add(target)
+    audit = FakeAuditTrail()
+    uc = ReinstateUser(users=repo, audit=audit)
+
+    result = await uc.execute(actor=admin, target_id=target.id)
+
+    assert result.status is UserStatus.ACTIVE
+    stored = await repo.get_by_id(target.id)
+    assert stored is not None and stored.status is UserStatus.ACTIVE
+    assert audit.actions() == ["identity.user.reinstated"]
+
+
+async def test_reinstate_user_rejects_non_suspended_target(repo) -> None:
+    admin = _make_admin()
+    target = _user(username="already-active", status=UserStatus.ACTIVE)
+    await repo.add(admin)
+    await repo.add(target)
+    uc = ReinstateUser(users=repo, audit=FakeAuditTrail())
+    with pytest.raises(InvalidUserStatusError):
+        await uc.execute(actor=admin, target_id=target.id)
+
+
+async def test_list_users_filters_by_status_and_search(repo) -> None:
+    await repo.add(_user(username="alice", display="Алиса", status=UserStatus.ACTIVE))
+    await repo.add(_user(username="bob", display="Боб", status=UserStatus.SUSPENDED))
+    await repo.add(_user(username="alice2", display="Алиса Вторая"))
+    uc = ListUsers(users=repo)
+
+    active_page = await uc.execute(
+        status=UserStatus.ACTIVE, search=None, limit=10, offset=0
+    )
+    assert active_page.total == 2
+    assert {u.username for u in active_page.items} == {"alice", "alice2"}
+
+    search_page = await uc.execute(status=None, search="ali", limit=10, offset=0)
+    assert search_page.total == 2
+
+    suspended_page = await uc.execute(
+        status=UserStatus.SUSPENDED, search=None, limit=10, offset=0
+    )
+    assert suspended_page.total == 1
+    assert suspended_page.items[0].username == "bob"
+
+
+async def test_list_users_pagination(repo) -> None:
+    for i in range(3):
+        await repo.add(_user(username=f"user{i}"))
+    uc = ListUsers(users=repo)
+
+    page = await uc.execute(status=None, search=None, limit=2, offset=0)
+    assert len(page.items) == 2
+    assert page.total == 3
+
+    page2 = await uc.execute(status=None, search=None, limit=2, offset=2)
+    assert len(page2.items) == 1
+
+
+# ── Доменные правила блокировки (policies.ensure_can_suspend, User.suspend) ─
+
+
+def test_user_suspend_transitions_active_to_suspended() -> None:
+    user = _user(username="target")
+    user.suspend()
+    assert user.status is UserStatus.SUSPENDED
+
+
+def test_user_suspend_rejects_non_active_status() -> None:
+    user = _user(username="target", status=UserStatus.DELETED)
+    with pytest.raises(InvalidUserStatusError):
+        user.suspend()
+
+
+def test_user_reinstate_transitions_suspended_to_active() -> None:
+    user = _user(username="target", status=UserStatus.SUSPENDED)
+    user.reinstate()
+    assert user.status is UserStatus.ACTIVE
+
+
+def test_user_reinstate_rejects_non_suspended_status() -> None:
+    user = _user(username="target", status=UserStatus.ACTIVE)
+    with pytest.raises(InvalidUserStatusError):
+        user.reinstate()
+
+
+def test_ensure_can_suspend_allows_admin_suspending_regular_user() -> None:
+    admin = _make_admin()
+    target = _user(username="regular")
+    ensure_can_suspend(actor=admin, target=target)  # не должно бросать
+
+
+def test_ensure_can_suspend_rejects_self() -> None:
+    admin = _make_admin()
+    with pytest.raises(CannotSuspendSelfError):
+        ensure_can_suspend(actor=admin, target=admin)
+
+
+def test_ensure_can_suspend_rejects_admin_target() -> None:
+    admin = _make_admin(username="boss1")
+    other_admin = _make_admin(username="boss2")
+    with pytest.raises(CannotSuspendAdminError):
+        ensure_can_suspend(actor=admin, target=other_admin)
