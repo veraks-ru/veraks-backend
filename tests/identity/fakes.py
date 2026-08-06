@@ -117,17 +117,18 @@ class InMemoryConsentRepository:
     """Хранилище согласий в памяти с эмуляцией ``ON CONFLICT DO NOTHING``."""
 
     def __init__(self) -> None:
-        self._consents: list[Consent] = []
+        # Публичный список — тесты сверяют по нему записанные поля (ip и др.).
+        self.rows: list[Consent] = []
 
     async def list_for_user(self, user_id: uuid.UUID) -> list[Consent]:
-        return [c for c in self._consents if c.user_id == user_id]
+        return [c for c in self.rows if c.user_id == user_id]
 
     async def add_many(self, consents: list[Consent]) -> None:
-        existing = {(c.user_id, c.document, c.version) for c in self._consents}
+        existing = {(c.user_id, c.document, c.version) for c in self.rows}
         for consent in consents:
             key = (consent.user_id, consent.document, consent.version)
             if key not in existing:
-                self._consents.append(consent)
+                self.rows.append(consent)
                 existing.add(key)
 
 

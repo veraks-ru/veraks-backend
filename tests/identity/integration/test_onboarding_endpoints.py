@@ -153,6 +153,40 @@ def test_onboarding_requires_auth(context) -> None:
     assert resp.status_code == 401
 
 
+def test_onboarding_with_junk_forwarded_for_records_no_ip(context) -> None:
+    """Мусор в ``X-Forwarded-For`` не валит онбординг (колонка ``inet``).
+
+    Заголовок клиент присылает сам; раньше он попадал в ``user_consents.ip``
+    как есть — ``DataError`` и 500. Теперь невалидное значение отбрасывается,
+    и, если валидного адреса нет и у сокета (у ``TestClient`` хост —
+    ``testclient``), в согласии остаётся ``NULL``.
+    """
+    client, _, consents = context
+    _login(client)
+
+    resp = client.post(
+        "/users/me/onboarding",
+        json={"consents": _REQUIRED_CONSENTS},
+        headers={"X-Forwarded-For": "not-an-ip"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert [c.ip for c in consents.rows] == [None, None]
+
+
+def test_onboarding_records_valid_forwarded_for(context) -> None:
+    """Валидный адрес из ``X-Forwarded-For`` фиксируется в согласии."""
+    client, _, consents = context
+    _login(client)
+
+    resp = client.post(
+        "/users/me/onboarding",
+        json={"consents": _REQUIRED_CONSENTS},
+        headers={"X-Forwarded-For": "203.0.113.7, 10.0.0.1"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert {c.ip for c in consents.rows} == {"203.0.113.7"}
+
+
 def test_document_version_bump_reintroduces_missing_consent(context) -> None:
     """Смена версии документа в конфиге → needs_onboarding снова true, доносится только недостающее."""
     client, _, _ = context
