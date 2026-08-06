@@ -273,13 +273,16 @@ def create_app() -> FastAPI:
     from app.redis import get_redis
 
     _settings = get_settings()
-    if _settings.app_env != "local" and _settings.rate_limit_per_minute > 0:
+    if _settings.app_env != "local" and (
+        _settings.rate_limit_per_minute > 0 or _settings.rate_limit_auth_per_minute > 0
+    ):
         from app.middleware.rate_limit import RateLimitMiddleware
 
         app.add_middleware(
             RateLimitMiddleware,
             redis_factory=get_redis,
             limit=_settings.rate_limit_per_minute,
+            auth_limit=_settings.rate_limit_auth_per_minute,
         )
 
     @app.exception_handler(IdentityError)
