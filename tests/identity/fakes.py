@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
+from app.config import get_settings
 from app.modules.identity.adapters.id_token import pkce_code_challenge
 from app.modules.identity.application.dto import OidcFlowState
 from app.modules.identity.domain.consent import Consent
@@ -130,6 +131,27 @@ class InMemoryConsentRepository:
             if key not in existing:
                 self.rows.append(consent)
                 existing.add(key)
+
+
+def onboarded_consent_repository(user_id: uuid.UUID) -> InMemoryConsentRepository:
+    """Согласия пользователя, покрывающие ВСЕ обязательные документы (текущие версии).
+
+    Нужен интеграционным тестам соседних доменов: участие в конкурсе закрыто
+    гардом ``require_onboarded_user`` (PRD §7), и «обычный участник» в фикстуре
+    должен выглядеть как прошедший онбординг. Реестр берётся из тех же
+    настроек, что и у продакшн-кода — тест не дублирует таблицу истины.
+    """
+    repo = InMemoryConsentRepository()
+    repo.rows.extend(
+        Consent(
+            user_id=user_id,
+            document=document,
+            version=version,
+            method="onboarding_web",
+        )
+        for document, version in get_settings().consents.required_documents.items()
+    )
+    return repo
 
 
 class FakeEsiaGateway:

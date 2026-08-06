@@ -16,8 +16,12 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import create_app
-from app.modules.identity.api.dependencies import get_current_user
+from app.modules.identity.api.dependencies import (
+    get_consent_repository,
+    get_current_user,
+)
 from app.modules.identity.domain.entities import User, UserRole
 from app.modules.predictions.api.dependencies import (
     get_audit_recorder,
@@ -25,6 +29,10 @@ from app.modules.predictions.api.dependencies import (
     get_event_gateway,
     get_prediction_repository,
     get_user_directory,
+)
+from tests.identity.fakes import (
+    InMemoryConsentRepository,
+    onboarded_consent_repository,
 )
 from tests.predictions.conftest import FIXED_NOW
 from tests.predictions.fakes import (
@@ -36,8 +44,12 @@ from tests.predictions.fakes import (
 )
 
 
-def _fake_user() -> User:
-    """Минимальный аутентифицированный пользователь (роль user достаточно)."""
+def _fake_user(*, onboarded: bool = True) -> User:
+    """Минимальный аутентифицированный пользователь (роль user достаточно).
+
+    По умолчанию — с пройденным онбордингом: ставить прогноз без акцепта
+    оферты/ПДн запрещено гардом ``require_onboarded_user`` (PRD §7).
+    """
     return User(
         esia_oid_hash="oid",
         snils_hash="hash",
@@ -45,6 +57,7 @@ def _fake_user() -> User:
         display_name="Предсказатель",
         real_name_enc=None,
         role=UserRole.USER,
+        onboarded_at=FIXED_NOW if onboarded else None,
     )
 
 
@@ -57,10 +70,20 @@ def make_client(open_snapshot):
     """
     created: list[TestClient] = []
 
-    def _build(*, authenticated: bool = True, gateway: FakeEventGateway | None = None):
+    def _build(
+        *,
+        authenticated: bool = True,
+        gateway: FakeEventGateway | None = None,
+        onboarded: bool = True,
+    ):
         repo = InMemoryPredictionRepository()
         event_gateway = gateway if gateway is not None else FakeEventGateway([open_snapshot])
-        user = _fake_user()
+        user = _fake_user(onboarded=onboarded)
+        consents = (
+            onboarded_consent_repository(user.id)
+            if onboarded
+            else InMemoryConsentRepository()
+        )
 
         app = create_app()
         app.dependency_overrides[get_prediction_repository] = lambda: repo
@@ -70,6 +93,9 @@ def make_client(open_snapshot):
         app.dependency_overrides[get_user_directory] = lambda: FakeUserDirectory(
             {user.username: user.id}
         )
+        # Гард онбординга (identity) считает недостающие согласия по реальному
+        # реестру документов — подменяем только хранилище согласий.
+        app.dependency_overrides[get_consent_repository] = lambda: consents
         if authenticated:
             app.dependency_overrides[get_current_user] = lambda: user
 
@@ -89,6 +115,55 @@ def test_put_prediction_requires_auth(make_client, open_snapshot) -> None:
         json={"confidence_grade": "fifty_fifty"},
     )
     assert resp.status_code == 401
+
+
+def test_put_prediction_without_onboarding_forbidden(
+    make_client, open_snapshot
+) -> None:
+    """Участие в конкурсе без акцепта оферты/ПДн — 403 (PRD §7).
+
+    Клиентский гард отправляет на ``/onboarding``, но прямой вызов API должен
+    получать отказ с распознаваемым кодом ошибки.
+    """
+    client, _, _, _ = make_client(onboarded=False)
+
+    resp = client.put(
+        f"/events/{open_snapshot.event_id}/prediction",
+        json={"confidence_grade": "fifty_fifty"},
+    )
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["error"] == "ConsentRequiredError"
+    # Прогноз не сохранён (чтение своего прогноза — без гарда онбординга).
+    mine = client.get(f"/events/{open_snapshot.event_id}/prediction/me")
+    assert mine.status_code == 404
+
+
+def test_put_prediction_forbidden_after_document_version_bump(
+    make_client, open_snapshot
+) -> None:
+    """Юрист поднял версию документа → участие блокируется до переподтверждения."""
+    client, _, _, _ = make_client()
+    settings = get_settings()
+    original = settings.consents.offer_version
+
+    first = client.put(
+        f"/events/{open_snapshot.event_id}/prediction",
+        json={"confidence_grade": "fifty_fifty"},
+    )
+    assert first.status_code == 200, first.text
+
+    settings.consents.offer_version = "2026-09-01"
+    try:
+        resp = client.put(
+            f"/events/{open_snapshot.event_id}/prediction",
+            json={"confidence_grade": "definitely_yes"},
+        )
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["error"] == "ConsentRequiredError"
+        assert "offer" in resp.json()["detail"]
+    finally:
+        settings.consents.offer_version = original
 
 
 def test_put_and_get_my_prediction(make_client, open_snapshot) -> None:

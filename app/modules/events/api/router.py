@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query, status
 
 from app.modules.events.api.dependencies import (
     ActorDep,
+    OnboardedActorDep,
     OptionalActorDep,
     get_annul_event,
     get_approve_event,
@@ -188,10 +189,15 @@ async def publish_event(
 )
 async def propose_event(
     payload: CreateEventRequest,
-    actor: ActorDep,
+    actor: OnboardedActorDep,
     uc: Annotated[ProposeEvent, Depends(get_propose_event)],
 ) -> EventResponse:
-    """Пользователь с активной подпиской предлагает событие (статус ``proposed``)."""
+    """Пользователь с активной подпиской предлагает событие (статус ``proposed``).
+
+    Предложение события — участие в конкурсе, поэтому автор берётся через
+    гард онбординга (``OnboardedActorDep``): без акцепта оферты/ПДн — ``403
+    ConsentRequiredError`` (PRD §7).
+    """
     event = await uc.execute(actor=actor, data=payload.to_input())
     return EventResponse.from_domain(event)
 

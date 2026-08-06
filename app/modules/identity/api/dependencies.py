@@ -53,7 +53,7 @@ from app.modules.identity.application.use_cases import (
 )
 from app.modules.identity.domain.consent import ConsentDocument
 from app.modules.identity.domain.entities import User, UserRole
-from app.modules.identity.domain.errors import IdentityError
+from app.modules.identity.domain.errors import ConsentRequiredError, IdentityError
 from app.modules.identity.ports.consents import ConsentRepository
 from app.modules.identity.ports.esia import EsiaGateway
 from app.modules.identity.ports.repositories import UserRepository
@@ -471,6 +471,44 @@ def _extract_bearer(header: str | None) -> str | None:
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 OptionalCurrentUser = Annotated[User | None, Depends(get_current_user_optional)]
+
+
+async def require_onboarded_user(
+    current_user: CurrentUser,
+    uc: Annotated[GetOnboardingStatus, Depends(get_onboarding_status_uc)],
+) -> User:
+    """Гард: действие доступно только пользователю с завершённым онбордингом.
+
+    Участие в конкурсе (постановка/изменение прогноза, предложение события)
+    юридически возможно только после акцепта оферты и согласия на обработку
+    ПДн (PRD §7, 152-ФЗ). Клиентский гард ``AuthProvider`` отправляет на
+    ``/onboarding``, но это UX: пользователь с прямым доступом к API обошёл бы
+    его — поэтому запрет продублирован на сервере.
+
+    Таблица истины одна и та же для ``GET /auth/me`` и для этого гарда —
+    use-case :class:`GetOnboardingStatus` (сверка принятых согласий с реестром
+    обязательных документов из конфигурации). Ничего не дублируется: подняв
+    версию документа через ``CONSENTS_*``, юрист блокирует участие до
+    переподтверждения.
+
+    Гард живёт в composition root **identity** и переиспользуется соседними
+    доменами по тому же шву, что и :data:`CurrentUser` (predictions/events
+    импортируют только ``api/dependencies`` identity, не её domain — прецедент
+    identity→billing из T4).
+    """
+    needs_onboarding, missing = await uc.execute(user=current_user)
+    if needs_onboarding:
+        documents = ", ".join(doc.document for doc in missing)
+        detail = (
+            "Подтвердите согласия, чтобы участвовать: " + documents
+            if documents
+            else "Завершите онбординг, чтобы участвовать"
+        )
+        raise ConsentRequiredError(detail)
+    return current_user
+
+
+OnboardedUser = Annotated[User, Depends(require_onboarded_user)]
 
 
 def require_admin(current_user: CurrentUser) -> User:

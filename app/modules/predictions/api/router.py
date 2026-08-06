@@ -13,7 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.modules.identity.api.dependencies import CurrentUser
+from app.modules.identity.api.dependencies import CurrentUser, OnboardedUser
 from app.modules.predictions.api.dependencies import (
     get_event_prediction_summary,
     get_event_top_predictions,
@@ -48,13 +48,16 @@ router = APIRouter(tags=["predictions"])
 async def put_prediction(
     event_id: uuid.UUID,
     payload: PlacePredictionRequest,
-    current_user: CurrentUser,
+    current_user: OnboardedUser,
     uc: Annotated[PlacePrediction, Depends(get_place_prediction)],
 ) -> PredictionResponse:
     """Upsert прогноза текущего пользователя по событию.
 
     Принимает градацию уверенности → выводит вероятность. Если приём закрыт
-    (дедлайн прошёл/событие не открыто) — доменная ошибка ``409``.
+    (дедлайн прошёл/событие не открыто) — доменная ошибка ``409``. Автор — не
+    просто аутентифицированный, а прошедший онбординг пользователь
+    (``OnboardedUser``): участие в конкурсе без акцепта оферты/ПДн запрещено
+    (PRD §7) — иначе ``403 ConsentRequiredError``.
     """
     prediction = await uc.execute(
         user_id=current_user.id,

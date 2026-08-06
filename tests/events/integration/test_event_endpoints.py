@@ -33,15 +33,23 @@ from app.modules.events.api.dependencies import (
     get_void_event_disputes,
 )
 from app.modules.events.application.dto import Actor
+from app.modules.events.ports.repositories import EventFilter
 from app.modules.events.domain.entities import Category, Event, EventStatus
 from app.modules.events.domain.value_objects import EventWindow
-from app.modules.identity.api.dependencies import get_current_user
+from app.modules.identity.api.dependencies import (
+    get_consent_repository,
+    get_current_user,
+)
 from app.modules.identity.domain.entities import User, UserRole
 from app.modules.predictions.application.use_cases import LockEventPredictions
 from app.modules.resolutions.application.use_cases import VoidEventDisputes
 from app.modules.resolutions.domain.entities import Dispute, DisputeStatus
 from app.modules.scoring.application.use_cases import RecomputeRatings
 from tests.events.conftest import FIXED_NOW
+from tests.identity.fakes import (
+    InMemoryConsentRepository,
+    onboarded_consent_repository,
+)
 from tests.events.fakes import (
     FakeAuditTrail,
     FakeClock,
@@ -70,8 +78,12 @@ class _NullNotifier:
         return None
 
 
-def _fake_user(role: UserRole) -> User:
-    """Минимальный аутентифицированный пользователь с заданной ролью."""
+def _fake_user(role: UserRole, *, onboarded: bool = True) -> User:
+    """Минимальный аутентифицированный пользователь с заданной ролью.
+
+    По умолчанию — с пройденным онбордингом: предложить событие без акцепта
+    оферты/ПДн запрещено гардом ``require_onboarded_user`` (PRD §7).
+    """
     return User(
         esia_oid_hash="oid",
         snils_hash="hash",
@@ -79,6 +91,7 @@ def _fake_user(role: UserRole) -> User:
         display_name="Редактор",
         real_name_enc=None,
         role=role,
+        onboarded_at=FIXED_NOW if onboarded else None,
     )
 
 
@@ -91,7 +104,7 @@ def make_client(category: Category, restricted_category: Category):
     """
     created: list = []
 
-    def _build(role: UserRole | None = UserRole.EDITOR):
+    def _build(role: UserRole | None = UserRole.EDITOR, *, onboarded: bool = True):
         event_repo = InMemoryEventRepository()
         category_repo = InMemoryCategoryRepository()
         dispute_repo = InMemoryDisputeRepository()
@@ -129,8 +142,16 @@ def make_client(category: Category, restricted_category: Category):
             season_config=FakeSeasonConfigGateway(),
         )
         if role is not None:
-            user = _fake_user(role)
+            user = _fake_user(role, onboarded=onboarded)
             app.dependency_overrides[get_current_user] = lambda: user
+            # Гард онбординга (identity) считает недостающие согласия по
+            # реальному реестру документов — подменяем хранилище согласий.
+            consents = (
+                onboarded_consent_repository(user.id)
+                if onboarded
+                else InMemoryConsentRepository()
+            )
+            app.dependency_overrides[get_consent_repository] = lambda: consents
             # Публичные GET используют опциональную авторизацию — тот же актор.
             app.dependency_overrides[get_optional_actor] = lambda: Actor(
                 user_id=user.id, role=user.role
@@ -206,6 +227,21 @@ def test_propose_event_restricted_category_422(make_client, restricted_category)
     resp = client.post("/events/propose", json=_event_payload(restricted_category.id))
     assert resp.status_code == 422
     assert resp.json()["error"] == "RestrictedCategoryError"
+
+
+async def test_propose_event_without_onboarding_forbidden(
+    make_client, category
+) -> None:
+    """Предложение события — участие в конкурсе: без согласий 403 (PRD §7)."""
+    client, event_repo, _, _ = make_client(role=UserRole.USER, onboarded=False)
+
+    resp = client.post("/events/propose", json=_event_payload(category.id))
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["error"] == "ConsentRequiredError"
+    # Предложение не сохранено — гард отработал до use-case.
+    stored = await event_repo.list(EventFilter(), include_unlisted=True)
+    assert stored == []
 
 
 def test_create_event_invalid_window_400(make_client, category) -> None:

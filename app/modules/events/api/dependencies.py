@@ -39,7 +39,11 @@ from app.modules.events.ports.clock import Clock
 from app.modules.events.ports.repositories import CategoryRepository, EventRepository
 from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.subscriptions import SubscriptionGate
-from app.modules.identity.api.dependencies import CurrentUser, OptionalCurrentUser
+from app.modules.identity.api.dependencies import (
+    CurrentUser,
+    OnboardedUser,
+    OptionalCurrentUser,
+)
 from app.config import SettingsDep
 from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
 from app.modules.notifications.adapters.goctopus import GoctopusPusher
@@ -124,6 +128,20 @@ def get_actor(current_user: CurrentUser) -> Actor:
 
 
 ActorDep = Annotated[Actor, Depends(get_actor)]
+
+
+def get_onboarded_actor(current_user: OnboardedUser) -> Actor:
+    """Актор действия, требующего завершённого онбординга (акцепт оферты/ПДн).
+
+    То же, что :func:`get_actor`, но поверх гарда identity
+    ``require_onboarded_user``: предлагать события — участие в конкурсе, а оно
+    юридически возможно только после согласий (PRD §7). Без них — ``403
+    ConsentRequiredError``.
+    """
+    return Actor(user_id=current_user.id, role=current_user.role)
+
+
+OnboardedActorDep = Annotated[Actor, Depends(get_onboarded_actor)]
 
 
 # ── Use-cases ─────────────────────────────────────────────────────────────

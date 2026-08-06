@@ -131,6 +131,7 @@ from app.modules.identity.domain.errors import (
     AccountSuspendedError,
     CannotSuspendAdminError,
     CannotSuspendSelfError,
+    ConsentRequiredError,
     EsiaAuthorizationDeniedError,
     EsiaExchangeError,
     IdentityError,
@@ -160,6 +161,9 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     UserNotFoundError: status.HTTP_404_NOT_FOUND,
     UsernameAlreadyTakenError: status.HTTP_409_CONFLICT,
     IncompleteConsentsError: status.HTTP_422_UNPROCESSABLE_ENTITY,
+    # Участие в конкурсе без акцепта оферты/ПДн — отказ (PRD §7); фронт по
+    # коду ошибки ведёт на /onboarding.
+    ConsentRequiredError: status.HTTP_403_FORBIDDEN,
     # модерация пользователей (B7)
     CannotSuspendSelfError: status.HTTP_403_FORBIDDEN,
     CannotSuspendAdminError: status.HTTP_403_FORBIDDEN,
