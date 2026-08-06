@@ -25,3 +25,12 @@ class SeasonConfigGateway(Protocol):
     async def get_config(self, season_id: uuid.UUID) -> SeasonConfigView | None:
         """Статус + снапшот ``LeagueConfig`` сезона или ``None``, если нет."""
         ...
+
+    async def get_active_season_id(self) -> uuid.UUID | None:
+        """``id`` текущего активного сезона или ``None``, если такого нет.
+
+        Используется сводкой профиля: сезонный срез рейтинга показывается
+        только для активного сезона (в других — только по прямому запросу
+        лидерборда/квалификации).
+        """
+        ...

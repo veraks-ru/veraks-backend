@@ -12,6 +12,7 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app.modules.scoring.domain.entities import Rating
 from app.modules.seasons.domain.entities import SeasonStatus
 from app.modules.seasons.domain.value_objects import LeagueConfig
 
@@ -88,3 +89,36 @@ class SeasonConfigView:
 
     status: SeasonStatus
     config: LeagueConfig | None
+
+
+@dataclass(frozen=True, slots=True)
+class CategoryRef:
+    """Название категории (для сводки профиля — рейтинги хранят только id)."""
+
+    category_id: uuid.UUID
+    slug: str
+    title: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileCategoryRating:
+    """Один срез сводки профиля по категории: название + готовый рейтинг."""
+
+    category: CategoryRef
+    rating: Rating
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileSummary:
+    """Сводка публичного профиля: готовые срезы global/категории/активный сезон.
+
+    Ничего не пересчитывает — все поля читаются из материализованных
+    ``ratings``. Отсутствие среза (пользователь не набрал рейтинга в области,
+    активного сезона нет) — ``None``/пустой список, а не ошибка.
+    """
+
+    user_id: uuid.UUID
+    global_rating: Rating | None
+    categories: list[ProfileCategoryRating]
+    active_season_id: uuid.UUID | None
+    season_rating: Rating | None

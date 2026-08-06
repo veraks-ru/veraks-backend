@@ -9,7 +9,8 @@
   * :class:`RecomputeRatings` — перестроение материализованных рейтингов по
     областям (global/category/season) с ранжированием (фон, идемпотентно);
   * :class:`GetLeaderboard` — чтение готового лидерборда области;
-  * :class:`GetUserCalibration` — калибровка профиля (predicted vs actual).
+  * :class:`GetUserCalibration` — калибровка профиля (predicted vs actual);
+  * :class:`GetProfileSummary` — сводка профиля (global/категории/сезон).
 
 «На чтении Brier не считается никогда»: чтения берут готовые агрегаты, тяжёлый
 пересчёт — здесь, в фоновых use-cases.
@@ -26,6 +27,8 @@ from dataclasses import dataclass, field
 from app.modules.scoring.application.dto import (
     GradationRecalibration,
     PredictionScore,
+    ProfileCategoryRating,
+    ProfileSummary,
     SeasonConfigView,
 )
 from app.modules.scoring.domain.calibration import CalibrationReport, calibrate
@@ -49,6 +52,7 @@ from app.modules.scoring.domain.formulas import (
     season_rating_from_contributions,
 )
 from app.modules.scoring.domain.value_objects import ResolvedEvent, quantize_score
+from app.modules.scoring.ports.categories import CategoryDirectory
 from app.modules.scoring.ports.clock import Clock
 from app.modules.scoring.ports.notifications import Notifier
 from app.modules.scoring.ports.gateways import (
@@ -567,6 +571,79 @@ class GetUserCalibration:
             raise ProfileNotFoundError("Профиль не найден")
         entries = await self._gateway.list_user_calibration_entries(user_id)
         return user_id, calibrate(entries)
+
+
+class GetProfileSummary:
+    """Сводка публичного профиля: global / по категориям / активный сезон.
+
+    Только чтение готовых агрегатов — ``RatingRepository.list_for_user``
+    достаёт все срезы пользователя одним запросом (вместо ``get_for_user`` по
+    каждой области), названия категорий резолвятся вторым запросом одним
+    батчем. Отсутствие рейтингов — пустая сводка, не ошибка (новый
+    пользователь / пользователь без разрешённых событий).
+    """
+
+    def __init__(
+        self,
+        *,
+        ratings: RatingRepository,
+        users: UserDirectory,
+        categories: CategoryDirectory,
+        season_config: SeasonConfigGateway,
+    ) -> None:
+        self._ratings = ratings
+        self._users = users
+        self._categories = categories
+        self._season_config = season_config
+
+    async def execute(self, *, username: str) -> ProfileSummary:
+        """Резолвит хэндл и собирает сводку из материализованных ``ratings``.
+
+        Неизвестный/неактивный профиль → :class:`ProfileNotFoundError`
+        (маппится в 404) — тот же контракт, что у калибровки и публичного
+        профиля identity (``resolve_username`` отдаёт id только ACTIVE).
+        """
+        user_id = await self._users.resolve_username(username)
+        if user_id is None:
+            raise ProfileNotFoundError("Профиль не найден")
+
+        rows = await self._ratings.list_for_user(user_id)
+
+        global_rating = next(
+            (r for r in rows if r.scope_type is ScopeType.GLOBAL), None
+        )
+
+        category_rows = [r for r in rows if r.scope_type is ScopeType.CATEGORY]
+        category_ids = [r.scope_id for r in category_rows if r.scope_id is not None]
+        category_refs = await self._categories.list_by_ids(category_ids)
+        categories = [
+            ProfileCategoryRating(category=category_refs[r.scope_id], rating=r)
+            for r in category_rows
+            if r.scope_id in category_refs
+        ]
+        # Лучшая категория первой — как в лидерборде (тот же ключ ранжирования).
+        categories.sort(key=lambda c: c.rating.rank)
+
+        active_season_id = await self._season_config.get_active_season_id()
+        season_rating = None
+        if active_season_id is not None:
+            season_rating = next(
+                (
+                    r
+                    for r in rows
+                    if r.scope_type is ScopeType.SEASON
+                    and r.scope_id == active_season_id
+                ),
+                None,
+            )
+
+        return ProfileSummary(
+            user_id=user_id,
+            global_rating=global_rating,
+            categories=categories,
+            active_season_id=active_season_id,
+            season_rating=season_rating,
+        )
 
 
 class RecalibrateSeasonGradations:

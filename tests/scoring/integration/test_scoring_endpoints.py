@@ -20,6 +20,7 @@ from app.modules.identity.api.dependencies import get_current_user
 from app.modules.identity.domain.entities import User, UserRole
 from app.modules.scoring.api.dependencies import (
     get_audit_trail,
+    get_category_directory,
     get_clock,
     get_dispute_guard,
     get_event_scoring_gateway,
@@ -37,6 +38,7 @@ from app.modules.seasons.domain.entities import Season, SeasonStatus
 from app.modules.seasons.domain.value_objects import LeagueConfig
 from tests.scoring.conftest import FIXED_NOW, make_event
 from tests.scoring.fakes import (
+    FakeCategoryDirectory,
     FakeClock,
     FakeEventScoringGateway,
     FakeNotifier,
@@ -73,6 +75,7 @@ def make_client():
         season_repo: InMemorySeasonRepository | None = None,
         dispute_guard: FakeDisputeGuard | None = None,
         users: FakeUserDirectory | None = None,
+        categories: FakeCategoryDirectory | None = None,
         role: UserRole | None = UserRole.USER,
     ):
         gateway = gateway or FakeEventScoringGateway()
@@ -82,6 +85,7 @@ def make_client():
         season_repo = season_repo or InMemorySeasonRepository()
         dispute_guard = dispute_guard or FakeDisputeGuard()
         users = users or FakeUserDirectory()
+        categories = categories or FakeCategoryDirectory()
 
         app = create_app()
         app.dependency_overrides[get_event_scoring_gateway] = lambda: gateway
@@ -91,6 +95,7 @@ def make_client():
         app.dependency_overrides[get_season_repository] = lambda: season_repo
         app.dependency_overrides[get_dispute_guard] = lambda: dispute_guard
         app.dependency_overrides[get_user_directory] = lambda: users
+        app.dependency_overrides[get_category_directory] = lambda: categories
         app.dependency_overrides[get_scoring_notifier] = lambda: FakeNotifier()
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
         app.dependency_overrides[get_audit_trail] = lambda: FakeAuditTrail()
@@ -175,6 +180,103 @@ def test_user_calibration_unknown_profile_404(make_client) -> None:
     client, _, _, _ = make_client()  # пустой UserDirectory
     resp = client.get("/users/ghost/calibration")
     assert resp.status_code == 404
+
+
+# ── Сводка профиля ────────────────────────────────────────────────────────────
+
+
+def _summary_rating(
+    user_id: uuid.UUID,
+    scope_type: ScopeType,
+    scope_id: uuid.UUID | None,
+    *,
+    rank: int,
+) -> Rating:
+    return Rating(
+        user_id=user_id,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        mean_brier=Decimal("0.15000"),
+        skill_score=Decimal("0.05000"),
+        calibration_error=Decimal("0.02000"),
+        n_resolved=10,
+        rank=rank,
+    )
+
+
+async def test_profile_summary_with_categories_and_active_season(make_client) -> None:
+    user_id = uuid.uuid4()
+    cat_a, cat_b = uuid.uuid4(), uuid.uuid4()
+    season_id = uuid.uuid4()
+
+    repo = InMemoryRatingRepository()
+    await repo.upsert_many(
+        [
+            _summary_rating(user_id, ScopeType.GLOBAL, None, rank=3),
+            _summary_rating(user_id, ScopeType.CATEGORY, cat_a, rank=1),
+            _summary_rating(user_id, ScopeType.CATEGORY, cat_b, rank=5),
+            _summary_rating(user_id, ScopeType.SEASON, season_id, rank=2),
+        ]
+    )
+    users = FakeUserDirectory({"alice": user_id})
+    categories = FakeCategoryDirectory()
+    categories.set(cat_a, slug="politics", title="Политика")
+    categories.set(cat_b, slug="sport", title="Спорт")
+    season_config = FakeSeasonConfigGateway(active_season_id=season_id)
+
+    client, _, _, _ = make_client(
+        repo=repo, users=users, categories=categories, season_config=season_config
+    )
+
+    resp = client.get("/users/alice/summary")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["user_id"] == str(user_id)
+    assert body["global"]["rank"] == 3
+    assert body["season"]["rank"] == 2
+    assert body["season"]["season_id"] == str(season_id)
+    # Лучшая категория (по рангу) первой.
+    assert [c["slug"] for c in body["categories"]] == ["politics", "sport"]
+    assert body["categories"][0]["rank"] == 1
+    assert body["categories"][0]["title"] == "Политика"
+
+
+async def test_profile_summary_without_ratings_is_empty_not_error(make_client) -> None:
+    """Новый пользователь без рейтингов — пустая сводка, не 500."""
+    user_id = uuid.uuid4()
+    users = FakeUserDirectory({"newbie": user_id})
+    client, _, _, _ = make_client(users=users)
+
+    resp = client.get("/users/newbie/summary")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["global"] is None
+    assert body["season"] is None
+    assert body["categories"] == []
+
+
+def test_profile_summary_unknown_profile_404(make_client) -> None:
+    client, _, _, _ = make_client()  # пустой UserDirectory
+    resp = client.get("/users/ghost/summary")
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "ProfileNotFoundError"
+
+
+async def test_profile_summary_ignores_non_active_season(make_client) -> None:
+    """Рейтинг в сезоне, который сейчас не активен, в сводку не попадает."""
+    user_id = uuid.uuid4()
+    other_season_id = uuid.uuid4()
+    repo = InMemoryRatingRepository()
+    await repo.upsert_many(
+        [_summary_rating(user_id, ScopeType.SEASON, other_season_id, rank=1)]
+    )
+    users = FakeUserDirectory({"alice": user_id})
+    # FakeSeasonConfigGateway() по умолчанию без активного сезона.
+    client, _, _, _ = make_client(repo=repo, users=users)
+
+    resp = client.get("/users/alice/summary")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["season"] is None
 
 
 # ── Скоринг события (RBAC) ───────────────────────────────────────────────────

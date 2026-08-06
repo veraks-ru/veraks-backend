@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from app.modules.scoring.application.dto import (
+    CategoryRef,
     EventScoringStatus,
     PredictionScore,
     SeasonConfigView,
@@ -109,15 +110,37 @@ class FakeSeasonConfigGateway:
         *,
         by_slug: dict[str, uuid.UUID] | None = None,
         configs: dict[uuid.UUID, SeasonConfigView] | None = None,
+        active_season_id: uuid.UUID | None = None,
     ) -> None:
         self._by_slug = by_slug or {}
         self._configs = configs or {}
+        self._active_season_id = active_season_id
 
     async def resolve_slug(self, slug: str) -> uuid.UUID | None:
         return self._by_slug.get(slug)
 
     async def get_config(self, season_id: uuid.UUID) -> SeasonConfigView | None:
         return self._configs.get(season_id)
+
+    async def get_active_season_id(self) -> uuid.UUID | None:
+        return self._active_season_id
+
+
+class FakeCategoryDirectory:
+    """Резолв category_id → slug/название в памяти."""
+
+    def __init__(self, by_id: dict[uuid.UUID, CategoryRef] | None = None) -> None:
+        self._by_id = by_id or {}
+
+    def set(self, category_id: uuid.UUID, *, slug: str, title: str) -> None:
+        self._by_id[category_id] = CategoryRef(
+            category_id=category_id, slug=slug, title=title
+        )
+
+    async def list_by_ids(
+        self, category_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, CategoryRef]:
+        return {cid: self._by_id[cid] for cid in category_ids if cid in self._by_id}
 
 
 class FakePredictionScoreWriter:
@@ -194,3 +217,6 @@ class InMemoryRatingRepository:
         scope_id: uuid.UUID | None,
     ) -> Rating | None:
         return self._by_key.get((user_id, scope_type, scope_id))
+
+    async def list_for_user(self, user_id: uuid.UUID) -> list[Rating]:
+        return [r for r in self._by_key.values() if r.user_id == user_id]

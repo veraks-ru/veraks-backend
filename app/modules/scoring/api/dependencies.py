@@ -21,6 +21,7 @@ from app.modules.notifications.adapters.goctopus import GoctopusPusher
 from app.modules.notifications.adapters.repository import (
     SqlAlchemyNotificationRepository,
 )
+from app.modules.scoring.adapters.category_gateway import SqlAlchemyCategoryDirectory
 from app.modules.scoring.adapters.clock import SystemClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
 from app.modules.scoring.adapters.scoring_gateway import (
@@ -33,6 +34,7 @@ from app.modules.scoring.adapters.season_config_gateway import (
 from app.modules.scoring.adapters.user_gateway import SqlAlchemyUserDirectory
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
+    GetProfileSummary,
     GetSeasonLeaderboard,
     GetSeasonQualification,
     GetUserCalibration,
@@ -42,6 +44,7 @@ from app.modules.scoring.application.use_cases import (
 )
 from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.domain.policies import ensure_can_recompute, ensure_can_score
+from app.modules.scoring.ports.categories import CategoryDirectory
 from app.modules.scoring.ports.clock import Clock
 from app.modules.scoring.ports.gateways import (
     EventScoringGateway,
@@ -236,11 +239,34 @@ def get_user_directory(session: SessionDep) -> UserDirectory:
 UserDirectoryDep = Annotated[UserDirectory, Depends(get_user_directory)]
 
 
+def get_category_directory(session: SessionDep) -> CategoryDirectory:
+    """Резолв категорий по id (чтение таблицы categories в монолите)."""
+    return SqlAlchemyCategoryDirectory(session)
+
+
+CategoryDirectoryDep = Annotated[CategoryDirectory, Depends(get_category_directory)]
+
+
 def get_user_calibration_uc(
     gateway: GatewayDep, users: UserDirectoryDep
 ) -> GetUserCalibration:
     """Use-case калибровки профиля по хэндлу."""
     return GetUserCalibration(gateway=gateway, users=users)
+
+
+def get_profile_summary_uc(
+    ratings: RatingRepoDep,
+    users: UserDirectoryDep,
+    categories: CategoryDirectoryDep,
+    season_config: SeasonConfigDep,
+) -> GetProfileSummary:
+    """Use-case сводки профиля (global/категории/активный сезон)."""
+    return GetProfileSummary(
+        ratings=ratings,
+        users=users,
+        categories=categories,
+        season_config=season_config,
+    )
 
 
 def get_finalize_season(

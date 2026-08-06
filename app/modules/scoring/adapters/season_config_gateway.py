@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.scoring.application.dto import SeasonConfigView
 from app.modules.seasons.adapters.orm import SeasonORM
+from app.modules.seasons.domain.entities import SeasonStatus
 from app.modules.seasons.domain.value_objects import LeagueConfig
 
 
@@ -37,3 +38,13 @@ class SqlAlchemySeasonConfigGateway:
             else None
         )
         return SeasonConfigView(status=season.status, config=config)
+
+    async def get_active_season_id(self) -> uuid.UUID | None:
+        """``id`` активного сезона (последний по старту, если их вдруг несколько)."""
+        stmt = (
+            select(SeasonORM.id)
+            .where(SeasonORM.status == SeasonStatus.ACTIVE)
+            .order_by(SeasonORM.starts_at.desc())
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()

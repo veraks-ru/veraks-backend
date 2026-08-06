@@ -10,9 +10,9 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.scoring.application.dto import GradationRecalibration
+from app.modules.scoring.application.dto import GradationRecalibration, ProfileSummary
 from app.modules.scoring.domain.calibration import CalibrationReport
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.seasons.domain.value_objects import QualificationResult
@@ -125,6 +125,89 @@ class CalibrationResponse(BaseModel):
                 )
                 for b in report.bins
             ],
+        )
+
+
+class ProfileScopeRatingResponse(BaseModel):
+    """Метрики пользователя в одной области сводки (без служебных полей области)."""
+
+    rank: int
+    skill_score: Decimal
+    mean_brier: Decimal
+    n_resolved: int
+
+    @classmethod
+    def from_domain(cls, rating: Rating) -> ProfileScopeRatingResponse:
+        return cls(
+            rank=rating.rank,
+            skill_score=rating.skill_score,
+            mean_brier=rating.mean_brier,
+            n_resolved=rating.n_resolved,
+        )
+
+
+class ProfileCategoryRatingResponse(ProfileScopeRatingResponse):
+    """Срез сводки по одной категории: название + метрики рейтинга."""
+
+    category_id: uuid.UUID
+    slug: str
+    title: str
+
+
+class ProfileSeasonRatingResponse(ProfileScopeRatingResponse):
+    """Срез сводки по активному сезону: id сезона + метрики рейтинга."""
+
+    season_id: uuid.UUID
+
+
+class ProfileSummaryResponse(BaseModel):
+    """Сводка публичного профиля: global / по категориям / активный сезон.
+
+    ``global_`` сериализуется в JSON как ``"global"`` (зарезервированное слово
+    Python нельзя использовать именем поля модели).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_id: uuid.UUID
+    global_: ProfileScopeRatingResponse | None = Field(
+        default=None, alias="global"
+    )
+    categories: list[ProfileCategoryRatingResponse]
+    season: ProfileSeasonRatingResponse | None = None
+
+    @classmethod
+    def from_domain(cls, summary: ProfileSummary) -> ProfileSummaryResponse:
+        """Маппинг доменной сводки в ответ; ``None``/``[]`` — легальные значения."""
+        season = None
+        if summary.season_rating is not None and summary.active_season_id is not None:
+            season = ProfileSeasonRatingResponse(
+                season_id=summary.active_season_id,
+                rank=summary.season_rating.rank,
+                skill_score=summary.season_rating.skill_score,
+                mean_brier=summary.season_rating.mean_brier,
+                n_resolved=summary.season_rating.n_resolved,
+            )
+        return cls(
+            user_id=summary.user_id,
+            global_=(
+                ProfileScopeRatingResponse.from_domain(summary.global_rating)
+                if summary.global_rating is not None
+                else None
+            ),
+            categories=[
+                ProfileCategoryRatingResponse(
+                    category_id=item.category.category_id,
+                    slug=item.category.slug,
+                    title=item.category.title,
+                    rank=item.rating.rank,
+                    skill_score=item.rating.skill_score,
+                    mean_brier=item.rating.mean_brier,
+                    n_resolved=item.rating.n_resolved,
+                )
+                for item in summary.categories
+            ],
+            season=season,
         )
 
 

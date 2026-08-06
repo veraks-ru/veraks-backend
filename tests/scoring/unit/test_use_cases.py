@@ -16,12 +16,13 @@ import pytest
 from app.modules.scoring.application.dto import EventScoringStatus
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
+    GetProfileSummary,
     GetUserCalibration,
     RecalibrateSeasonGradations,
     RecomputeRatings,
     ScoreEvent,
 )
-from app.modules.scoring.domain.entities import ScopeType
+from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.errors import (
     EventNotResolvedError,
     ProfileNotFoundError,
@@ -39,6 +40,7 @@ from app.modules.scoring.domain.value_objects import (
 )
 from tests.scoring.conftest import FIXED_NOW, make_event
 from tests.scoring.fakes import (
+    FakeCategoryDirectory,
     FakeClock,
     FakeEventScoringGateway,
     FakePredictionScoreWriter,
@@ -401,3 +403,106 @@ async def test_recalibrate_enforces_monotonicity_on_inversions() -> None:
     fitted = [r.fitted for r in sorted(result, key=lambda r: r.nominal)]
     # После PAV последовательность неубывающая (инверсия устранена объединением).
     assert fitted == sorted(fitted)
+
+
+# ── GetProfileSummary ────────────────────────────────────────────────────────
+
+
+def _rating(
+    user_id: uuid.UUID, scope_type: ScopeType, scope_id: uuid.UUID | None, *, rank: int
+) -> Rating:
+    return Rating(
+        user_id=user_id,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        mean_brier=Decimal("0.15000"),
+        skill_score=Decimal("0.05000"),
+        calibration_error=Decimal("0.02000"),
+        n_resolved=10,
+        rank=rank,
+    )
+
+
+async def test_get_profile_summary_unknown_profile_raises() -> None:
+    uc = GetProfileSummary(
+        ratings=InMemoryRatingRepository(),
+        users=FakeUserDirectory(),
+        categories=FakeCategoryDirectory(),
+        season_config=FakeSeasonConfigGateway(),
+    )
+    with pytest.raises(ProfileNotFoundError):
+        await uc.execute(username="ghost")
+
+
+async def test_get_profile_summary_empty_for_user_without_ratings() -> None:
+    """Пользователь без разрешённых событий — пустая сводка, не ошибка."""
+    user_id = uuid.uuid4()
+    uc = GetProfileSummary(
+        ratings=InMemoryRatingRepository(),
+        users=FakeUserDirectory({"newbie": user_id}),
+        categories=FakeCategoryDirectory(),
+        season_config=FakeSeasonConfigGateway(),
+    )
+
+    summary = await uc.execute(username="newbie")
+
+    assert summary.user_id == user_id
+    assert summary.global_rating is None
+    assert summary.categories == []
+    assert summary.season_rating is None
+    assert summary.active_season_id is None
+
+
+async def test_get_profile_summary_assembles_global_categories_and_season() -> None:
+    user_id = uuid.uuid4()
+    cat_a, cat_b = uuid.uuid4(), uuid.uuid4()
+    season_id = uuid.uuid4()
+    other_season_id = uuid.uuid4()
+
+    repo = InMemoryRatingRepository()
+    await repo.upsert_many(
+        [
+            _rating(user_id, ScopeType.GLOBAL, None, rank=4),
+            _rating(user_id, ScopeType.CATEGORY, cat_a, rank=2),
+            _rating(user_id, ScopeType.CATEGORY, cat_b, rank=1),
+            _rating(user_id, ScopeType.SEASON, season_id, rank=3),
+            # Рейтинг в неактивном сезоне не должен попасть в сводку.
+            _rating(user_id, ScopeType.SEASON, other_season_id, rank=1),
+        ]
+    )
+    categories = FakeCategoryDirectory()
+    categories.set(cat_a, slug="politics", title="Политика")
+    categories.set(cat_b, slug="sport", title="Спорт")
+
+    uc = GetProfileSummary(
+        ratings=repo,
+        users=FakeUserDirectory({"alice": user_id}),
+        categories=categories,
+        season_config=FakeSeasonConfigGateway(active_season_id=season_id),
+    )
+
+    summary = await uc.execute(username="alice")
+
+    assert summary.global_rating is not None and summary.global_rating.rank == 4
+    assert summary.active_season_id == season_id
+    assert summary.season_rating is not None and summary.season_rating.rank == 3
+    # Лучшая категория (наименьший ранг) — первой.
+    assert [c.category.slug for c in summary.categories] == ["sport", "politics"]
+
+
+async def test_get_profile_summary_skips_category_without_known_name() -> None:
+    """Категория, удалённая из справочника, тихо выпадает из сводки (не 500)."""
+    user_id = uuid.uuid4()
+    unknown_cat = uuid.uuid4()
+    repo = InMemoryRatingRepository()
+    await repo.upsert_many([_rating(user_id, ScopeType.CATEGORY, unknown_cat, rank=1)])
+
+    uc = GetProfileSummary(
+        ratings=repo,
+        users=FakeUserDirectory({"alice": user_id}),
+        categories=FakeCategoryDirectory(),  # пустой справочник
+        season_config=FakeSeasonConfigGateway(),
+    )
+
+    summary = await uc.execute(username="alice")
+    assert summary.categories == []

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from app.modules.scoring.api.dependencies import (
     get_finalize_season,
     get_leaderboard_uc,
+    get_profile_summary_uc,
     get_recalibrate_gradations,
     get_recompute_ratings,
     get_score_event,
@@ -31,6 +32,7 @@ from app.modules.scoring.api.schemas import (
     FinalizeSeasonResponse,
     GradationRecalibrationResponse,
     LeaderboardResponse,
+    ProfileSummaryResponse,
     QualificationResponse,
     RatingResponse,
     RecomputeRatingsResponse,
@@ -40,6 +42,7 @@ from app.modules.identity.domain.entities import User
 from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
+    GetProfileSummary,
     GetSeasonLeaderboard,
     GetSeasonQualification,
     GetUserCalibration,
@@ -147,6 +150,25 @@ async def user_calibration(
     """
     user_id, report = await uc.execute(username=username)
     return CalibrationResponse.from_report(user_id, report)
+
+
+@router.get(
+    "/users/{username}/summary",
+    response_model=ProfileSummaryResponse,
+    summary="Сводка профиля: global / по категориям / активный сезон",
+)
+async def user_summary(
+    username: str,
+    uc: Annotated[GetProfileSummary, Depends(get_profile_summary_uc)],
+) -> ProfileSummaryResponse:
+    """Готовые срезы рейтинга пользователя одним ответом (без пересчёта на чтении).
+
+    Публичный профиль по ``username`` (как у калибровки); неизвестный/не-ACTIVE
+    профиль → 404. Пользователь без рейтингов получает пустую сводку
+    (``global``/``season`` — ``null``, ``categories`` — ``[]``), а не 500.
+    """
+    summary = await uc.execute(username=username)
+    return ProfileSummaryResponse.from_domain(summary)
 
 
 @router.get(

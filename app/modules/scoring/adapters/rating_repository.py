@@ -130,6 +130,12 @@ class SqlAlchemyRatingRepository:
         orm = await self._find(user_id, scope_type, scope_id)
         return orm.to_domain() if orm else None
 
+    async def list_for_user(self, user_id: uuid.UUID) -> list[Rating]:
+        """Все срезы пользователя одним запросом (для сводки профиля)."""
+        stmt = select(RatingORM).where(RatingORM.user_id == user_id)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]
+
     async def _find(
         self,
         user_id: uuid.UUID,
