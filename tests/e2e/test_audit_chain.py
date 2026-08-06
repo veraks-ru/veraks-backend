@@ -20,6 +20,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.identity.domain.entities import UserRole
 from app.shared.audit.adapters.orm import AuditLogORM
 from app.shared.audit.adapters.reader import SqlAlchemyAuditLogReader
 from app.shared.audit.adapters.trail import (
@@ -28,22 +29,28 @@ from app.shared.audit.adapters.trail import (
 )
 from app.shared.audit.application.verify_chain import VerifyAuditChain
 from app.shared.audit.domain.entities import AuditActorType
+from tests.e2e.helpers import add_user
 
 
 async def test_immediate_commit_survives_outer_rollback_unlike_shared_session(
     session: AsyncSession,
 ) -> None:
-    """Контраст «до фикса / после фикса» на одной и той же реальной транзакции.
+    """Контраст «до фикса / после фикса» — ДВЕ ПОСЛЕДОВАТЕЛЬНЫЕ фазы, не параллельные.
 
     ``session`` здесь играет роль сессии HTTP-запроса (как в проде через
-    ``get_session``). Пишем ОБОИМИ способами в неё же/через неё, потом
-    откатываем — как ``get_session`` делает при любом исключении, — и
-    смотрим, что осталось.
+    ``get_session``). ВАЖНО (найдено ре-ревью, фикс-раунд 2): обе записи
+    делят один и тот же ``pg_advisory_xact_lock`` цепочки
+    (``SqlAlchemyAuditTrail.record`` захватывает его перед вставкой). Если
+    записать старым (баговым) способом и НЕ закоммитить/не откатить его
+    транзакцию до вызова ``ImmediatelyCommittingAuditTrail`` — второе
+    соединение встанет в очередь за локом, который первое никогда не
+    отпустит (ждёт в том же потоке результата второго вызова) — самодедлок.
+    Поэтому фазы строго последовательны: сначала старый способ пишет и
+    ПОЛНОСТЬЮ откатывается (лок гарантированно снят), и только потом
+    начинается вторая фаза с новым способом.
     """
+    # ── Фаза 1: старый (баговый) способ — через сессию "запроса". ──────────
     shared_entity_id = uuid.uuid4()
-    immediate_entity_id = uuid.uuid4()
-
-    # Старый (баговый) способ — через ТУ ЖЕ сессию, что и «запрос».
     await SqlAlchemyAuditTrail(session).record(
         actor_id=None,
         actor_type=AuditActorType.SYSTEM,
@@ -51,18 +58,7 @@ async def test_immediate_commit_survives_outer_rollback_unlike_shared_session(
         entity_type="user",
         entity_id=shared_entity_id,
     )
-
-    # Фикс: своя короткая транзакция, коммитится сразу внутри record().
-    recorded = await ImmediatelyCommittingAuditTrail().record(
-        actor_id=None,
-        actor_type=AuditActorType.SYSTEM,
-        action="identity.refresh.reuse_detected",
-        entity_type="user",
-        entity_id=immediate_entity_id,
-    )
-    assert recorded.id is not None
-
-    # «Запрос» падает: get_session делает rollback транзакции запроса.
+    # «Запрос» падает: get_session делает rollback — лок снят, транзакция закрыта.
     await session.rollback()
 
     shared_row = (
@@ -70,15 +66,31 @@ async def test_immediate_commit_survives_outer_rollback_unlike_shared_session(
             select(AuditLogORM).where(AuditLogORM.entity_id == shared_entity_id)
         )
     ).scalar_one_or_none()
+    assert shared_row is None  # старый путь: запись жила в транзакции запроса → пропала
+
+    # ── Фаза 2: фикс — своя короткая транзакция, начинается ТОЛЬКО когда ───
+    # ── лок от фазы 1 уже гарантированно свободен.                        ──
+    immediate_entity_id = uuid.uuid4()
+    recorded = await ImmediatelyCommittingAuditTrail().record(
+        actor_id=None,
+        actor_type=AuditActorType.SYSTEM,
+        action="identity.refresh.reuse_detected",
+        entity_type="user",
+        entity_id=immediate_entity_id,
+    )
+    assert recorded.id is not None  # уже закоммичено к этому моменту
+
+    # Откатываем «внешнюю» сессию ещё раз — в ней в этот момент нет ничего,
+    # кроме безобидного SELECT выше (не держит advisory-лок), так что это
+    # не может ни с чем столкнуться.
+    await session.rollback()
+
     immediate_row = (
         await session.execute(
             select(AuditLogORM).where(AuditLogORM.entity_id == immediate_entity_id)
         )
     ).scalar_one_or_none()
-
-    # Старый путь: запись жила в транзакции запроса → откатилась вместе с ней.
-    assert shared_row is None
-    # Фикс: запись уже закоммичена в своей транзакции → пережила откат.
+    # Фикс: запись уже закоммичена в СВОЕЙ транзакции → пережила откат «внешней».
     assert immediate_row is not None
     assert immediate_row.action == "identity.refresh.reuse_detected"
 
@@ -93,9 +105,13 @@ async def test_verify_chain_ok_against_real_writes_with_mixed_types(
     к строкам в ``entry_payload`` до вставки — см. её докстринг про
     ограничение типов) и кириллица в текстовых полях не дают ложных
     расхождений хеша.
+
+    ``actor_id`` — реальный пользователь (``audit_log.actor_id`` — FK на
+    ``users.id``), не случайный UUID.
     """
+    user = await add_user(session, username="auditor", role=UserRole.ARBITER)
     trail = SqlAlchemyAuditTrail(session)
-    user_id = uuid.uuid4()
+    user_id = user.id
     event_id = uuid.uuid4()
     season_id = uuid.uuid4()
 
