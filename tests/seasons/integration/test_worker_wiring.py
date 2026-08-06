@@ -16,6 +16,7 @@ from app.worker import (
     reconcile,
     score_event,
     season_roll,
+    verify_audit_chain,
 )
 
 
@@ -29,11 +30,12 @@ def test_worker_registers_all_tasks() -> None:
         reconcile,
         dispatch_approved_payouts,
         poll_jump_payouts,
+        verify_audit_chain,
     }
 
 
 def test_worker_has_cron_schedule() -> None:
     # Ночной пересчёт + roll сезонов + закрытие окон оспаривания + авто-закрытие
     # приёма по дедлайну + почасовая сверка журнала + авто-отправка выплат Jump
-    # + опрос статусов выплат Jump.
-    assert len(WorkerSettings.cron_jobs) == 7
+    # + опрос статусов выплат Jump + ночная верификация цепочки аудита.
+    assert len(WorkerSettings.cron_jobs) == 8

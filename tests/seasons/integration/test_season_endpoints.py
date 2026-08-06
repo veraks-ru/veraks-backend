@@ -14,8 +14,12 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.modules.identity.api.dependencies import get_current_user
 from app.modules.identity.domain.entities import User, UserRole
-from app.modules.seasons.api.dependencies import get_clock, get_season_repository
-from tests.seasons.fakes import FakeClock, InMemorySeasonRepository
+from app.modules.seasons.api.dependencies import (
+    get_audit_trail,
+    get_clock,
+    get_season_repository,
+)
+from tests.seasons.fakes import FakeAuditTrail, FakeClock, InMemorySeasonRepository
 from tests.seasons.unit.test_use_cases import ENDS, NOW, STARTS
 
 
@@ -44,6 +48,7 @@ def make_client():
         app = create_app()
         app.dependency_overrides[get_season_repository] = lambda: repo
         app.dependency_overrides[get_clock] = lambda: FakeClock(NOW)
+        app.dependency_overrides[get_audit_trail] = lambda: FakeAuditTrail()
         if role is not None:
             app.dependency_overrides[get_current_user] = lambda: _user(role)
         client = TestClient(app)

@@ -19,6 +19,7 @@ from app.main import create_app
 from app.modules.identity.api.dependencies import get_current_user
 from app.modules.identity.domain.entities import User, UserRole
 from app.modules.scoring.api.dependencies import (
+    get_audit_trail,
     get_clock,
     get_dispute_guard,
     get_event_scoring_gateway,
@@ -44,7 +45,7 @@ from tests.scoring.fakes import (
     FakeUserDirectory,
     InMemoryRatingRepository,
 )
-from tests.seasons.fakes import FakeDisputeGuard, InMemorySeasonRepository
+from tests.seasons.fakes import FakeAuditTrail, FakeDisputeGuard, InMemorySeasonRepository
 
 
 def _user(role: UserRole = UserRole.USER) -> User:
@@ -92,6 +93,7 @@ def make_client():
         app.dependency_overrides[get_user_directory] = lambda: users
         app.dependency_overrides[get_scoring_notifier] = lambda: FakeNotifier()
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
+        app.dependency_overrides[get_audit_trail] = lambda: FakeAuditTrail()
         if role is not None:
             app.dependency_overrides[get_current_user] = lambda: _user(role)
 

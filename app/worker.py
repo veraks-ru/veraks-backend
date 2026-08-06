@@ -95,7 +95,9 @@ from app.modules.leagues.adapters.standings_gateway import (
     SqlAlchemyStandingsGateway,
 )
 from app.modules.leagues.application.use_cases import ApplyPromotionRelegation
+from app.shared.audit.adapters.reader import SqlAlchemyAuditLogReader
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
+from app.shared.audit.application.verify_chain import VerifyAuditChain
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +205,7 @@ async def season_roll(_ctx: dict[Any, Any]) -> None:
             recompute=recompute,
             ratings=ratings,
             clock=clock,
+            audit=SqlAlchemyAuditTrail(session),
         )
         config_provider = RecalibratingLeagueConfigProvider(
             seasons=seasons,
@@ -214,6 +217,7 @@ async def season_roll(_ctx: dict[Any, Any]) -> None:
             seasons=seasons,
             finalize=finalize,
             clock=clock,
+            audit=SqlAlchemyAuditTrail(session),
             auto_finalize=settings.seasons_auto_finalize,
             config_provider=config_provider,
         )
@@ -321,6 +325,32 @@ async def reconcile(_ctx: dict[Any, Any]) -> int:
     return imbalanced
 
 
+async def verify_audit_chain(_ctx: dict[Any, Any]) -> bool:
+    """Ночная верификация хеш-цепочки ``audit_log`` (ARCHITECTURE.md §2.6/§6).
+
+    Признак порчи журнала в обход приложения (например прямой правкой в БД с
+    правами, минующими append-only триггер) — расхождение пересчитанного
+    хеша. Само расхождение логируется как ERROR (алертинг подберёт); адресной
+    нотификации админам нет — у notifications нет дешёвого способа разослать
+    «всем admin» без нового репозиторного метода в identity, это отдельная
+    задача при необходимости.
+    """
+    async with session_scope() as session:
+        result = await VerifyAuditChain(
+            reader=SqlAlchemyAuditLogReader(session)
+        ).execute()
+    if not result.ok:
+        logger.error(
+            "verify_audit_chain: ЦЕПОЧКА АУДИТА ПОВРЕЖДЕНА — первая испорченная "
+            "запись id=%s (проверено %d записей)",
+            result.first_broken_id,
+            result.checked,
+        )
+    else:
+        logger.info("verify_audit_chain: цепочка цела, проверено %d записей", result.checked)
+    return result.ok
+
+
 def _payout_requisites(session: Any) -> SqlAlchemyPayoutRequisiteRepository:
     """Репозиторий реквизитов с энкриптором ПДн (ключ — как в identity)."""
     settings = get_settings()
@@ -416,6 +446,7 @@ class WorkerSettings:
         reconcile,
         dispatch_approved_payouts,
         poll_jump_payouts,
+        verify_audit_chain,
     ]
     cron_jobs = [
         # Ночной полный пересчёт рейтингов.
@@ -439,5 +470,7 @@ class WorkerSettings:
         # Опрос статусов выплат Jump — каждые 2 минуты (Jump просит опрашивать
         # не чаще раза в минуту; вебхуков у Jump нет).
         cron(poll_jump_payouts, minute=set(range(0, 60, 2))),  # type: ignore[arg-type]
+        # Ночная верификация хеш-цепочки аудита (после ночного пересчёта рейтингов).
+        cron(verify_audit_chain, hour=4, minute=0),  # type: ignore[arg-type]
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

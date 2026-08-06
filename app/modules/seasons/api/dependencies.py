@@ -27,6 +27,8 @@ from app.modules.seasons.application.use_cases import (
 )
 from app.modules.seasons.ports.clock import Clock
 from app.modules.seasons.ports.repositories import SeasonRepository
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
+from app.shared.audit.ports.audit_trail import AuditTrail
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -47,16 +49,26 @@ def get_season_repository(session: SessionDep) -> SeasonRepository:
 SeasonRepoDep = Annotated[SeasonRepository, Depends(get_season_repository)]
 
 
-def get_create_season(repo: SeasonRepoDep, clock: ClockDep) -> CreateSeason:
-    return CreateSeason(repo=repo, clock=clock)
+def get_audit_trail(session: SessionDep) -> AuditTrail:
+    """Общий append-only аудит-журнал (``app/shared/audit``)."""
+    return SqlAlchemyAuditTrail(session)
+
+
+AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
+
+
+def get_create_season(repo: SeasonRepoDep, clock: ClockDep, audit: AuditDep) -> CreateSeason:
+    return CreateSeason(repo=repo, clock=clock, audit=audit)
 
 
 def get_update_season(repo: SeasonRepoDep, clock: ClockDep) -> UpdateSeason:
     return UpdateSeason(repo=repo, clock=clock)
 
 
-def get_activate_season(repo: SeasonRepoDep, clock: ClockDep) -> ActivateSeason:
-    return ActivateSeason(repo=repo, clock=clock)
+def get_activate_season(
+    repo: SeasonRepoDep, clock: ClockDep, audit: AuditDep
+) -> ActivateSeason:
+    return ActivateSeason(repo=repo, clock=clock, audit=audit)
 
 
 def get_list_seasons(repo: SeasonRepoDep) -> ListSeasons:

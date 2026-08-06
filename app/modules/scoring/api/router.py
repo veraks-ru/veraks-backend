@@ -36,6 +36,7 @@ from app.modules.scoring.api.schemas import (
     RecomputeRatingsResponse,
     ScoreEventResponse,
 )
+from app.modules.identity.domain.entities import User
 from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
@@ -234,7 +235,7 @@ async def season_recalibration(
 async def finalize_season(
     season_id: uuid.UUID,
     uc: Annotated[FinalizeSeason, Depends(get_finalize_season)],
-    _role: Annotated[object, Depends(require_season_transition_role)],
+    actor: Annotated[User, Depends(require_season_transition_role)],
 ) -> FinalizeSeasonResponse:
     """Ручной admin-триггер ``active → finished`` с пересчётом и снапшотом призёров.
 
@@ -245,7 +246,7 @@ async def finalize_season(
     TODO(scoring-infra): в проде также дёргается воркером ``season_roll`` по
     истечении ``ends_at`` (когда включён ``seasons_auto_finalize``).
     """
-    result = await uc.execute(season_id=season_id)
+    result = await uc.execute(season_id=season_id, actor_id=actor.id)
     return FinalizeSeasonResponse(
         season_id=season_id,
         finalized=result.finalized,

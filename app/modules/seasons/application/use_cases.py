@@ -36,6 +36,20 @@ from app.modules.seasons.domain.policies import (
 from app.modules.seasons.domain.value_objects import LeagueConfig
 from app.modules.seasons.ports.clock import Clock
 from app.modules.seasons.ports.repositories import SeasonRepository
+from app.shared.audit.domain.entities import AuditActorType
+from app.shared.audit.ports.audit_trail import AuditTrail
+
+_ACTOR_TYPE_BY_ROLE: dict[UserRole, AuditActorType] = {
+    UserRole.USER: AuditActorType.USER,
+    UserRole.EDITOR: AuditActorType.EDITOR,
+    UserRole.ARBITER: AuditActorType.ARBITER,
+    UserRole.ADMIN: AuditActorType.ADMIN,
+}
+
+
+def _actor_type(role: UserRole) -> AuditActorType:
+    """Маппит RBAC-роль в тип актора аудита."""
+    return _ACTOR_TYPE_BY_ROLE.get(role, AuditActorType.USER)
 
 
 def _ensure_window(starts_at: datetime, ends_at: datetime) -> None:
@@ -47,9 +61,10 @@ def _ensure_window(starts_at: datetime, ends_at: datetime) -> None:
 class CreateSeason:
     """Заводит новый сезон в статусе ``upcoming`` (editor/admin)."""
 
-    def __init__(self, *, repo: SeasonRepository, clock: Clock) -> None:
+    def __init__(self, *, repo: SeasonRepository, clock: Clock, audit: AuditTrail) -> None:
         self._repo = repo
         self._clock = clock
+        self._audit = audit
 
     async def execute(
         self,
@@ -58,6 +73,7 @@ class CreateSeason:
         title: str,
         starts_at: datetime,
         ends_at: datetime,
+        actor_id: uuid.UUID,
         actor_role: UserRole,
     ) -> Season:
         """Создаёт сезон; поднимает при отсутствии прав/занятом slug/окне."""
@@ -76,6 +92,14 @@ class CreateSeason:
             updated_at=now,
         )
         await self._repo.add(season)
+        await self._audit.record(
+            actor_id=actor_id,
+            actor_type=_actor_type(actor_role),
+            action="season.created",
+            entity_type="season",
+            entity_id=season.id,
+            after={"slug": season.slug, "title": season.title},
+        )
         return season
 
 
@@ -129,15 +153,17 @@ class ActivateSeason:
     Идемпотентна: повторная активация активного сезона ничего не меняет.
     """
 
-    def __init__(self, *, repo: SeasonRepository, clock: Clock) -> None:
+    def __init__(self, *, repo: SeasonRepository, clock: Clock, audit: AuditTrail) -> None:
         self._repo = repo
         self._clock = clock
+        self._audit = audit
 
     async def execute(
         self,
         *,
         season_id: uuid.UUID,
         config: LeagueConfig,
+        actor_id: uuid.UUID,
         actor_role: UserRole,
     ) -> Season:
         ensure_can_transition(actor_role)
@@ -146,6 +172,14 @@ class ActivateSeason:
             raise SeasonNotFoundError("Сезон не найден")
         if season.activate(config, now=self._clock.now()):
             await self._repo.update(season)
+            await self._audit.record(
+                actor_id=actor_id,
+                actor_type=_actor_type(actor_role),
+                action="season.activated",
+                entity_type="season",
+                entity_id=season.id,
+                after={"status": season.status.value},
+            )
         return season
 
 

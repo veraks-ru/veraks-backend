@@ -84,6 +84,7 @@ async def create_season(
         title=body.title,
         starts_at=body.starts_at,
         ends_at=body.ends_at,
+        actor_id=current_user.id,
         actor_role=current_user.role,
     )
     return SeasonResponse.from_domain(season)
@@ -132,6 +133,9 @@ async def activate_season(
         else LeagueConfig.default()
     )
     season = await uc.execute(
-        season_id=season_id, config=config, actor_role=current_user.role
+        season_id=season_id,
+        config=config,
+        actor_id=current_user.id,
+        actor_role=current_user.role,
     )
     return SeasonResponse.from_domain(season)

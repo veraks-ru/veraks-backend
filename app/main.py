@@ -123,6 +123,7 @@ from app.modules.b2b.domain.errors import (
     QuotaExceededError,
     SignalTargetNotFoundError,
 )
+from app.shared.audit.api.router import router as audit_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
@@ -394,6 +395,7 @@ def create_app() -> FastAPI:
     app.include_router(social_router)
     app.include_router(leagues_router)
     app.include_router(b2b_router)
+    app.include_router(audit_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:

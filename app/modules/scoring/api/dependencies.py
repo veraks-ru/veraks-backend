@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.session import get_session
 from app.modules.identity.api.dependencies import CurrentUser
-from app.modules.identity.domain.entities import UserRole
+from app.modules.identity.domain.entities import User, UserRole
 from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
 from app.modules.notifications.adapters.goctopus import GoctopusPusher
 from app.modules.notifications.adapters.repository import (
@@ -57,6 +57,8 @@ from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepos
 from app.modules.seasons.domain.policies import ensure_can_transition
 from app.modules.seasons.ports.gateways import DisputeGuard
 from app.modules.seasons.ports.repositories import SeasonRepository
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
+from app.shared.audit.ports.audit_trail import AuditTrail
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -115,6 +117,11 @@ def get_dispute_guard(session: SessionDep) -> DisputeGuard:
     return ResolutionDisputeGuard(SqlAlchemyDisputeRepository(session))
 
 
+def get_audit_trail(session: SessionDep) -> AuditTrail:
+    """Общий append-only аудит-журнал (``app/shared/audit``)."""
+    return SqlAlchemyAuditTrail(session)
+
+
 GatewayDep = Annotated[EventScoringGateway, Depends(get_event_scoring_gateway)]
 ScoreWriterDep = Annotated[PredictionScoreWriter, Depends(get_prediction_score_writer)]
 RatingRepoDep = Annotated[RatingRepository, Depends(get_rating_repository)]
@@ -123,6 +130,7 @@ SeasonConfigDep = Annotated[
 ]
 SeasonRepoDep = Annotated[SeasonRepository, Depends(get_season_repository)]
 DisputeGuardDep = Annotated[DisputeGuard, Depends(get_dispute_guard)]
+AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
 
 
 # ── RBAC ──────────────────────────────────────────────────────────────────
@@ -140,10 +148,14 @@ def require_recompute_role(current_user: CurrentUser) -> UserRole:
     return current_user.role
 
 
-def require_season_transition_role(current_user: CurrentUser) -> UserRole:
-    """Гард: роль вправе финализировать сезон (только админ; разделение ролей)."""
+def require_season_transition_role(current_user: CurrentUser) -> User:
+    """Гард: роль вправе финализировать сезон (только админ; разделение ролей).
+
+    Возвращает пользователя целиком (не только роль) — ``id`` нужен роутеру
+    как ``actor_id`` для аудита финализации.
+    """
     ensure_can_transition(current_user.role)
-    return current_user.role
+    return current_user
 
 
 # ── Use-cases ─────────────────────────────────────────────────────────────
@@ -238,6 +250,7 @@ def get_finalize_season(
     ratings: RatingRepoDep,
     clock: ClockDep,
     season_config: SeasonConfigDep,
+    audit: AuditDep,
 ) -> FinalizeSeason:
     """Координатор финализации сезона (пересчёт + неизменяемый снапшот призёров).
 
@@ -253,4 +266,5 @@ def get_finalize_season(
         recompute=recompute,
         ratings=ratings,
         clock=clock,
+        audit=audit,
     )

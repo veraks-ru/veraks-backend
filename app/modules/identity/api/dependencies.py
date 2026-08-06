@@ -86,6 +86,14 @@ _ONBOARDING_METHOD = "onboarding_web"
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
+def get_audit_trail(session: SessionDep) -> AuditTrail:
+    """Общий append-only аудит-журнал (``app/shared/audit``)."""
+    return SqlAlchemyAuditTrail(session)
+
+
+AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
+
+
 def get_redis_client() -> Redis:
     """Провайдер Redis (переопределяется в тестах)."""
     return get_redis()
@@ -202,6 +210,7 @@ def get_complete_login(
     tokens: Annotated[TokenIssuer, Depends(get_token_issuer)],
     refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
     state_store: Annotated[StateStore, Depends(get_state_store)],
+    audit: AuditDep,
 ) -> CompleteEsiaLogin:
     """Use-case завершения логина (find-or-create + сессия)."""
     sec = settings.security
@@ -217,6 +226,7 @@ def get_complete_login(
         require_confirmed=settings.esia.require_confirmed,
         access_ttl_seconds=sec.access_token_ttl_seconds,
         refresh_ttl_seconds=sec.refresh_token_ttl_seconds,
+        audit=audit,
     )
 
 
@@ -225,6 +235,7 @@ def get_refresh_session(
     users: Annotated[UserRepository, Depends(get_user_repository)],
     tokens: Annotated[TokenIssuer, Depends(get_token_issuer)],
     refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
+    audit: AuditDep,
 ) -> RefreshSession:
     """Use-case обновления сессии."""
     sec = settings.security
@@ -234,15 +245,17 @@ def get_refresh_session(
         refresh_store=refresh_store,
         access_ttl_seconds=sec.access_token_ttl_seconds,
         refresh_ttl_seconds=sec.refresh_token_ttl_seconds,
+        audit=audit,
     )
 
 
 def get_logout_session(
     tokens: Annotated[TokenIssuer, Depends(get_token_issuer)],
     refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
+    audit: AuditDep,
 ) -> LogoutSession:
     """Use-case завершения сессии."""
-    return LogoutSession(tokens=tokens, refresh_store=refresh_store)
+    return LogoutSession(tokens=tokens, refresh_store=refresh_store, audit=audit)
 
 
 def get_current_user_uc(
@@ -291,18 +304,6 @@ def get_my_consents_uc(
 ) -> GetMyConsents:
     """Use-case списка согласий текущего пользователя."""
     return GetMyConsents(consents=consents)
-
-
-def get_audit_trail(session: SessionDep) -> AuditTrail:
-    """Общий append-only аудит-журнал (``app/shared/audit``).
-
-    Первое подключение identity к общему аудиту (T4) — пишем только
-    ``identity.user.deleted``; login/logout подключит следующая задача.
-    """
-    return SqlAlchemyAuditTrail(session)
-
-
-AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
 
 
 def get_delete_my_account_uc(

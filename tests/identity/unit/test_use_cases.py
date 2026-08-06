@@ -64,6 +64,7 @@ def _build_complete_login(
     encryptor: FernetFieldEncryptor,
     token_issuer: JwtTokenIssuer,
     require_confirmed: bool = True,
+    audit: FakeAuditTrail | None = None,
 ) -> CompleteEsiaLogin:
     return CompleteEsiaLogin(
         esia=FakeEsiaGateway(identity),
@@ -77,6 +78,7 @@ def _build_complete_login(
         require_confirmed=require_confirmed,
         access_ttl_seconds=900,
         refresh_ttl_seconds=3600,
+        audit=audit if audit is not None else FakeAuditTrail(),
     )
 
 
@@ -351,6 +353,7 @@ async def test_refresh_rotates_and_revokes_old(
         refresh_store=refresh_store,
         access_ttl_seconds=900,
         refresh_ttl_seconds=3600,
+        audit=FakeAuditTrail(),
     )
     rotated = await refresh_uc.execute(refresh_token=old_refresh)
     assert rotated.refresh_token != old_refresh
@@ -377,12 +380,14 @@ async def test_refresh_reuse_revokes_whole_family(
     result = await login.execute(code="abc", state="valid-state")
     old_refresh = result.tokens.refresh_token
 
+    audit = FakeAuditTrail()
     refresh_uc = RefreshSession(
         users=repo,
         tokens=token_issuer,
         refresh_store=refresh_store,
         access_ttl_seconds=900,
         refresh_ttl_seconds=3600,
+        audit=audit,
     )
     rotated = await refresh_uc.execute(refresh_token=old_refresh)
     new_refresh = rotated.refresh_token
@@ -394,6 +399,12 @@ async def test_refresh_reuse_revokes_whole_family(
     # (обе сессии — атакующая и жертвенная — принудительно завершены).
     with pytest.raises(InvalidTokenError):
         await refresh_uc.execute(refresh_token=new_refresh)
+
+    # Событие безопасности зафиксировано в аудите (T10), без ПДн в payload.
+    assert audit.actions() == ["identity.refresh.reuse_detected"]
+    entry = audit.records[0]
+    assert entry["entity_id"] == result.user_id
+    assert entry["actor_id"] == result.user_id
 
 
 async def test_logout_revokes_refresh(
@@ -411,8 +422,13 @@ async def test_logout_revokes_refresh(
     )
     result = await login.execute(code="abc", state="valid-state")
 
-    logout = LogoutSession(tokens=token_issuer, refresh_store=refresh_store)
+    logout_audit = FakeAuditTrail()
+    logout = LogoutSession(
+        tokens=token_issuer, refresh_store=refresh_store, audit=logout_audit
+    )
     await logout.execute(refresh_token=result.tokens.refresh_token)
+    assert logout_audit.actions() == ["identity.logout"]
+    assert logout_audit.records[0]["actor_id"] == result.user_id
 
     refresh_uc = RefreshSession(
         users=repo,
@@ -420,9 +436,56 @@ async def test_logout_revokes_refresh(
         refresh_store=refresh_store,
         access_ttl_seconds=900,
         refresh_ttl_seconds=3600,
+        audit=FakeAuditTrail(),
     )
     with pytest.raises(InvalidTokenError):
         await refresh_uc.execute(refresh_token=result.tokens.refresh_token)
+
+
+async def test_logout_without_token_does_not_audit() -> None:
+    """Отсутствующий/мусорный refresh-токен — no-op, аудит не пишется."""
+    audit = FakeAuditTrail()
+    logout = LogoutSession(
+        tokens=JwtTokenIssuer(
+            secret="test-jwt-secret-0123456789abcdef-pad",
+            algorithm="HS256",
+            access_ttl_seconds=900,
+            refresh_ttl_seconds=3600,
+        ),
+        refresh_store=FakeRefreshTokenStore(),
+        audit=audit,
+    )
+    await logout.execute(refresh_token=None)
+    await logout.execute(refresh_token="garbage")
+    assert audit.actions() == []
+
+
+async def test_login_writes_audit_with_new_user_flag(
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
+) -> None:
+    """``identity.login`` различает первый вход и повторный флагом в metadata."""
+    audit = FakeAuditTrail()
+    login = _build_complete_login(
+        identity=confirmed_identity,
+        repo=repo,
+        state_store=state_store,
+        refresh_store=refresh_store,
+        hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
+        encryptor=encryptor,
+        token_issuer=token_issuer,
+        audit=audit,
+    )
+    first = await login.execute(code="abc", state="valid-state")
+
+    state_store.seed("valid-state-2")
+    second = await login.execute(code="def", state="valid-state-2")
+
+    assert audit.actions() == ["identity.login", "identity.login"]
+    assert audit.records[0]["actor_id"] == first.user_id
+    assert audit.records[1]["actor_id"] == second.user_id
+    # ПДн (СНИЛС/ФИО) в payload не попадают — только user_id/entity фейка проверяют.
+    assert all(r["entity_type"] == "user" for r in audit.records)
 
 
 async def test_get_current_user_by_access_token(

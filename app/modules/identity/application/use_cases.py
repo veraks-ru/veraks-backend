@@ -21,6 +21,7 @@ from app.modules.identity.application.dto import (
 from app.modules.identity.domain.consent import Consent, ConsentDocument
 from app.modules.identity.domain.entities import (
     User,
+    UserRole,
     UserStatus,
     generate_username_seed,
 )
@@ -60,6 +61,18 @@ _MAX_USERNAME_ATTEMPTS = 1000
 # Сколько раз переаллоцировать username при гонке на UNIQUE(username) во вставке.
 _MAX_REGISTER_ATTEMPTS = 5
 
+_ACTOR_TYPE_BY_ROLE: dict[UserRole, AuditActorType] = {
+    UserRole.USER: AuditActorType.USER,
+    UserRole.EDITOR: AuditActorType.EDITOR,
+    UserRole.ARBITER: AuditActorType.ARBITER,
+    UserRole.ADMIN: AuditActorType.ADMIN,
+}
+
+
+def _actor_type(role: UserRole) -> AuditActorType:
+    """Маппит RBAC-роль в тип актора аудита."""
+    return _ACTOR_TYPE_BY_ROLE.get(role, AuditActorType.USER)
+
 
 class InitiateEsiaLogin:
     """Шаг 1: сгенерировать ``state`` и отдать URL авторизации ЕСИА."""
@@ -82,6 +95,10 @@ class CompleteEsiaLogin:
     Реализует инвариант «один человек — один аккаунт»:
     поиск по ``snils_hash`` → вход в существующий аккаунт либо создание нового.
     Гонку параллельных регистраций ловим по UNIQUE-нарушению и повторяем поиск.
+
+    Пишет в аудит ``identity.login`` (T10): и создание аккаунта, и повторный
+    вход — различаются флагом ``is_new_user`` в ``metadata``. ПДн (СНИЛС, ФИО,
+    ip) в payload не попадают — только ``user_id`` и служебный флаг.
     """
 
     def __init__(
@@ -98,6 +115,7 @@ class CompleteEsiaLogin:
         require_confirmed: bool,
         access_ttl_seconds: int,
         refresh_ttl_seconds: int,
+        audit: AuditTrail,
     ) -> None:
         self._esia = esia
         self._users = users
@@ -110,6 +128,7 @@ class CompleteEsiaLogin:
         self._require_confirmed = require_confirmed
         self._access_ttl = access_ttl_seconds
         self._refresh_ttl = refresh_ttl_seconds
+        self._audit = audit
 
     async def execute(self, *, code: str, state: str) -> LoginResult:
         """Полный цикл обмена кода на сессию."""
@@ -125,6 +144,14 @@ class CompleteEsiaLogin:
 
         user, is_new = await self._find_or_create(identity, snils_hash, esia_oid_hash)
         session = await self._issue_session(user)
+        await self._audit.record(
+            actor_id=user.id,
+            actor_type=_actor_type(user.role),
+            action="identity.login",
+            entity_type="user",
+            entity_id=user.id,
+            metadata={"is_new_user": is_new},
+        )
         return LoginResult(user_id=user.id, tokens=session, is_new_user=is_new)
 
     async def _find_or_create(
@@ -210,25 +237,37 @@ class RefreshSession:
         refresh_store: RefreshTokenStore,
         access_ttl_seconds: int,
         refresh_ttl_seconds: int,
+        audit: AuditTrail,
     ) -> None:
         self._users = users
         self._tokens = tokens
         self._refresh_store = refresh_store
         self._access_ttl = access_ttl_seconds
         self._refresh_ttl = refresh_ttl_seconds
+        self._audit = audit
 
     async def execute(self, *, refresh_token: str) -> SessionTokens:
         """Проверяет refresh, отзывает старый jti, выпускает новую пару.
 
         Детект кражи (M-REFRESH): если предъявлен уже ротированный (отозванный)
         токен — это повторное использование, и все refresh-токены пользователя
-        отзываются (требуется повторный вход на всех устройствах).
+        отзываются (требуется повторный вход на всех устройствах). Само событие
+        пишется в аудит (``identity.refresh.reuse_detected``) — сигнал для
+        расследования компрометации, без ПДн в payload.
         """
         claims, jti = self._tokens.verify_refresh(refresh_token)
         if not await self._refresh_store.is_active(jti):
             if await self._refresh_store.was_rotated(jti):
                 # Уже использованный токен предъявлен снова → вероятная кража.
                 await self._refresh_store.revoke_all_for_user(str(claims.user_id))
+                await self._audit.record(
+                    actor_id=claims.user_id,
+                    actor_type=_actor_type(claims.role),
+                    action="identity.refresh.reuse_detected",
+                    entity_type="user",
+                    entity_id=claims.user_id,
+                    metadata={"reason": "rotated_refresh_token_reused"},
+                )
             raise InvalidTokenError("Refresh-токен отозван")
 
         user = await self._users.get_by_id(claims.user_id)
@@ -254,19 +293,33 @@ class RefreshSession:
 class LogoutSession:
     """Завершение сессии: отзыв refresh-токена (клиент чистит cookie)."""
 
-    def __init__(self, *, tokens: TokenIssuer, refresh_store: RefreshTokenStore) -> None:
+    def __init__(
+        self, *, tokens: TokenIssuer, refresh_store: RefreshTokenStore, audit: AuditTrail
+    ) -> None:
         self._tokens = tokens
         self._refresh_store = refresh_store
+        self._audit = audit
 
     async def execute(self, *, refresh_token: str | None) -> None:
-        """Отзывает refresh-токен, если он валиден; молча игнорирует мусор."""
+        """Отзывает refresh-токен, если он валиден; молча игнорирует мусор.
+
+        Аудит (``identity.logout``) пишется только при реальном отзыве —
+        мусорный/отсутствующий токен ничего не меняет и не логируется.
+        """
         if not refresh_token:
             return
         try:
-            _, jti = self._tokens.verify_refresh(refresh_token)
+            claims, jti = self._tokens.verify_refresh(refresh_token)
         except InvalidTokenError:
             return
         await self._refresh_store.revoke(jti)
+        await self._audit.record(
+            actor_id=claims.user_id,
+            actor_type=_actor_type(claims.role),
+            action="identity.logout",
+            entity_type="user",
+            entity_id=claims.user_id,
+        )
 
 
 class GetCurrentUser:

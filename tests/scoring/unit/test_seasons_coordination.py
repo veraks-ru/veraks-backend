@@ -28,6 +28,7 @@ from app.modules.seasons.domain.errors import (
     SeasonNotFoundError,
 )
 from app.modules.seasons.domain.value_objects import LeagueConfig
+from app.shared.audit.domain.entities import AuditActorType
 from tests.scoring.conftest import FIXED_NOW, make_event
 from tests.scoring.fakes import (
     FakeClock,
@@ -35,7 +36,7 @@ from tests.scoring.fakes import (
     FakeSeasonConfigGateway,
     InMemoryRatingRepository,
 )
-from tests.seasons.fakes import FakeDisputeGuard, InMemorySeasonRepository
+from tests.seasons.fakes import FakeAuditTrail, FakeDisputeGuard, InMemorySeasonRepository
 
 EASY_CFG = LeagueConfig(
     gradation_map=(0.1, 0.3, 0.5, 0.7, 0.9),
@@ -67,6 +68,7 @@ def _finalize_uc(
     ratings: InMemoryRatingRepository,
     season_id: uuid.UUID,
     dispute_guard: FakeDisputeGuard,
+    audit: FakeAuditTrail | None = None,
 ) -> FinalizeSeason:
     event, _ = make_event(
         outcome=0,
@@ -91,6 +93,7 @@ def _finalize_uc(
         recompute=recompute,
         ratings=ratings,
         clock=FakeClock(LATER),
+        audit=audit if audit is not None else FakeAuditTrail(),
     )
 
 
@@ -116,6 +119,32 @@ async def test_finalize_moves_to_finished_and_writes_immutable_snapshot() -> Non
     assert finalization.league_config == EASY_CFG
     assert len(entries) == 5
     assert {e.rank for e in entries} == {1, 2, 3, 4, 5}
+
+
+async def test_finalize_writes_audit_event_with_admin_actor() -> None:
+    """Ручная финализация (admin через HTTP) пишет ``season.finalized`` с actor_id."""
+    season_id = uuid.uuid4()
+    season_repo = InMemorySeasonRepository()
+    await season_repo.add(_active_season(season_id))
+    ratings = InMemoryRatingRepository()
+    guard = FakeDisputeGuard(has_open=False)
+    audit = FakeAuditTrail()
+    admin_id = uuid.uuid4()
+
+    uc = _finalize_uc(
+        season_repo=season_repo,
+        ratings=ratings,
+        season_id=season_id,
+        dispute_guard=guard,
+        audit=audit,
+    )
+    await uc.execute(season_id=season_id, actor_id=admin_id)
+
+    assert audit.actions() == ["season.finalized"]
+    entry = audit.records[0]
+    assert entry["actor_id"] == admin_id
+    assert entry["actor_type"] == AuditActorType.ADMIN
+    assert entry["entity_id"] == season_id
 
 
 async def test_finalize_is_idempotent_noop_when_already_finished() -> None:
@@ -190,6 +219,7 @@ async def test_roll_activates_due_upcoming_seasons() -> None:
     await season_repo.add(due)
     await season_repo.add(future)
 
+    audit = FakeAuditTrail()
     roll = RollSeasons(
         seasons=season_repo,
         finalize=_finalize_uc(
@@ -199,12 +229,17 @@ async def test_roll_activates_due_upcoming_seasons() -> None:
             dispute_guard=FakeDisputeGuard(),
         ),
         clock=FakeClock(LATER),
+        audit=audit,
         auto_finalize=False,
     )
     await roll.execute()
 
     assert (await season_repo.get_by_id(due.id)).status is SeasonStatus.ACTIVE  # type: ignore[union-attr]
     assert (await season_repo.get_by_id(future.id)).status is SeasonStatus.UPCOMING  # type: ignore[union-attr]
+    # Авто-активация пишется в аудит как SYSTEM (T10).
+    assert audit.actions() == ["season.activated"]
+    assert audit.records[0]["actor_id"] is None
+    assert audit.records[0]["entity_id"] == due.id
 
 
 async def test_roll_does_not_auto_finalize_when_gated() -> None:
@@ -223,6 +258,7 @@ async def test_roll_does_not_auto_finalize_when_gated() -> None:
             dispute_guard=FakeDisputeGuard(),
         ),
         clock=FakeClock(LATER),
+        audit=FakeAuditTrail(),
         auto_finalize=False,  # явно выключено — ручной режим
     )
     await roll.execute()
@@ -241,6 +277,7 @@ async def test_roll_auto_finalizes_expired_active_season_by_default() -> None:
         _active_season(season_id, ends_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
     )  # ends в прошлом относительно LATER
     ratings = InMemoryRatingRepository()
+    finalize_audit = FakeAuditTrail()
     roll = RollSeasons(
         seasons=season_repo,
         finalize=_finalize_uc(
@@ -248,8 +285,10 @@ async def test_roll_auto_finalizes_expired_active_season_by_default() -> None:
             ratings=ratings,
             season_id=season_id,
             dispute_guard=FakeDisputeGuard(has_open=False),
+            audit=finalize_audit,
         ),
         clock=FakeClock(LATER),
+        audit=FakeAuditTrail(),
         # auto_finalize не передан — берётся дефолт (True)
     )
     await roll.execute()
@@ -257,6 +296,10 @@ async def test_roll_auto_finalizes_expired_active_season_by_default() -> None:
     season = await season_repo.get_by_id(season_id)
     assert season is not None and season.status is SeasonStatus.FINISHED
     assert len(season_repo.finalizations) == 1
+    # Финализация (в т.ч. авто, через таймер) пишется в аудит как SYSTEM (T10).
+    assert finalize_audit.actions() == ["season.finalized"]
+    assert finalize_audit.records[0]["actor_id"] is None
+    assert finalize_audit.records[0]["entity_id"] == season_id
 
 
 # ── RecalibratingLeagueConfigProvider ────────────────────────────────────────
@@ -428,6 +471,7 @@ async def test_roll_activates_with_provider_config() -> None:
             dispute_guard=FakeDisputeGuard(),
         ),
         clock=FakeClock(LATER),
+        audit=FakeAuditTrail(),
         auto_finalize=False,
         config_provider=_provider(
             season_repo=season_repo, season_entries={prev_id: entries}

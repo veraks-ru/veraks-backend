@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.audit.adapters.orm import AuditLogORM
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
-from app.shared.audit.domain.hashing import chain_hash
+from app.shared.audit.domain.hashing import chain_hash, entry_payload
 
 # Произвольная, но фиксированная константа advisory-лока для цепочки audit_log.
 _AUDIT_CHAIN_LOCK_KEY = 0x4155_4449_5400  # "AUDIT\0"
@@ -58,17 +58,17 @@ class SqlAlchemyAuditTrail:
 
         occurred_at = datetime.now(timezone.utc)
         meta = dict(metadata or {})
-        payload = {
-            "occurred_at": occurred_at.isoformat(),
-            "actor_id": str(actor_id) if actor_id else None,
-            "actor_type": actor_type.value,
-            "action": action,
-            "entity_type": entity_type,
-            "entity_id": str(entity_id) if entity_id else None,
-            "before": dict(before) if before is not None else None,
-            "after": dict(after) if after is not None else None,
-            "metadata": meta,
-        }
+        payload = entry_payload(
+            occurred_at=occurred_at,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            before=before,
+            after=after,
+            metadata=meta,
+        )
         digest = chain_hash(prev_hash, payload)
 
         orm = AuditLogORM(

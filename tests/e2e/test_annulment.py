@@ -260,6 +260,7 @@ async def test_annulling_disputed_event_unblocks_season_finalization(
             ),
             ratings=SqlAlchemyRatingRepository(session),
             clock=clock,
+            audit=SqlAlchemyAuditTrail(session),
         )
 
     # До аннулирования сезон закрыть нельзя — открытый спор.

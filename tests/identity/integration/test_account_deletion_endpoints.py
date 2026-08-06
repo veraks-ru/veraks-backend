@@ -106,7 +106,8 @@ def test_delete_me_returns_204_and_ends_session(context) -> None:
     me = client.get("/auth/me")
     assert me.status_code == 401
 
-    assert audit.actions() == ["identity.user.deleted"]
+    # Логин (T10) + удаление аккаунта — оба пишутся в аудит, по порядку.
+    assert audit.actions() == ["identity.login", "identity.user.deleted"]
 
 
 async def test_delete_me_anonymizes_profile(context) -> None:

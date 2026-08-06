@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.modules.identity.api.dependencies import (
+    get_audit_trail,
     get_consent_repository,
     get_esia_gateway,
     get_refresh_store,
@@ -26,6 +27,7 @@ from app.modules.identity.api.dependencies import (
     get_user_repository,
 )
 from tests.identity.fakes import (
+    FakeAuditTrail,
     FakeEsiaGateway,
     FakeRefreshTokenStore,
     FakeStateStore,
@@ -42,6 +44,7 @@ def context(confirmed_identity):
     refresh_store = FakeRefreshTokenStore()
     gateway = FakeEsiaGateway(confirmed_identity)
     consents = InMemoryConsentRepository()
+    audit = FakeAuditTrail()
 
     app = create_app()
     app.dependency_overrides[get_user_repository] = lambda: repo
@@ -49,6 +52,7 @@ def context(confirmed_identity):
     app.dependency_overrides[get_state_store] = lambda: state_store
     app.dependency_overrides[get_refresh_store] = lambda: refresh_store
     app.dependency_overrides[get_consent_repository] = lambda: consents
+    app.dependency_overrides[get_audit_trail] = lambda: audit
 
     with TestClient(app) as client:
         yield client, repo, gateway

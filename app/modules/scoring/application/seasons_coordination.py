@@ -46,6 +46,8 @@ from app.modules.seasons.domain.value_objects import (
 )
 from app.modules.seasons.ports.gateways import DisputeGuard
 from app.modules.seasons.ports.repositories import SeasonRepository
+from app.shared.audit.domain.entities import AuditActorType
+from app.shared.audit.ports.audit_trail import AuditTrail
 
 logger = logging.getLogger(__name__)
 
@@ -64,15 +66,24 @@ class FinalizeSeason:
         recompute: RecomputeRatings,
         ratings: RatingRepository,
         clock: Clock,
+        audit: AuditTrail,
     ) -> None:
         self._seasons = seasons
         self._dispute_guard = dispute_guard
         self._recompute = recompute
         self._ratings = ratings
         self._clock = clock
+        self._audit = audit
 
-    async def execute(self, *, season_id: uuid.UUID) -> FinalizeResult:
+    async def execute(
+        self, *, season_id: uuid.UUID, actor_id: uuid.UUID | None = None
+    ) -> FinalizeResult:
         """Финализирует сезон идемпотентно; пишет неизменяемую запись.
+
+        ``actor_id`` — админ, вручную запустивший финализацию через
+        ``POST /admin/seasons/{id}/finalize``; ``None`` — таймерный
+        авто-триггер воркера (``season_roll``), тогда аудит пишется как
+        ``SYSTEM``.
 
         Выполняется в транзакции вызывающего (он коммитит) — пересчёт, запись
         финализации и перевод статуса либо применяются целиком, либо
@@ -132,6 +143,18 @@ class FinalizeSeason:
         ]
         await self._seasons.append_finalization(finalization, entries)
         await self._seasons.update(season)
+        await self._audit.record(
+            actor_id=actor_id,
+            actor_type=AuditActorType.ADMIN if actor_id is not None else AuditActorType.SYSTEM,
+            action="season.finalized",
+            entity_type="season",
+            entity_id=season_id,
+            after={
+                "status": season.status.value,
+                "qualified_count": len(qualified),
+                "total_participants": len(standings),
+            },
+        )
         logger.info(
             "Season %s finalized: %d/%d qualified",
             season_id,
@@ -256,12 +279,14 @@ class RollSeasons:
         seasons: SeasonRepository,
         finalize: FinalizeSeason,
         clock: Clock,
+        audit: AuditTrail,
         auto_finalize: bool = True,
         config_provider: LeagueConfigProvider | None = None,
     ) -> None:
         self._seasons = seasons
         self._finalize = finalize
         self._clock = clock
+        self._audit = audit
         self._auto_finalize = auto_finalize
         self._config_provider = config_provider or DefaultLeagueConfigProvider()
 
@@ -270,7 +295,10 @@ class RollSeasons:
 
         Список активированных нужен композит-руту (воркеру), чтобы разнести
         дивизионы нового сезона по итогам предыдущего — без обратной зависимости
-        scoring→leagues (её делает воркер).
+        scoring→leagues (её делает воркер). Финализация пишет свой аудит внутри
+        ``FinalizeSeason``; авто-активацию (единственный переход, который эта
+        координация делает НЕ через use-case ``seasons.ActivateSeason``) аудирует
+        здесь же, актором — ``SYSTEM``.
         """
         now = self._clock.now()
         activated: list[uuid.UUID] = []
@@ -282,6 +310,15 @@ class RollSeasons:
             if season.activate(config, now=now):
                 await self._seasons.update(season)
                 activated.append(season.id)
+                await self._audit.record(
+                    actor_id=None,
+                    actor_type=AuditActorType.SYSTEM,
+                    action="season.activated",
+                    entity_type="season",
+                    entity_id=season.id,
+                    after={"status": season.status.value},
+                    metadata={"trigger": "auto_roll"},
+                )
                 logger.info("Season %s auto-activated", season.id)
 
         if not self._auto_finalize:
