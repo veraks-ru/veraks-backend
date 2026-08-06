@@ -34,7 +34,9 @@ class CallbackRequest(BaseModel):
         default=None, description="Анти-CSRF state из шага login"
     )
     error: str | None = Field(
-        default=None, description="Код ошибки OIDC (например, access_denied)"
+        default=None,
+        max_length=64,
+        description="Код ошибки OIDC (например, access_denied)",
     )
     error_description: str | None = Field(
         default=None, max_length=500, description="Пояснение провайдера"

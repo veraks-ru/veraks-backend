@@ -284,6 +284,43 @@ async def test_unknown_kid_triggers_refresh(signing_key) -> None:
     assert server.calls == 2  # второй поход — из-за неизвестного kid
 
 
+async def test_rotated_key_with_same_kid_triggers_one_retry(signing_key) -> None:
+    """Шлюз подменил ключ, НЕ сменив kid: обновляем JWKS и повторяем проверку.
+
+    Путь «незнакомый kid» такую ротацию не ловит — маркер отвергался бы с
+    Signature verification failed до истечения кэша.
+    """
+    server = _JwksServer(_jwks(signing_key))
+    verifier = EsiaIdTokenVerifier(_settings())
+    rotated_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    async with server.client() as client:
+        await verifier.verify(_id_token(signing_key), nonce="nonce-1", client=client)
+        server.payload = _jwks(rotated_key)  # тот же kid, другой ключ
+        claims = await verifier.verify(
+            _id_token(rotated_key), nonce="nonce-1", client=client
+        )
+
+    assert claims["sub"] == "esia-oid-1"
+    assert server.calls == 2
+
+
+async def test_forged_signature_retries_refresh_exactly_once(signing_key) -> None:
+    """Подделка подписи не гоняет нас к JWKS по кругу: ровно один повтор."""
+    server = _JwksServer(_jwks(signing_key))
+    verifier = EsiaIdTokenVerifier(_settings())
+    attacker_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    async with server.client() as client:
+        await verifier.verify(_id_token(signing_key), nonce="nonce-1", client=client)
+        with pytest.raises(InvalidIdTokenError):
+            await verifier.verify(
+                _id_token(attacker_key), nonce="nonce-1", client=client
+            )
+
+    assert server.calls == 2  # первичное чтение + один принудительный refresh
+
+
 async def test_unknown_kid_after_refresh_rejected(signing_key) -> None:
     server = _JwksServer(_jwks(signing_key))
     verifier = EsiaIdTokenVerifier(_settings())

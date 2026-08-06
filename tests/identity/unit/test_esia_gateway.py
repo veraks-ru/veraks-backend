@@ -92,9 +92,16 @@ def _id_token(key: rsa.RSAPrivateKey, *, nonce: str = _NONCE) -> str:
 class _Gateway:
     """Фейковый шлюз: /token отдаёт заданный id_token, /jwks — ключи."""
 
-    def __init__(self, key: rsa.RSAPrivateKey, *, id_token: str | None) -> None:
+    def __init__(
+        self,
+        key: rsa.RSAPrivateKey,
+        *,
+        id_token: str | None,
+        userinfo_oid: str = "esia-oid-1",
+    ) -> None:
         self.key = key
         self.id_token = id_token
+        self.userinfo_oid = userinfo_oid
         self.token_form: dict[str, list[str]] = {}
 
     def client(self) -> httpx.AsyncClient:
@@ -103,6 +110,17 @@ class _Gateway:
     def _handle(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/jwks":
             return httpx.Response(200, json=_jwks(self.key))
+        if request.url.path == "/userinfo":
+            return httpx.Response(
+                200,
+                json={
+                    "oid": self.userinfo_oid,
+                    "snils": "112-233-445 95",
+                    "firstName": "Иван",
+                    "lastName": "Петров",
+                    "trusted": True,
+                },
+            )
         self.token_form = parse_qs(request.content.decode())
         body: dict[str, Any] = {"access_token": "access-1", "expires_in": 3600}
         if self.id_token is not None:
@@ -143,6 +161,56 @@ async def test_exchange_sends_code_verifier_and_accepts_valid_id_token(
     assert tokens.access_token == "access-1"
     assert server.token_form["code_verifier"] == [_VERIFIER]
     assert server.token_form["code"] == ["code-1"]
+
+
+async def test_identity_is_bound_to_verified_subject(signing_key) -> None:
+    """Атрибуты /userinfo принадлежат тому же субъекту, что и проверенный маркер."""
+    server = _Gateway(signing_key, id_token=_id_token(signing_key))
+    settings = _settings()
+
+    async with server.client() as client:
+        gateway = EsiaOidcGateway(settings, client, EsiaIdTokenVerifier(settings))
+        tokens = await gateway.exchange_code(
+            code="code-1", code_verifier=_VERIFIER, nonce=_NONCE
+        )
+        identity = await gateway.fetch_identity(tokens)
+
+    assert tokens.subject == "esia-oid-1"
+    assert identity.oid == "esia-oid-1"
+
+
+async def test_identity_of_another_subject_rejected(signing_key) -> None:
+    """Подменённый ответ /userinfo (другой гражданин) — отказ, а не чужой аккаунт."""
+    server = _Gateway(
+        signing_key, id_token=_id_token(signing_key), userinfo_oid="esia-oid-999"
+    )
+    settings = _settings()
+
+    async with server.client() as client:
+        gateway = EsiaOidcGateway(settings, client, EsiaIdTokenVerifier(settings))
+        tokens = await gateway.exchange_code(
+            code="code-1", code_verifier=_VERIFIER, nonce=_NONCE
+        )
+        with pytest.raises(InvalidIdTokenError, match="субъект"):
+            await gateway.fetch_identity(tokens)
+
+
+async def test_identity_not_bound_in_trust_channel_mode(signing_key) -> None:
+    """Без проверки маркера сверять не с чем — поведение как раньше."""
+    server = _Gateway(
+        signing_key, id_token="совсем-не-jwt", userinfo_oid="esia-oid-999"
+    )
+    settings = _settings(jwks_url="", issuer="")
+
+    async with server.client() as client:
+        gateway = EsiaOidcGateway(settings, client, EsiaIdTokenVerifier(settings))
+        tokens = await gateway.exchange_code(
+            code="code-1", code_verifier=_VERIFIER, nonce=_NONCE
+        )
+        identity = await gateway.fetch_identity(tokens)
+
+    assert tokens.subject is None
+    assert identity.oid == "esia-oid-999"
 
 
 async def test_exchange_rejects_id_token_from_another_flow(signing_key) -> None:

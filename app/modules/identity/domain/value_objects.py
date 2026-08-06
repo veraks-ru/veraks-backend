@@ -67,11 +67,17 @@ class Snils:
 
 @dataclass(frozen=True, slots=True)
 class EsiaTokens:
-    """Маркеры, полученные на этапе обмена authorization code."""
+    """Маркеры, полученные на этапе обмена authorization code.
+
+    ``subject`` — claim ``sub`` из ПРОВЕРЕННОГО ``id_token`` (``None``, если
+    проверка выключена, т.е. только локально с моком). С ним атрибуты из
+    ``/userinfo`` привязываются к тому же субъекту, чью подпись мы проверили.
+    """
 
     access_token: str
     id_token: str | None = None
     expires_in: int | None = None
+    subject: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

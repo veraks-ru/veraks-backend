@@ -237,6 +237,31 @@ def test_callback_provider_error_is_gateway_failure(context) -> None:
 
     assert resp.status_code == 502
     assert resp.json()["error"] == "EsiaExchangeError"
+    assert "server_error" in resp.json()["detail"]
+
+
+def test_callback_does_not_echo_unknown_error_code(context) -> None:
+    """Сырой ``error`` из query-string не попадает в ответ (отражённый текст)."""
+    client, _, _ = context
+
+    resp = client.get(
+        "/auth/esia/callback",
+        params={"error": "<script>alert(1)</script>", "state": "x"},
+    )
+
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "script" not in detail
+    assert "unknown" in detail
+
+
+def test_callback_rejects_oversized_error_code(context) -> None:
+    """Длина ``error`` ограничена схемой — мусор не доезжает до обработчика."""
+    client, _, _ = context
+
+    resp = client.get("/auth/esia/callback", params={"error": "x" * 100, "state": "x"})
+
+    assert resp.status_code == 422
 
 
 def test_callback_without_code_and_without_error_is_400(context) -> None:

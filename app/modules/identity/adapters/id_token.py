@@ -32,7 +32,12 @@ from typing import Any
 import httpx
 import jwt
 from jwt import PyJWK, PyJWKSet
-from jwt.exceptions import PyJWKError, PyJWKSetError, PyJWTError
+from jwt.exceptions import (
+    InvalidSignatureError,
+    PyJWKError,
+    PyJWKSetError,
+    PyJWTError,
+)
 
 from app.config import EsiaSettings
 from app.modules.identity.domain.errors import EsiaExchangeError, InvalidIdTokenError
@@ -56,11 +61,16 @@ class EsiaIdTokenVerifier:
     """Проверка ``id_token`` с кэшем ключей JWKS в памяти процесса.
 
     Кэш живёт ``jwks_cache_ttl_seconds`` (по умолчанию час), чтобы не ходить
-    к шлюзу на каждый вход. Ротацию ключа «вне расписания» ловим отдельно:
-    неизвестный ``kid`` вызывает принудительное обновление JWKS до того, как
-    маркер будет отвергнут. Если обновление не удалось, а прежние ключи ещё
-    есть — работаем на них (сбой JWKS-эндпоинта не должен ронять вход), но
-    пишем предупреждение в лог.
+    к шлюзу на каждый вход. Ротацию ключа «вне расписания» ловим двумя
+    путями, до того как маркер будет отвергнут:
+
+    * неизвестный ``kid`` — принудительное обновление JWKS;
+    * ``InvalidSignatureError`` при знакомом ``kid`` — шлюз мог подменить
+      ключ, не меняя идентификатор: одно обновление и ОДИН повтор проверки
+      (не цикл, иначе подделанная подпись гоняла бы нас к шлюзу).
+
+    Если обновление не удалось, а прежние ключи ещё есть — работаем на них
+    (сбой JWKS-эндпоинта не должен ронять вход), но пишем предупреждение.
 
     Экземпляр общий на процесс (см. ``identity.api.dependencies``), поэтому
     гонку параллельных обновлений закрываем ``asyncio.Lock``.
@@ -87,17 +97,26 @@ class EsiaIdTokenVerifier:
         except PyJWTError as exc:
             raise InvalidIdTokenError(f"Некорректный заголовок id_token: {exc}") from exc
 
-        key = await self._resolve_key(header.get("kid"), client)
+        kid = header.get("kid")
+        key = await self._resolve_key(kid, client)
         try:
-            claims: dict[str, Any] = jwt.decode(
-                id_token,
-                key=key,
-                algorithms=self._settings.id_token_algorithm_list,
-                audience=self._settings.client_id,
-                issuer=self._settings.issuer,
-                leeway=_CLOCK_SKEW_SECONDS,
-                options={"require": ["exp", "iss", "aud"]},
-            )
+            claims = self._decode(id_token, key)
+        except InvalidSignatureError:
+            # Ключ мог быть заменён БЕЗ смены kid (путь «незнакомый kid» такую
+            # ротацию не ловит). Один принудительный перечит JWKS и повтор —
+            # ровно один, чтобы подделка не гоняла нас к шлюзу по кругу.
+            await self._refresh(client, force=True)
+            rotated = self._lookup(kid)
+            if rotated is None:
+                raise InvalidIdTokenError(
+                    f"В JWKS ЕСИА нет ключа подписи id_token (kid={kid!r})"
+                ) from None
+            try:
+                claims = self._decode(id_token, rotated)
+            except PyJWTError as exc:
+                raise InvalidIdTokenError(
+                    f"id_token не прошёл проверку: {exc}"
+                ) from exc
         except PyJWTError as exc:
             raise InvalidIdTokenError(f"id_token не прошёл проверку: {exc}") from exc
 
@@ -105,6 +124,19 @@ class EsiaIdTokenVerifier:
             # Маркер валиден сам по себе, но относится к другому входу —
             # признак воспроизведения (replay).
             raise InvalidIdTokenError("nonce в id_token не совпадает с запросом")
+        return claims
+
+    def _decode(self, id_token: str, key: PyJWK) -> dict[str, Any]:
+        """Проверяет подпись и обязательные claims (кроме ``nonce``)."""
+        claims: dict[str, Any] = jwt.decode(
+            id_token,
+            key=key,
+            algorithms=self._settings.id_token_algorithm_list,
+            audience=self._settings.client_id,
+            issuer=self._settings.issuer,
+            leeway=_CLOCK_SKEW_SECONDS,
+            options={"require": ["exp", "iss", "aud"]},
+        )
         return claims
 
     async def _resolve_key(self, kid: str | None, client: httpx.AsyncClient) -> PyJWK:

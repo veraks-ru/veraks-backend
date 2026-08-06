@@ -47,25 +47,42 @@ _STATE_COOKIE = "oidc_state"
 _STATE_COOKIE_TTL = 600  # синхронно с TTL state в сторе (10 минут)
 
 # Коды OIDC-ошибок, означающие «пользователь не дал согласие / прервал вход».
-# Остальные (``server_error``, ``temporarily_unavailable``, кривой запрос) —
-# сбой на стороне провайдера, это 502, а не отмена.
 _DENIED_OIDC_ERRORS = frozenset(
     {"access_denied", "consent_required", "login_required", "interaction_required"}
 )
+# Остальные коды, определённые RFC 6749 §4.1.2.1 и OIDC Core §3.1.2.6: это
+# сбой/кривой запрос на стороне провайдера — 502, а не отмена пользователем.
+_KNOWN_OIDC_ERRORS = _DENIED_OIDC_ERRORS | {
+    "invalid_request",
+    "unauthorized_client",
+    "unsupported_response_type",
+    "invalid_scope",
+    "server_error",
+    "temporarily_unavailable",
+    "account_selection_required",
+    "invalid_request_uri",
+    "invalid_request_object",
+    "request_not_supported",
+    "request_uri_not_supported",
+    "registration_not_supported",
+}
 
 
 def _authorization_error(code: str, description: str | None) -> IdentityError:
     """Переводит ``?error=...`` из callback'а в доменную ошибку.
 
-    Текст описания от провайдера в ответ не пробрасываем (не показываем
-    пользователю чужие технические строки) — только код ошибки, по которому
-    фронт различает «отменено» и «сбой».
+    Ни описание от провайдера, ни сырой код в ответ не пробрасываем: значение
+    приходит из query-string, то есть управляется тем, кто открыл ссылку, и в
+    теле ответа стало бы отражённым текстом. Наружу идёт только код из
+    известного списка, всё прочее — ``unknown``; по нему фронт различает
+    «отменено» и «сбой».
     """
     if code in _DENIED_OIDC_ERRORS:
         return EsiaAuthorizationDeniedError(
             "Вход через Госуслуги отменён — подтверждение не получено"
         )
-    return EsiaExchangeError(f"Госуслуги вернули ошибку авторизации: {code}")
+    safe_code = code if code in _KNOWN_OIDC_ERRORS else "unknown"
+    return EsiaExchangeError(f"Госуслуги вернули ошибку авторизации: {safe_code}")
 
 
 def _set_session_cookies(

@@ -73,6 +73,20 @@ def test_non_local_rejects_empty_issuer() -> None:
         _prod_settings(esia=_esia(issuer="   "))
 
 
+def test_jwks_without_issuer_rejected_even_in_local() -> None:
+    """JWKS задан, issuer пуст — ни один маркер не пройдёт; это ошибка конфига.
+
+    Проверка привязана к включённости JWKS, а не к окружению: иначе локально
+    это выглядело бы как невнятный отказ во входе.
+    """
+    with pytest.raises(ValueError, match="ESIA_ISSUER"):
+        Settings(
+            app_env="local",
+            database_url="postgresql+asyncpg://x/x",
+            esia=_esia(issuer=""),
+        )
+
+
 def test_non_local_with_full_esia_config_passes() -> None:
     s = _prod_settings()
     assert s.esia.verify_id_token is True

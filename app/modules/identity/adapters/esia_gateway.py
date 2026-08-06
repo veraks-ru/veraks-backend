@@ -12,7 +12,9 @@
   без ``code_verifier`` бесполезен.
 * **nonce + проверка ``id_token``** — маркер проверяется по JWKS шлюза
   (см. ``adapters/id_token.py``), в т.ч. на совпадение ``nonce``: чужой или
-  повторно предъявленный маркер не проходит.
+  повторно предъявленный маркер не проходит. Субъект (``sub``) из
+  проверенного маркера сверяется с ``oid`` в ответе ``/userinfo`` — атрибуты
+  должны принадлежать тому, чью подпись мы проверили.
 
 TODO(identity-infra): согласовать со шлюзом точный формат ответа
 ``/userinfo`` (структуру атрибутов СНИЛС/ФИО и поля уровня учётной записи) —
@@ -32,7 +34,7 @@ from app.modules.identity.adapters.id_token import (
     EsiaIdTokenVerifier,
     pkce_code_challenge,
 )
-from app.modules.identity.domain.errors import EsiaExchangeError
+from app.modules.identity.domain.errors import EsiaExchangeError, InvalidIdTokenError
 from app.modules.identity.domain.value_objects import EsiaIdentity, EsiaTokens, Snils
 
 # Уровни учётной записи ЕСИА, считающиеся «подтверждёнными».
@@ -98,13 +100,15 @@ class EsiaOidcGateway:
             raise EsiaExchangeError("В ответе ЕСИА отсутствует access_token")
         id_token = payload.get("id_token")
         # Проверяем ДО обращения к /userinfo: невалидный маркер = не наш вход.
-        await self._id_token_verifier.verify(
+        claims = await self._id_token_verifier.verify(
             id_token, nonce=nonce, client=self._client
         )
+        subject = claims.get("sub")
         return EsiaTokens(
             access_token=access,
             id_token=id_token,
             expires_in=payload.get("expires_in"),
+            subject=str(subject) if subject else None,
         )
 
     async def fetch_identity(self, tokens: EsiaTokens) -> EsiaIdentity:
@@ -118,7 +122,15 @@ class EsiaOidcGateway:
             payload = resp.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise EsiaExchangeError(f"Сбой получения атрибутов ЕСИА: {exc}") from exc
-        return self._map_identity(payload)
+        identity = self._map_identity(payload)
+        if tokens.subject is not None and identity.oid != tokens.subject:
+            # Атрибуты пришли по access-токену; связать их с проверенным
+            # маркером можно только сверив субъекта. Расхождение — либо
+            # подмена ответа /userinfo, либо перепутанные маркеры на шлюзе.
+            raise InvalidIdTokenError(
+                "Атрибуты ЕСИА относятся не к тому субъекту, что в id_token"
+            )
+        return identity
 
     @staticmethod
     def _map_identity(payload: dict[str, Any]) -> EsiaIdentity:

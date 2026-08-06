@@ -329,26 +329,26 @@ class Settings(BaseSettings):
         принимается без проверки подписи, и подмена ответа token-эндпоинта
         (или скомпрометированный шлюз) даёт вход под чужой учётной записью.
         Локально это осознанный компромисс ради мока, в бою — недопустимо,
-        поэтому приложение не поднимется. ``ESIA_ISSUER`` обязателен вместе с
-        JWKS: без ожидаемого ``iss`` проверка неполна (ключ чужого эмитента,
-        попавший в JWKS, прошёл бы).
+        поэтому приложение не поднимется.
+
+        ``ESIA_ISSUER`` проверяется НЕ по окружению, а по включённости
+        проверки: с заданным JWKS и пустым ``issuer`` ни один маркер не
+        пройдёт (``iss`` сверяется с пустой строкой), и локально это
+        выглядело бы как невнятная ошибка входа вместо явной ошибки
+        конфигурации.
         """
+        if self.esia.jwks_url.strip() and not self.esia.issuer.strip():
+            raise ValueError(
+                "ESIA_ISSUER обязателен, если задан ESIA_JWKS_URL: без "
+                "ожидаемого iss ни один id_token не пройдёт проверку."
+            )
         if self.app_env == "local":
             return self
-
-        missing = [
-            name
-            for name, value in (
-                ("ESIA_JWKS_URL", self.esia.jwks_url),
-                ("ESIA_ISSUER", self.esia.issuer),
-            )
-            if not value.strip()
-        ]
-        if missing:
+        if not self.esia.jwks_url.strip():
             raise ValueError(
                 f"В окружении '{self.app_env}' обязательна проверка id_token ЕСИА: "
-                f"заполните {', '.join(missing)} (пустой ESIA_JWKS_URL = режим "
-                "«доверие каналу», допустим только в local)."
+                "заполните ESIA_JWKS_URL (пустой = режим «доверие каналу», "
+                "допустим только в local)."
             )
         return self
 
