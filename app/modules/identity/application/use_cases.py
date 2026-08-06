@@ -7,6 +7,7 @@ SQLAlchemy и сети и покрываются юнит-тестами с фе
 
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from collections.abc import Sequence
@@ -15,6 +16,7 @@ from app.modules.identity.application.dto import (
     AuthorizationRedirect,
     ConsentInput,
     LoginResult,
+    OidcFlowState,
     SessionClaims,
     SessionTokens,
 )
@@ -56,6 +58,8 @@ from app.modules.identity.ports.security import (
 from app.shared.audit.domain.entities import AuditActorType
 from app.shared.audit.ports.audit_trail import AuditTrail
 
+_LOG = logging.getLogger(__name__)
+
 _STATE_TTL_SECONDS = 600
 _MAX_USERNAME_ATTEMPTS = 1000
 # Сколько раз переаллоцировать username при гонке на UNIQUE(username) во вставке.
@@ -75,17 +79,35 @@ def _actor_type(role: UserRole) -> AuditActorType:
 
 
 class InitiateEsiaLogin:
-    """Шаг 1: сгенерировать ``state`` и отдать URL авторизации ЕСИА."""
+    """Шаг 1: сгенерировать секреты потока и отдать URL авторизации ЕСИА.
+
+    Кроме одноразового ``state`` (анти-CSRF) генерируются:
+
+    * ``code_verifier`` — секрет PKCE (RFC 7636); наружу уходит только его
+      S256-хеш, поэтому перехваченный authorization code сам по себе
+      бесполезен;
+    * ``nonce`` — попадает в ``id_token`` и проверяется на callback'е
+      (защита от воспроизведения чужого маркера).
+
+    Оба секрета кладутся рядом со ``state`` в серверный ``StateStore`` и
+    клиенту не отдаются.
+    """
 
     def __init__(self, *, esia: EsiaGateway, state_store: StateStore) -> None:
         self._esia = esia
         self._state_store = state_store
 
     async def execute(self) -> AuthorizationRedirect:
-        """Создаёт одноразовый state (анти-CSRF) и URL страницы ЕСИА."""
+        """Создаёт state + секреты потока и URL страницы ЕСИА."""
         state = secrets.token_urlsafe(32)
-        await self._state_store.save(state, _STATE_TTL_SECONDS)
-        url = self._esia.build_authorization_url(state=state)
+        # 43 символа base64url = 32 байта энтропии (RFC 7636 требует 43..128).
+        flow = OidcFlowState(
+            code_verifier=secrets.token_urlsafe(32), nonce=secrets.token_urlsafe(16)
+        )
+        await self._state_store.save(state, flow, _STATE_TTL_SECONDS)
+        url = self._esia.build_authorization_url(
+            state=state, code_verifier=flow.code_verifier, nonce=flow.nonce
+        )
         return AuthorizationRedirect(authorization_url=url, state=state)
 
 
@@ -132,10 +154,13 @@ class CompleteEsiaLogin:
 
     async def execute(self, *, code: str, state: str) -> LoginResult:
         """Полный цикл обмена кода на сессию."""
-        if not await self._state_store.consume(state):
+        flow = await self._state_store.consume(state)
+        if flow is None:
             raise InvalidStateError("Неизвестный или просроченный state")
 
-        esia_tokens = await self._esia.exchange_code(code=code)
+        esia_tokens = await self._esia.exchange_code(
+            code=code, code_verifier=flow.code_verifier, nonce=flow.nonce
+        )
         identity = await self._esia.fetch_identity(esia_tokens)
 
         ensure_esia_confirmed(identity, require_confirmed=self._require_confirmed)
@@ -269,14 +294,26 @@ class RefreshSession:
             if await self._refresh_store.was_rotated(jti):
                 # Уже использованный токен предъявлен снова → вероятная кража.
                 await self._refresh_store.revoke_all_for_user(str(claims.user_id))
-                await self._audit.record(
-                    actor_id=claims.user_id,
-                    actor_type=_actor_type(claims.role),
-                    action="identity.refresh.reuse_detected",
-                    entity_type="user",
-                    entity_id=claims.user_id,
-                    metadata={"reason": "rotated_refresh_token_reused"},
-                )
+                try:
+                    await self._audit.record(
+                        actor_id=claims.user_id,
+                        actor_type=_actor_type(claims.role),
+                        action="identity.refresh.reuse_detected",
+                        entity_type="user",
+                        entity_id=claims.user_id,
+                        metadata={"reason": "rotated_refresh_token_reused"},
+                    )
+                except Exception:  # noqa: BLE001 — защита пользователя важнее следа
+                    # Сбой записи аудита (недоступна БД, нарушен инвариант
+                    # журнала) НЕ должен превращать задуманный 401 в 500:
+                    # токены уже отозваны, и главное — не пустить владельца
+                    # краденого токена дальше. След остаётся хотя бы в логе.
+                    _LOG.error(
+                        "Не удалось записать identity.refresh.reuse_detected "
+                        "для user_id=%s",
+                        claims.user_id,
+                        exc_info=True,
+                    )
             raise InvalidTokenError("Refresh-токен отозван")
 
         user = await self._users.get_by_id(claims.user_id)

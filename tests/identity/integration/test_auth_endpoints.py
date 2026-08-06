@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import create_app
 from app.modules.identity.api.dependencies import (
     get_audit_trail,
@@ -174,6 +175,121 @@ async def test_deleted_account_login_rejected(context) -> None:
     assert resp.status_code == 403
     assert resp.json()["error"] == "AccountDeletedError"
     assert "удал" in resp.json()["detail"].lower()
+
+
+def test_login_url_carries_pkce_and_nonce(context) -> None:
+    """Шаг login отдаёт URL с code_challenge/S256 и nonce (B5/B6)."""
+    client, _, gateway = context
+
+    resp = client.get("/auth/esia/login", follow_redirects=False)
+
+    assert resp.status_code == 307
+    location = resp.headers["location"]
+    assert "code_challenge=" in location
+    assert "code_challenge_method=S256" in location
+    assert "nonce=" in location
+    # Секреты потока сгенерированы и НЕ отданы клиенту: наружу ушёл только state.
+    state, verifier, nonce = gateway.authorize_args[0]
+    assert verifier and nonce
+    assert verifier not in location and verifier not in str(resp.cookies)
+
+
+def test_callback_passes_stored_flow_secrets_to_gateway(context) -> None:
+    """На callback'е из стора достаются ИМЕННО те code_verifier/nonce, что на login."""
+    client, _, gateway = context
+
+    state = _login_and_get_state(client)
+    resp = client.get("/auth/esia/callback", params={"code": "abc", "state": state})
+
+    assert resp.status_code == 201
+    _, verifier, nonce = gateway.authorize_args[0]
+    assert gateway.exchange_args == [("abc", verifier, nonce)]
+
+
+def test_callback_user_denied_access(context) -> None:
+    """Отказ пользователя в Госуслугах → 403 с человеческой ошибкой, а не 422."""
+    client, _, gateway = context
+    _login_and_get_state(client)
+
+    resp = client.get(
+        "/auth/esia/callback",
+        params={
+            "error": "access_denied",
+            "error_description": "user cancelled",
+            "state": "whatever",
+        },
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "EsiaAuthorizationDeniedError"
+    assert "отмен" in resp.json()["detail"].lower()
+    # Обмена кода не было: до шлюза запрос не дошёл.
+    assert gateway.exchange_args == []
+
+
+def test_callback_provider_error_is_gateway_failure(context) -> None:
+    """Прочие OIDC-ошибки (сбой провайдера) — 502, это не отмена пользователем."""
+    client, _, _ = context
+
+    resp = client.get(
+        "/auth/esia/callback", params={"error": "server_error", "state": "x"}
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["error"] == "EsiaExchangeError"
+
+
+def test_callback_without_code_and_without_error_is_400(context) -> None:
+    """Пустой callback — 400 с внятным текстом (раньше схема давала 422)."""
+    client, _, _ = context
+
+    resp = client.get("/auth/esia/callback", params={"state": "x"})
+
+    assert resp.status_code == 400
+    assert "код" in resp.json()["detail"].lower()
+
+
+def _set_cookie_headers(resp) -> list[str]:
+    """Все заголовки Set-Cookie ответа."""
+    return resp.headers.get_list("set-cookie")
+
+
+def test_cookies_are_deleted_with_configured_domain(context) -> None:
+    """Удаление cookie идёт с тем же ``domain``, что и установка.
+
+    Регрессия: при ``SECURITY_COOKIE_DOMAIN=.veraks.ru`` ``delete_cookie`` без
+    ``domain`` ставил Set-Cookie на хост api-домена, а cookie родительского
+    домена оставалась жить — logout «не срабатывал».
+    """
+    client, _, _ = context
+    settings = get_settings().model_copy(deep=True)
+    settings.security.cookie_domain = ".veraks.test"
+    client.app.dependency_overrides[get_settings] = lambda: settings
+
+    state = _login_and_get_state(client)
+    # Cookie домена .veraks.test клиент к хосту testserver сам не пошлёт —
+    # подставляем заголовок вручную (в браузере это делает сам домен).
+    callback = client.get(
+        "/auth/esia/callback",
+        params={"code": "abc", "state": state},
+        headers={"Cookie": f"oidc_state={state}"},
+    )
+    assert callback.status_code == 201
+    # Гашение служебной state-cookie — тоже с доменом.
+    state_cookie = [h for h in _set_cookie_headers(callback) if h.startswith("oidc_state=")]
+    assert state_cookie and "Domain=.veraks.test" in state_cookie[0]
+
+    logout = client.post("/auth/logout")
+    assert logout.status_code == 204
+    deletions = {
+        h.split("=", 1)[0]: h
+        for h in _set_cookie_headers(logout)
+        if h.startswith(("access_token=", "refresh_token="))
+    }
+    assert set(deletions) == {"access_token", "refresh_token"}
+    for header in deletions.values():
+        assert "Domain=.veraks.test" in header
+    assert "Path=/auth" in deletions["refresh_token"]
 
 
 def test_refresh_reuse_writes_security_audit_before_401(context) -> None:

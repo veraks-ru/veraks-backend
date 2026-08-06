@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
+from app.modules.identity.adapters.id_token import pkce_code_challenge
+from app.modules.identity.application.dto import OidcFlowState
 from app.modules.identity.domain.consent import Consent
 from app.modules.identity.domain.entities import User
 from app.modules.identity.domain.value_objects import EsiaIdentity, EsiaTokens
@@ -106,17 +108,36 @@ class InMemoryConsentRepository:
 
 
 class FakeEsiaGateway:
-    """Шлюз ЕСИА, возвращающий заранее заданную личность."""
+    """Шлюз ЕСИА, возвращающий заранее заданную личность.
+
+    Запоминает PKCE/nonce-параметры обоих шагов, чтобы тест мог проверить, что
+    ``code_verifier``/``nonce`` из стора реально доехали до обмена кода.
+    """
 
     def __init__(self, identity: EsiaIdentity) -> None:
         self.identity = identity
         self.build_calls: list[str] = []
+        # (state, code_verifier, nonce) шага авторизации.
+        self.authorize_args: list[tuple[str, str, str]] = []
+        # (code, code_verifier, nonce) шага обмена кода.
+        self.exchange_args: list[tuple[str, str, str]] = []
 
-    def build_authorization_url(self, *, state: str) -> str:
+    def build_authorization_url(
+        self, *, state: str, code_verifier: str, nonce: str
+    ) -> str:
         self.build_calls.append(state)
-        return f"https://esia.example/authorize?state={state}"
+        self.authorize_args.append((state, code_verifier, nonce))
+        # Как и боевой адаптер, наружу отдаём только S256-производную секрета.
+        return (
+            f"https://esia.example/authorize?state={state}"
+            f"&code_challenge={pkce_code_challenge(code_verifier)}"
+            f"&code_challenge_method=S256&nonce={nonce}"
+        )
 
-    async def exchange_code(self, *, code: str) -> EsiaTokens:
+    async def exchange_code(
+        self, *, code: str, code_verifier: str, nonce: str
+    ) -> EsiaTokens:
+        self.exchange_args.append((code, code_verifier, nonce))
         return EsiaTokens(access_token=f"access-for-{code}", id_token="id")
 
     async def fetch_identity(self, tokens: EsiaTokens) -> EsiaIdentity:
@@ -124,23 +145,22 @@ class FakeEsiaGateway:
 
 
 class FakeStateStore:
-    """Множество выпущенных одноразовых state."""
+    """Выпущенные одноразовые state вместе с секретами потока (PKCE/nonce)."""
 
     def __init__(self) -> None:
-        self._states: set[str] = set()
+        self._states: dict[str, OidcFlowState] = {}
 
-    async def save(self, state: str, ttl_seconds: int) -> None:
-        self._states.add(state)
+    async def save(self, state: str, flow: OidcFlowState, ttl_seconds: int) -> None:
+        self._states[state] = flow
 
-    async def consume(self, state: str) -> bool:
-        if state in self._states:
-            self._states.discard(state)
-            return True
-        return False
+    async def consume(self, state: str) -> OidcFlowState | None:
+        return self._states.pop(state, None)
 
-    def seed(self, state: str) -> None:
-        """Тестовый помощник: заранее положить валидный state."""
-        self._states.add(state)
+    def seed(self, state: str, flow: OidcFlowState | None = None) -> None:
+        """Тестовый помощник: заранее положить валидный state с секретами."""
+        self._states[state] = flow or OidcFlowState(
+            code_verifier="seeded-verifier", nonce="seeded-nonce"
+        )
 
 
 class FakeRefreshTokenStore:

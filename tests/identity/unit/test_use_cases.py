@@ -26,6 +26,7 @@ from app.modules.identity.application.use_cases import (
     GetMyConsents,
     GetOnboardingStatus,
     GetPublicProfile,
+    InitiateEsiaLogin,
     LogoutSession,
     RefreshSession,
     UpdateMyProfile,
@@ -405,6 +406,74 @@ async def test_refresh_reuse_revokes_whole_family(
     entry = audit.records[0]
     assert entry["entity_id"] == result.user_id
     assert entry["actor_id"] == result.user_id
+
+
+class _BrokenAuditTrail(FakeAuditTrail):
+    """Аудит, который падает при записи (недоступна БД, нарушен инвариант)."""
+
+    async def record(self, **kwargs):  # type: ignore[override]
+        raise RuntimeError("аудит недоступен")
+
+
+async def test_refresh_reuse_returns_401_even_if_audit_write_fails(
+    confirmed_identity, repo, state_store, refresh_store, snils_hasher, esia_oid_hasher, encryptor, token_issuer
+) -> None:
+    """Сбой записи аудита не превращает задуманный 401 в 500 (ре-ревью T10, (c)).
+
+    Приоритет — защита пользователя: токены уже отозваны, и предъявитель
+    краденого токена обязан получить отказ. След инцидента в этом случае
+    остаётся в логе (``_LOG.error``), а не в журнале.
+    """
+    login = _build_complete_login(
+        identity=confirmed_identity,
+        repo=repo,
+        state_store=state_store,
+        refresh_store=refresh_store,
+        hasher=snils_hasher,
+        esia_oid_hasher=esia_oid_hasher,
+        encryptor=encryptor,
+        token_issuer=token_issuer,
+    )
+    result = await login.execute(code="abc", state="valid-state")
+    old_refresh = result.tokens.refresh_token
+
+    refresh_uc = RefreshSession(
+        users=repo,
+        tokens=token_issuer,
+        refresh_store=refresh_store,
+        access_ttl_seconds=900,
+        refresh_ttl_seconds=3600,
+        audit=_BrokenAuditTrail(),
+    )
+    rotated = await refresh_uc.execute(refresh_token=old_refresh)
+
+    with pytest.raises(InvalidTokenError):
+        await refresh_uc.execute(refresh_token=old_refresh)
+    # Семейство всё равно отозвано — реакция на кражу не зависит от аудита.
+    with pytest.raises(InvalidTokenError):
+        await refresh_uc.execute(refresh_token=rotated.refresh_token)
+
+
+async def test_initiate_login_stores_flow_secrets(confirmed_identity) -> None:
+    """Инициация логина кладёт PKCE-verifier и nonce в стор и передаёт их шлюзу."""
+    store = FakeStateStore()
+    gateway = FakeEsiaGateway(confirmed_identity)
+    uc = InitiateEsiaLogin(esia=gateway, state_store=store)
+
+    redirect = await uc.execute()
+
+    state, verifier, nonce = gateway.authorize_args[0]
+    assert state == redirect.state
+    # Секреты именно те, что сохранены под этим state (иначе callback упадёт).
+    stored = await store.consume(redirect.state)
+    assert stored is not None
+    assert (stored.code_verifier, stored.nonce) == (verifier, nonce)
+    # Длина verifier'а — в границах RFC 7636 (43..128 символов).
+    assert 43 <= len(stored.code_verifier) <= 128
+    # Каждый вход — новые секреты.
+    second = await InitiateEsiaLogin(esia=gateway, state_store=store).execute()
+    assert second.state != redirect.state
+    assert gateway.authorize_args[1][1] != verifier
 
 
 async def test_logout_revokes_refresh(

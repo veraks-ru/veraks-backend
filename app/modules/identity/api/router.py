@@ -26,6 +26,11 @@ from app.modules.identity.api.schemas import (
     CallbackRequest,
 )
 from app.modules.identity.application.dto import SessionTokens
+from app.modules.identity.domain.errors import (
+    EsiaAuthorizationDeniedError,
+    EsiaExchangeError,
+    IdentityError,
+)
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
     GetOnboardingStatus,
@@ -40,6 +45,27 @@ _REFRESH_COOKIE = "refresh_token"
 _ACCESS_COOKIE = "access_token"
 _STATE_COOKIE = "oidc_state"
 _STATE_COOKIE_TTL = 600  # синхронно с TTL state в сторе (10 минут)
+
+# Коды OIDC-ошибок, означающие «пользователь не дал согласие / прервал вход».
+# Остальные (``server_error``, ``temporarily_unavailable``, кривой запрос) —
+# сбой на стороне провайдера, это 502, а не отмена.
+_DENIED_OIDC_ERRORS = frozenset(
+    {"access_denied", "consent_required", "login_required", "interaction_required"}
+)
+
+
+def _authorization_error(code: str, description: str | None) -> IdentityError:
+    """Переводит ``?error=...`` из callback'а в доменную ошибку.
+
+    Текст описания от провайдера в ответ не пробрасываем (не показываем
+    пользователю чужие технические строки) — только код ошибки, по которому
+    фронт различает «отменено» и «сбой».
+    """
+    if code in _DENIED_OIDC_ERRORS:
+        return EsiaAuthorizationDeniedError(
+            "Вход через Госуслуги отменён — подтверждение не получено"
+        )
+    return EsiaExchangeError(f"Госуслуги вернули ошибку авторизации: {code}")
 
 
 def _set_session_cookies(
@@ -70,10 +96,17 @@ def _set_session_cookies(
     )
 
 
-def clear_session_cookies(response: Response) -> None:
-    """Удаляет сессионные cookie (logout и самостоятельное удаление аккаунта)."""
-    response.delete_cookie(_ACCESS_COOKIE)
-    response.delete_cookie(_REFRESH_COOKIE, path="/auth")
+def clear_session_cookies(response: Response, settings: SettingsDep) -> None:
+    """Удаляет сессионные cookie (logout и самостоятельное удаление аккаунта).
+
+    ``domain`` обязателен и при удалении: браузер сопоставляет cookie по тройке
+    (имя, домен, путь). Без него в проде (``SECURITY_COOKIE_DOMAIN=.veraks.ru``)
+    ставился бы Set-Cookie на хост ``api.veraks.ru``, а cookie домена
+    ``.veraks.ru`` оставалась жить — logout визуально «не срабатывал».
+    """
+    domain = settings.security.cookie_domain or None
+    response.delete_cookie(_ACCESS_COOKIE, domain=domain)
+    response.delete_cookie(_REFRESH_COOKIE, path="/auth", domain=domain)
 
 
 @router.get("/esia/login", summary="Редирект на страницу авторизации ЕСИА")
@@ -120,14 +153,33 @@ async def esia_callback(
 
     Сверяет ``state`` из запроса с ``oidc_state``-cookie (привязка к браузеру):
     несовпадение/отсутствие → 400, поток не продолжается.
+
+    Провайдер может вернуть вместо кода ошибку (``?error=access_denied`` —
+    пользователь отказался в Госуслугах). Тогда обмена не происходит: отказ
+    маппится в доменную ошибку и человеческое сообщение (см.
+    :func:`_authorization_error`). ``oidc_state``-cookie в этой ветке не
+    чистим (ответ формирует централизованный обработчик ошибок, ему cookie не
+    передать) — она короткоживущая и гаснет по своему TTL, а сам ``state``
+    остаётся неиспользованным и протухает в сторе.
     """
+    if params.error:
+        raise _authorization_error(params.error, params.error_description)
+    if not params.code or not params.state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Госуслуги не передали код авторизации",
+        )
     if not oidc_state or oidc_state != params.state:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Недействительный state (не совпадает с cookie браузера)",
         )
     result = await uc.execute(code=params.code, state=params.state)
-    response.delete_cookie(_STATE_COOKIE, path="/auth")
+    response.delete_cookie(
+        _STATE_COOKIE,
+        path="/auth",
+        domain=settings.security.cookie_domain or None,
+    )
     _set_session_cookies(response, result.tokens, settings)
     if result.is_new_user:
         response.status_code = status.HTTP_201_CREATED
@@ -165,12 +217,13 @@ async def refresh(
 )
 async def logout(
     response: Response,
+    settings: SettingsDep,
     uc: Annotated[LogoutSession, Depends(get_logout_session)],
     refresh_token: Annotated[str | None, Cookie()] = None,
 ) -> Response:
     """Отзывает refresh-токен и очищает cookie."""
     await uc.execute(refresh_token=refresh_token)
-    clear_session_cookies(response)
+    clear_session_cookies(response, settings)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 

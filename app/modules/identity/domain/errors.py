@@ -35,6 +35,24 @@ class EsiaExchangeError(IdentityError):
     """Сбой обмена кодом авторизации или получения атрибутов в ЕСИА."""
 
 
+class InvalidIdTokenError(EsiaExchangeError):
+    """``id_token`` ЕСИА не прошёл проверку (подпись, iss/aud/exp или nonce).
+
+    Наследуется от ``EsiaExchangeError``: с точки зрения клиента это сбой
+    вышестоящего шлюза (502), а не ошибка пользователя — он ничего не мог
+    сделать иначе.
+    """
+
+
+class EsiaAuthorizationDeniedError(IdentityError):
+    """Пользователь не дал согласие/прервал вход на стороне Госуслуг.
+
+    Соответствует OIDC-ошибкам ``access_denied``/``consent_required``/
+    ``login_required``/``interaction_required`` в callback'е. Это не сбой:
+    фронт показывает «Вход отменён» и предлагает повторить.
+    """
+
+
 class InvalidTokenError(IdentityError):
     """Сессионный токен (JWT) недействителен или просрочен."""
 

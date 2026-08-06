@@ -16,12 +16,25 @@ from app.modules.identity.domain.value_objects import EsiaIdentity, EsiaTokens
 class EsiaGateway(Protocol):
     """Интеграция с ЕСИА по authorization code flow."""
 
-    def build_authorization_url(self, *, state: str) -> str:
-        """Формирует URL страницы авторизации ЕСИА с подписанными параметрами."""
+    def build_authorization_url(
+        self, *, state: str, code_verifier: str, nonce: str
+    ) -> str:
+        """Формирует URL страницы авторизации ЕСИА с подписанными параметрами.
+
+        ``code_verifier`` наружу не уходит: адаптер кладёт в URL только его
+        S256-производную (``code_challenge``) — вычисление хеша это крипто и
+        живёт в адаптере, прикладной слой лишь генерирует случайный секрет.
+        """
         ...
 
-    async def exchange_code(self, *, code: str) -> EsiaTokens:
-        """Меняет authorization code на маркеры (с проверкой подписи id_token)."""
+    async def exchange_code(
+        self, *, code: str, code_verifier: str, nonce: str
+    ) -> EsiaTokens:
+        """Меняет authorization code на маркеры.
+
+        Адаптер предъявляет ``code_verifier`` (PKCE) и проверяет ``id_token``
+        (подпись по JWKS, ``iss``/``aud``/``exp`` и совпадение ``nonce``).
+        """
         ...
 
     async def fetch_identity(self, tokens: EsiaTokens) -> EsiaIdentity:

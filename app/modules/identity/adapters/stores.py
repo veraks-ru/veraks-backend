@@ -6,7 +6,11 @@ State и refresh-jti — короткоживущие записи с TTL, ид�
 
 from __future__ import annotations
 
+import json
+
 from redis.asyncio import Redis
+
+from app.modules.identity.application.dto import OidcFlowState
 
 _STATE_PREFIX = "identity:oidc-state:"
 _REFRESH_PREFIX = "identity:refresh-jti:"
@@ -15,19 +19,41 @@ _USER_FAMILY_PREFIX = "identity:refresh-family:"
 
 
 class RedisStateStore:
-    """Одноразовый ``state`` для анти-CSRF в OIDC-потоке."""
+    """Одноразовый ``state`` + секреты OIDC-потока (PKCE ``code_verifier``, ``nonce``).
+
+    Значение — JSON с секретами; они не покидают сервер и гаснут вместе со
+    state (одноразовость обеспечивает атомарный ``GETDEL``).
+    """
 
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
-    async def save(self, state: str, ttl_seconds: int) -> None:
-        """Сохраняет state с TTL."""
-        await self._redis.set(f"{_STATE_PREFIX}{state}", "1", ex=ttl_seconds)
+    async def save(self, state: str, flow: OidcFlowState, ttl_seconds: int) -> None:
+        """Сохраняет state и секреты потока с TTL."""
+        payload = json.dumps(
+            {"code_verifier": flow.code_verifier, "nonce": flow.nonce}
+        )
+        await self._redis.set(f"{_STATE_PREFIX}{state}", payload, ex=ttl_seconds)
 
-    async def consume(self, state: str) -> bool:
-        """Атомарно (DEL возвращает число удалённых) проверяет и гасит state."""
-        deleted = await self._redis.delete(f"{_STATE_PREFIX}{state}")
-        return bool(deleted)
+    async def consume(self, state: str) -> OidcFlowState | None:
+        """Атомарно (``GETDEL``) гасит state и отдаёт секреты потока.
+
+        ``GETDEL`` (Redis 6.2+) читает и удаляет одной командой — параллельный
+        повтор callback'а с тем же state получит ``None``, как и раньше при
+        ``DEL``.
+        """
+        raw = await self._redis.getdel(f"{_STATE_PREFIX}{state}")
+        if raw is None:
+            return None
+        try:
+            data = json.loads(raw)
+            return OidcFlowState(
+                code_verifier=str(data["code_verifier"]), nonce=str(data["nonce"])
+            )
+        except (ValueError, TypeError, KeyError):
+            # Битое/устаревшее значение (например, запись прежнего формата,
+            # пережившая деплой) — трактуем как невалидный state.
+            return None
 
 
 class RedisRefreshTokenStore:

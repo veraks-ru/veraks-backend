@@ -33,7 +33,14 @@ class SecuritySettings(BaseSettings):
 
 
 class EsiaSettings(BaseSettings):
-    """Параметры подключения к ЕСИА (через сертифицированный шлюз)."""
+    """Параметры подключения к ЕСИА (через сертифицированный шлюз).
+
+    ``jwks_url``/``issuer`` включают полноценную проверку ``id_token``
+    (подпись по JWKS + ``iss``/``aud``/``exp``/``nonce``). Пустой ``jwks_url``
+    — режим «доверие каналу»: id_token не проверяется, что допустимо только
+    локально с моком (вне ``local`` пустое значение валит старт приложения,
+    см. ``Settings._require_esia_id_token_verification``).
+    """
 
     model_config = SettingsConfigDict(env_prefix="ESIA_", extra="ignore")
 
@@ -46,10 +53,31 @@ class EsiaSettings(BaseSettings):
     # Требовать «подтверждённую» учётную запись ЕСИА (отклонять упрощённую/стандартную).
     require_confirmed: bool = True
 
+    # JWKS шлюза (публичные ключи подписи id_token) и ожидаемый ``iss``.
+    jwks_url: str = ""
+    issuer: str = ""
+    # Кэш ключей в памяти адаптера: сколько секунд не ходить за JWKS повторно.
+    # Ротация ключа «вне расписания» ловится принудительным обновлением по
+    # неизвестному ``kid`` (см. ``EsiaIdTokenVerifier``).
+    jwks_cache_ttl_seconds: int = Field(default=3600, ge=1)
+    # Допустимые алгоритмы подписи id_token (крипто-гибкость без правки кода:
+    # разные интеграторы подписывают RS256/PS256/ES256).
+    id_token_algorithms: str = "RS256"
+
     @property
     def scope_list(self) -> list[str]:
         """Список scope'ов из строки, разделённой пробелами."""
         return self.scopes.split()
+
+    @property
+    def id_token_algorithm_list(self) -> list[str]:
+        """Список допустимых алгоритмов подписи id_token."""
+        return self.id_token_algorithms.split()
+
+    @property
+    def verify_id_token(self) -> bool:
+        """Включена ли криптографическая проверка ``id_token``."""
+        return bool(self.jwks_url)
 
 
 class ConsentsSettings(BaseSettings):
@@ -290,6 +318,38 @@ class Settings(BaseSettings):
                     f"В окружении '{self.app_env}' BILLING_PAYOUT_PROVIDER=jump "
                     f"требует заполненных настроек: {', '.join(missing_payout)}."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _require_esia_id_token_verification(self) -> "Settings":
+        """Вне ``local`` ``id_token`` ЕСИА обязан проверяться криптографически.
+
+        Тот же паттерн fail-fast, что и у платёжных провайдеров выше. Без
+        ``ESIA_JWKS_URL`` адаптер работает в режиме «доверие каналу»: маркер
+        принимается без проверки подписи, и подмена ответа token-эндпоинта
+        (или скомпрометированный шлюз) даёт вход под чужой учётной записью.
+        Локально это осознанный компромисс ради мока, в бою — недопустимо,
+        поэтому приложение не поднимется. ``ESIA_ISSUER`` обязателен вместе с
+        JWKS: без ожидаемого ``iss`` проверка неполна (ключ чужого эмитента,
+        попавший в JWKS, прошёл бы).
+        """
+        if self.app_env == "local":
+            return self
+
+        missing = [
+            name
+            for name, value in (
+                ("ESIA_JWKS_URL", self.esia.jwks_url),
+                ("ESIA_ISSUER", self.esia.issuer),
+            )
+            if not value.strip()
+        ]
+        if missing:
+            raise ValueError(
+                f"В окружении '{self.app_env}' обязательна проверка id_token ЕСИА: "
+                f"заполните {', '.join(missing)} (пустой ESIA_JWKS_URL = режим "
+                "«доверие каналу», допустим только в local)."
+            )
         return self
 
 

@@ -21,6 +21,25 @@ class SessionClaims:
 
 
 @dataclass(frozen=True, slots=True)
+class OidcFlowState:
+    """Секреты одного OIDC-потока, привязанные к ``state``.
+
+    Живут в ``StateStore`` ровно между шагами login и callback:
+
+    * ``code_verifier`` — PKCE (RFC 7636): перехваченный authorization code
+      бесполезен без него;
+    * ``nonce`` — привязка ``id_token`` к нашему запросу (защита от
+      воспроизведения чужого/старого маркера).
+
+    Наружу (в браузер, в URL авторизации) уходят только их производные:
+    ``code_challenge`` = S256(``code_verifier``) и сам ``nonce``.
+    """
+
+    code_verifier: str
+    nonce: str
+
+
+@dataclass(frozen=True, slots=True)
 class AuthorizationRedirect:
     """Результат инициации логина: куда отправить пользователя."""
 

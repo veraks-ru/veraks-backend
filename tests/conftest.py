@@ -25,6 +25,11 @@ os.environ.setdefault("ESIA_AUTHORIZATION_ENDPOINT", "https://esia.test/authoriz
 os.environ.setdefault("ESIA_TOKEN_ENDPOINT", "https://esia.test/token")
 os.environ.setdefault("ESIA_USERINFO_ENDPOINT", "https://esia.test/userinfo")
 os.environ.setdefault("ESIA_REQUIRE_CONFIRMED", "true")
+# Полностью настроенная (пусть и фиктивная) ЕСИА: проверка id_token включена,
+# как в бою. Тесты, которым нужен режим «доверие каналу» или проверка
+# fail-fast конфигурации, задают ``EsiaSettings`` явно, а не через env.
+os.environ.setdefault("ESIA_ISSUER", "https://esia.test")
+os.environ.setdefault("ESIA_JWKS_URL", "https://esia.test/jwks")
 
 import pytest  # noqa: E402
 

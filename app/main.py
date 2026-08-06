@@ -127,6 +127,7 @@ from app.shared.audit.api.router import router as audit_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
+    EsiaAuthorizationDeniedError,
     EsiaExchangeError,
     IdentityError,
     IncompleteConsentsError,
@@ -145,6 +146,10 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     AccountDeletedError: status.HTTP_403_FORBIDDEN,
     AccountSuspendedError: status.HTTP_403_FORBIDDEN,
     InvalidStateError: status.HTTP_400_BAD_REQUEST,
+    # Пользователь отказался/прервал вход в Госуслугах — не сбой, отдельный
+    # статус, чтобы фронт показал «Вход отменён», а не «ошибка шлюза».
+    EsiaAuthorizationDeniedError: status.HTTP_403_FORBIDDEN,
+    # Невалидный id_token (InvalidIdTokenError) — подвид сбоя шлюза, 502.
     EsiaExchangeError: status.HTTP_502_BAD_GATEWAY,
     InvalidTokenError: status.HTTP_401_UNAUTHORIZED,
     UserNotFoundError: status.HTTP_404_NOT_FOUND,

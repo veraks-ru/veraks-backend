@@ -12,6 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
+from app.config import SettingsDep
 from app.http import client_ip
 from app.modules.billing.application.dto import Actor as BillingActor
 from app.modules.billing.application.use_cases import (
@@ -160,6 +161,7 @@ async def public_profile(
 )
 async def delete_me(
     response: Response,
+    settings: SettingsDep,
     current_user: CurrentUser,
     delete_uc: Annotated[DeleteMyAccount, Depends(get_delete_my_account_uc)],
     subscriptions: Annotated[
@@ -185,6 +187,6 @@ async def delete_me(
             actor=BillingActor(user_id=current_user.id, role=current_user.role),
         )
     await delete_uc.execute(user_id=current_user.id)
-    clear_session_cookies(response)
+    clear_session_cookies(response, settings)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response

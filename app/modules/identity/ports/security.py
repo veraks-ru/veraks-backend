@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.modules.identity.application.dto import SessionClaims
+from app.modules.identity.application.dto import OidcFlowState, SessionClaims
 from app.modules.identity.domain.value_objects import Snils
 
 
@@ -68,14 +68,21 @@ class TokenIssuer(Protocol):
 
 @runtime_checkable
 class StateStore(Protocol):
-    """Хранилище одноразового OIDC ``state`` (анти-CSRF)."""
+    """Хранилище одноразового OIDC ``state`` (анти-CSRF) и секретов потока.
 
-    async def save(self, state: str, ttl_seconds: int) -> None:
-        """Сохраняет state с TTL."""
+    Вместе со ``state`` хранится :class:`OidcFlowState` — ``code_verifier``
+    (PKCE) и ``nonce``. Они нужны на шаге callback, но НЕ должны уходить
+    клиенту, поэтому живут на сервере и гаснут вместе со state.
+    """
+
+    async def save(
+        self, state: str, flow: OidcFlowState, ttl_seconds: int
+    ) -> None:
+        """Сохраняет state и секреты потока с TTL."""
         ...
 
-    async def consume(self, state: str) -> bool:
-        """Атомарно проверяет и удаляет state; ``True`` если был валиден."""
+    async def consume(self, state: str) -> OidcFlowState | None:
+        """Атомарно гасит state; возвращает секреты потока или ``None``."""
         ...
 
 

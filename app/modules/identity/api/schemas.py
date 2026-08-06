@@ -20,10 +20,25 @@ _USERNAME_PATTERN = r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$"
 
 
 class CallbackRequest(BaseModel):
-    """Параметры callback'а ЕСИА (query-string)."""
+    """Параметры callback'а ЕСИА (query-string).
 
-    code: str = Field(min_length=1, description="Authorization code от ЕСИА")
-    state: str = Field(min_length=1, description="Анти-CSRF state из шага login")
+    Все поля опциональны, потому что OIDC-провайдер возвращает ЛИБО
+    ``code`` + ``state``, ЛИБО ``error`` + ``state`` (отказ пользователя,
+    сбой на стороне Госуслуг). Раньше ``code`` был обязателен, и отказ
+    превращался в 422 с невнятным «Не передан код» — теперь роутер сам
+    разбирает оба случая и отдаёт человеческую ошибку.
+    """
+
+    code: str | None = Field(default=None, description="Authorization code от ЕСИА")
+    state: str | None = Field(
+        default=None, description="Анти-CSRF state из шага login"
+    )
+    error: str | None = Field(
+        default=None, description="Код ошибки OIDC (например, access_denied)"
+    )
+    error_description: str | None = Field(
+        default=None, max_length=500, description="Пояснение провайдера"
+    )
 
 
 class AccessTokenResponse(BaseModel):

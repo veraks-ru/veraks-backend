@@ -20,6 +20,7 @@ from app.config import SettingsDep
 from app.db.session import get_session
 from app.redis import get_redis
 from app.modules.identity.adapters.esia_gateway import EsiaOidcGateway
+from app.modules.identity.adapters.id_token import EsiaIdTokenVerifier
 from app.modules.identity.adapters.repository import (
     SqlAlchemyConsentRepository,
     SqlAlchemyUserRepository,
@@ -149,12 +150,38 @@ def get_required_consents(settings: SettingsDep) -> list[ConsentDocument]:
     ]
 
 
+# Валидаторы id_token живут дольше запроса: в них кэш ключей JWKS. Ключ карты —
+# значимые настройки (в тестах их подменяют, и кэш не должен «залипать»).
+# ``lru_cache`` не годится: pydantic-модель настроек нехешируема.
+_ID_TOKEN_VERIFIERS: dict[tuple[str, ...], EsiaIdTokenVerifier] = {}
+
+
+def get_id_token_verifier(settings: SettingsDep) -> EsiaIdTokenVerifier:
+    """Валидатор ``id_token``; один на конфигурацию (кэш JWKS переживает запросы)."""
+    esia = settings.esia
+    key = (
+        esia.jwks_url,
+        esia.issuer,
+        esia.client_id,
+        esia.id_token_algorithms,
+        str(esia.jwks_cache_ttl_seconds),
+    )
+    verifier = _ID_TOKEN_VERIFIERS.get(key)
+    if verifier is None:
+        verifier = EsiaIdTokenVerifier(esia)
+        _ID_TOKEN_VERIFIERS[key] = verifier
+    return verifier
+
+
 def get_esia_gateway(
     settings: SettingsDep,
     client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    id_token_verifier: Annotated[
+        EsiaIdTokenVerifier, Depends(get_id_token_verifier)
+    ],
 ) -> EsiaGateway:
-    """Шлюз ЕСИА."""
-    return EsiaOidcGateway(settings.esia, client)
+    """Шлюз ЕСИА (HTTP-клиент — на запрос, валидатор id_token — на процесс)."""
+    return EsiaOidcGateway(settings.esia, client, id_token_verifier)
 
 
 @lru_cache
