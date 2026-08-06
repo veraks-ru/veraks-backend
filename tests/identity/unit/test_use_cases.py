@@ -58,6 +58,7 @@ from tests.identity.fakes import (
     FakeStateStore,
     InMemoryConsentRepository,
     InMemoryUserRepository,
+    onboarded_consent_repository,
 )
 
 
@@ -934,6 +935,27 @@ async def test_delete_my_account_idempotent(repo) -> None:
     assert audit.actions() == ["identity.user.deleted"]
     stored = await repo.get_by_id(user.id)
     assert stored is not None and stored.status is UserStatus.DELETED
+
+
+async def test_delete_my_account_keeps_consents(repo) -> None:
+    """Согласия переживают удаление аккаунта (append-only, доказательство акцепта).
+
+    ``user_consents`` — юридическое доказательство того, что оферта и согласие
+    на обработку ПДн были приняты (152-ФЗ): удаление профиля его не стирает
+    (у роли БД нет DELETE на этой таблице), и ``DeleteMyAccount`` к согласиям
+    не прикасается вовсе.
+    """
+    user = _user(username="withconsents")
+    await repo.add(user)
+    consents = onboarded_consent_repository(user.id)
+    before = list(consents.rows)
+    uc = DeleteMyAccount(
+        users=repo, refresh_store=FakeRefreshTokenStore(), audit=FakeAuditTrail()
+    )
+
+    await uc.execute(user_id=user.id)
+
+    assert await consents.list_for_user(user.id) == before
 
 
 async def test_delete_my_account_unknown_user_raises(repo) -> None:
