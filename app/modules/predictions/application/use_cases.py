@@ -8,6 +8,8 @@
   * :class:`PlacePrediction` — поставить/изменить свой прогноз (PUT, upsert)
     до дедлайна, с записью истории в аудит;
   * :class:`GetMyPrediction` — прочитать свой прогноз по событию;
+  * :class:`GetEventTopPredictions` — доска лучших прогнозов разрешённого
+    события (публичная витрина точности);
   * :class:`LockEventPredictions` — массово заблокировать прогнозы при
     закрытии события (вызывается доменом events).
 """
@@ -21,9 +23,11 @@ from decimal import Decimal
 from app.modules.predictions.application.dto import (
     PredictionAuditEntry,
     PredictionSummary,
+    TopPredictionEntry,
 )
 from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
 from app.modules.predictions.domain.errors import (
+    EventTopPredictionsUnavailableError,
     PredictionNotFoundError,
     PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
@@ -237,6 +241,73 @@ class ListUserPredictions:
         if user_id is None:
             raise ProfileUserNotFoundError("Профиль не найден")
         return await self._predictions.list_for_user(user_id, resolved_only=True)
+
+
+class GetEventTopPredictions:
+    """Доска лучших прогнозов разрешённого события (публичная витрина точности).
+
+    Социальное доказательство «не казино» (PRD §7): показываем точность
+    (Brier), а не выигрыш. Владение данными: ``brier_score`` проставляет
+    домен scoring, но живёт он на прогнозе (``predictions``) — здесь и есть
+    естественное место чтения, без обратной зависимости predictions → scoring.
+
+    Доступна только для события в статусе ``resolved`` (не для
+    открытого/аннулированного/оспариваемого — см. :class:`EventGateway.is_resolved`).
+    Скрытых пользователей (удалённые/заблокированные аккаунты) в выдаче нет:
+    их прогнозы по-прежнему считаются в среднем Brier толпы, но сама строка
+    доски не показывается — профиль публично недоступен.
+    """
+
+    def __init__(
+        self,
+        *,
+        predictions: PredictionRepository,
+        events: EventGateway,
+        users: UserDirectory,
+    ) -> None:
+        self._predictions = predictions
+        self._events = events
+        self._users = users
+
+    async def execute(
+        self, *, event_id: uuid.UUID, limit: int = 10
+    ) -> list[TopPredictionEntry]:
+        """Топ-``limit`` прогнозов по возрастанию Brier (точнее — выше)."""
+        resolved = await self._events.is_resolved(event_id)
+        if resolved is None:
+            raise PredictionTargetEventNotFoundError("Событие не найдено")
+        if not resolved:
+            raise EventTopPredictionsUnavailableError(
+                "Доска лучших доступна только для разрешённого события"
+            )
+
+        votes = await self._predictions.list_for_event(event_id)
+        # Пары (прогноз, Brier) — а не фильтрация по атрибуту отдельным шагом,
+        # чтобы mypy сузил ``Decimal | None`` до ``Decimal`` уже в компрехеншене.
+        scored = [(v, v.brier_score) for v in votes if v.brier_score is not None]
+        if not scored:
+            return []
+
+        # Простое среднее по всем засчитанным прогнозам — та же величина,
+        # что уже показана на экране события как «средний Brier толпы»
+        # (не leave-one-out: это витринная метрика, не скоринговый бенчмарк).
+        crowd_mean = sum((brier for _, brier in scored), Decimal(0)) / len(scored)
+
+        refs = await self._users.list_active_by_ids([v.user_id for v, _ in scored])
+        visible = [(v, brier) for v, brier in scored if v.user_id in refs]
+        visible.sort(key=lambda item: (item[1], str(item[0].user_id)))
+
+        return [
+            TopPredictionEntry(
+                user_id=v.user_id,
+                username=refs[v.user_id].username,
+                display_name=refs[v.user_id].display_name,
+                confidence_grade=v.confidence_grade,
+                brier_score=brier,
+                beat_crowd=brier < crowd_mean,
+            )
+            for v, brier in visible[:limit]
+        ]
 
 
 class LockEventPredictions:

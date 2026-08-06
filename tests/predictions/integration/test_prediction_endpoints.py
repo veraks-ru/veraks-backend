@@ -242,6 +242,85 @@ def test_user_predictions_unknown_profile_404(make_client) -> None:
     assert client.get("/users/ghost/predictions").status_code == 404
 
 
+# ── Доска лучших прогнозов (GET /events/{id}/top-predictions) ─────────────
+
+
+def test_top_predictions_open_event_conflict(make_client, open_snapshot) -> None:
+    """Событие ещё не разрешено — доска недоступна (409)."""
+    client, _, _, _ = make_client(authenticated=False)
+    resp = client.get(f"/events/{open_snapshot.event_id}/top-predictions")
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "EventTopPredictionsUnavailableError"
+
+
+def test_top_predictions_missing_event_404(make_client) -> None:
+    client, _, _, _ = make_client(authenticated=False, gateway=FakeEventGateway([]))
+    resp = client.get(f"/events/{uuid.uuid4()}/top-predictions")
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "PredictionTargetEventNotFoundError"
+
+
+def test_top_predictions_annulled_event_conflict(make_client) -> None:
+    """Аннулированное событие — доска не отдаётся (409), не 200 с пустым списком."""
+    event_id = uuid.uuid4()
+    gateway = FakeEventGateway([])
+    gateway.set_resolved(event_id, False)
+    client, _, _, _ = make_client(authenticated=False, gateway=gateway)
+    resp = client.get(f"/events/{event_id}/top-predictions")
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "EventTopPredictionsUnavailableError"
+
+
+def test_top_predictions_resolved_sorted_by_brier(make_client) -> None:
+    """Разрешённое событие: топ по возрастанию Brier, скрытый пользователь исключён."""
+    from decimal import Decimal
+
+    from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
+    from app.modules.predictions.api.dependencies import get_user_directory
+
+    event_id = uuid.uuid4()
+    gateway = FakeEventGateway([])
+    gateway.set_resolved(event_id, True)
+    client, repo, _, _ = make_client(authenticated=False, gateway=gateway)
+
+    accurate_id, mediocre_id, hidden_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+
+    def _seed(user_id: uuid.UUID, grade: ConfidenceGrade, brier: str) -> None:
+        p = Prediction.place(user_id=user_id, event_id=event_id, grade=grade)
+        p.brier_score = Decimal(brier)
+        repo.seed(p)
+
+    _seed(accurate_id, ConfidenceGrade.DEFINITELY_YES, "0.02")
+    _seed(mediocre_id, ConfidenceGrade.FIFTY_FIFTY, "0.40")
+    # hidden_id — прогноз засчитан (влияет на среднее толпы), но профиль
+    # деактивирован (deleted/suspended) — публично не показывается.
+    _seed(hidden_id, ConfidenceGrade.DEFINITELY_YES, "0.01")
+
+    users = FakeUserDirectory()
+    users.set_active(accurate_id, username="accurate", display_name="Точный")
+    users.set_active(mediocre_id, username="mediocre", display_name="Средний")
+    client.app.dependency_overrides[get_user_directory] = lambda: users
+
+    resp = client.get(f"/events/{event_id}/top-predictions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert [row["username"] for row in body] == ["accurate", "mediocre"]
+    assert body[0]["confidence_grade"] == "definitely_yes"
+    assert body[0]["brier_score"] == "0.02"
+    assert body[0]["beat_crowd"] is True
+    assert body[1]["beat_crowd"] is False
+
+
+def test_top_predictions_limit_capped_at_50(make_client) -> None:
+    event_id = uuid.uuid4()
+    gateway = FakeEventGateway([])
+    gateway.set_resolved(event_id, True)
+    client, _, _, _ = make_client(authenticated=False, gateway=gateway)
+    resp = client.get(f"/events/{event_id}/top-predictions?limit=51")
+    assert resp.status_code == 422
+
+
 def test_default_clock_is_system_clock() -> None:
     """Дефолтный провайдер часов — системные (UTC)."""
     from app.modules.predictions.adapters.clock import SystemClock

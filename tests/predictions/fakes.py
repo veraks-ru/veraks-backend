@@ -8,12 +8,14 @@ Postgres, без реальных часов и без домена events/ау�
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 
 from app.modules.predictions.application.dto import PredictionAuditEntry
 from app.modules.predictions.domain.entities import Prediction
 from app.modules.predictions.domain.value_objects import EventSnapshot
 from app.modules.predictions.ports.repositories import PredictionAlreadyExistsError
+from app.modules.predictions.ports.users import PublicUserRef
 
 
 class FakeClock:
@@ -43,32 +45,66 @@ class FakeSubscriptionGate:
 
 
 class FakeEventGateway:
-    """Шлюз событий, отдающий заранее заданные снимки."""
+    """Шлюз событий, отдающий заранее заданные снимки и флаг разрешённости."""
 
     def __init__(self, snapshots: list[EventSnapshot] | None = None) -> None:
         self._by_id: dict[uuid.UUID, EventSnapshot] = {
             s.event_id: s for s in (snapshots or [])
         }
+        self._resolved: dict[uuid.UUID, bool] = {}
 
     def set(self, snapshot: EventSnapshot) -> None:
         """Тестовый помощник: положить/заменить снимок события."""
         self._by_id[snapshot.event_id] = snapshot
 
+    def set_resolved(self, event_id: uuid.UUID, resolved: bool = True) -> None:
+        """Тестовый помощник: пометить событие разрешённым/неразрешённым.
+
+        Событие «существует» для :meth:`is_resolved`, если у него есть снимок
+        (``set``) либо явно проставлен этот флаг — так тесты доски лучших
+        прогнозов не обязаны заводить полноценный снимок окна приёма.
+        """
+        self._resolved[event_id] = resolved
+
     async def get_snapshot(self, event_id: uuid.UUID) -> EventSnapshot | None:
         return self._by_id.get(event_id)
 
+    async def is_resolved(self, event_id: uuid.UUID) -> bool | None:
+        if event_id in self._resolved:
+            return self._resolved[event_id]
+        if event_id in self._by_id:
+            return False
+        return None
+
 
 class FakeUserDirectory:
-    """Резолв username → user_id в памяти (только «активные»)."""
+    """Резолв username ↔ user_id в памяти (только «активные»)."""
 
     def __init__(self, by_username: dict[str, uuid.UUID] | None = None) -> None:
         self._by_username = by_username or {}
+        self._active_refs: dict[uuid.UUID, PublicUserRef] = {}
 
     def set(self, username: str, user_id: uuid.UUID) -> None:
         self._by_username[username] = user_id
 
+    def set_active(
+        self, user_id: uuid.UUID, *, username: str, display_name: str
+    ) -> None:
+        """Тестовый помощник: пометить пользователя активным (виден в доске)."""
+        self._active_refs[user_id] = PublicUserRef(
+            user_id=user_id, username=username, display_name=display_name
+        )
+
     async def resolve_username(self, username: str) -> uuid.UUID | None:
         return self._by_username.get(username)
+
+    async def list_active_by_ids(
+        self, user_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, PublicUserRef]:
+        wanted = set(user_ids)
+        return {
+            uid: ref for uid, ref in self._active_refs.items() if uid in wanted
+        }
 
 
 class FakeAuditRecorder:

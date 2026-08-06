@@ -28,6 +28,7 @@ from app.modules.events.domain.errors import (
 )
 from app.modules.predictions.api.router import router as predictions_router
 from app.modules.predictions.domain.errors import (
+    EventTopPredictionsUnavailableError,
     PredictionError,
     PredictionLockedError,
     PredictionNotFoundError,
@@ -182,6 +183,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     PredictionLockedError: status.HTTP_409_CONFLICT,
     PredictionSummaryHiddenError: status.HTTP_409_CONFLICT,
     PredictionSubscriptionRequiredError: status.HTTP_402_PAYMENT_REQUIRED,
+    EventTopPredictionsUnavailableError: status.HTTP_409_CONFLICT,
     # scoring
     ScoringTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
     RatingNotFoundError: status.HTTP_404_NOT_FOUND,

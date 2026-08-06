@@ -11,11 +11,12 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.modules.identity.api.dependencies import CurrentUser
 from app.modules.predictions.api.dependencies import (
     get_event_prediction_summary,
+    get_event_top_predictions,
     get_list_my_predictions,
     get_list_user_predictions,
     get_my_prediction,
@@ -25,9 +26,11 @@ from app.modules.predictions.api.schemas import (
     PlacePredictionRequest,
     PredictionResponse,
     PredictionSummaryResponse,
+    TopPredictionResponse,
 )
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
+    GetEventTopPredictions,
     GetMyPrediction,
     ListMyPredictions,
     ListUserPredictions,
@@ -74,6 +77,27 @@ async def get_predictions_summary(
     (до закрытия — ``409``, консенсус скрыт ради честности скоринга)."""
     summary = await uc.execute(event_id=event_id)
     return PredictionSummaryResponse.from_summary(summary)
+
+
+@router.get(
+    "/events/{event_id}/top-predictions",
+    response_model=list[TopPredictionResponse],
+    summary="Доска лучших прогнозов разрешённого события (публично)",
+)
+async def get_event_top_predictions_endpoint(
+    event_id: uuid.UUID,
+    uc: Annotated[GetEventTopPredictions, Depends(get_event_top_predictions)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> list[TopPredictionResponse]:
+    """Топ-``limit`` самых точных прогнозов по возрастанию Brier.
+
+    Публичная витрина точности (не выигрыша — «это не казино», PRD §7).
+    Доступна только для события в статусе ``resolved``: до разрешения — 404
+    (события ещё нет) либо 409 (не разрешено/аннулировано/оспаривается).
+    Удалённые/заблокированные пользователи в выдаче не показываются.
+    """
+    entries = await uc.execute(event_id=event_id, limit=limit)
+    return [TopPredictionResponse.from_domain(e) for e in entries]
 
 
 @router.get(

@@ -34,3 +34,10 @@ class EventRepositoryGateway:
             opens_at=event.window.opens_at,
             closes_at=event.window.closes_at,
         )
+
+    async def is_resolved(self, event_id: uuid.UUID) -> bool | None:
+        """Разрешено ли событие финально (для доски лучших прогнозов)."""
+        event = await self._events.get_by_id(event_id)
+        if event is None:
+            return None
+        return event.status is EventStatus.RESOLVED

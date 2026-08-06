@@ -23,6 +23,7 @@ from app.modules.predictions.adapters.repository import (
 )
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
+    GetEventTopPredictions,
     GetMyPrediction,
     ListMyPredictions,
     ListUserPredictions,
@@ -110,6 +111,13 @@ def get_event_prediction_summary(
     return GetEventPredictionSummary(
         predictions=predictions, events=events, clock=clock
     )
+
+
+def get_event_top_predictions(
+    predictions: PredictionRepoDep, events: EventGatewayDep, users: UserDirectoryDep
+) -> GetEventTopPredictions:
+    """Use-case доски лучших прогнозов разрешённого события."""
+    return GetEventTopPredictions(predictions=predictions, events=events, users=users)
 
 
 def get_list_my_predictions(predictions: PredictionRepoDep) -> ListMyPredictions:

@@ -24,3 +24,13 @@ class EventGateway(Protocol):
     async def get_snapshot(self, event_id: uuid.UUID) -> EventSnapshot | None:
         """Снимок окна события по id или ``None``, если события нет."""
         ...
+
+    async def is_resolved(self, event_id: uuid.UUID) -> bool | None:
+        """Разрешено ли событие финально (статус ``resolved``).
+
+        ``None`` — события нет; ``False`` — есть, но не в статусе ``resolved``
+        (включая ``annulled``/``disputed``/ещё не подведённое). Домену
+        прогнозов не нужен весь автомат статусов events — только этот факт
+        для доски лучших прогнозов.
+        """
+        ...

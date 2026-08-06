@@ -14,6 +14,7 @@ import pytest
 
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
+    GetEventTopPredictions,
     GetMyPrediction,
     ListMyPredictions,
     ListUserPredictions,
@@ -22,6 +23,7 @@ from app.modules.predictions.application.use_cases import (
 )
 from app.modules.predictions.domain.entities import ConfidenceGrade
 from app.modules.predictions.domain.errors import (
+    EventTopPredictionsUnavailableError,
     PredictionNotFoundError,
     PredictionsClosedError,
     PredictionSummaryHiddenError,
@@ -350,3 +352,108 @@ async def test_user_predictions_unknown_profile_raises(predictions) -> None:
         await ListUserPredictions(users=users, predictions=predictions).execute(
             username="ghost"
         )
+
+
+# ── Доска лучших прогнозов (GetEventTopPredictions) ───────────────────────
+
+
+def _top_uc(predictions, events, users) -> GetEventTopPredictions:
+    return GetEventTopPredictions(predictions=predictions, events=events, users=users)
+
+
+async def test_top_predictions_missing_event_raises(predictions, event_id) -> None:
+    events = FakeEventGateway([])  # события нет вовсе
+    users = FakeUserDirectory()
+    with pytest.raises(PredictionTargetEventNotFoundError):
+        await _top_uc(predictions, events, users).execute(event_id=event_id)
+
+
+async def test_top_predictions_open_event_unavailable(
+    predictions, open_snapshot, event_id
+) -> None:
+    # Событие существует и принимает прогнозы, но ещё не разрешено.
+    events = FakeEventGateway([open_snapshot])
+    users = FakeUserDirectory()
+    with pytest.raises(EventTopPredictionsUnavailableError):
+        await _top_uc(predictions, events, users).execute(event_id=event_id)
+
+
+async def test_top_predictions_annulled_event_unavailable(predictions, event_id) -> None:
+    # Аннулированное событие «существует», но is_resolved() = False.
+    events = FakeEventGateway([])
+    events.set_resolved(event_id, False)
+    users = FakeUserDirectory()
+    with pytest.raises(EventTopPredictionsUnavailableError):
+        await _top_uc(predictions, events, users).execute(event_id=event_id)
+
+
+async def test_top_predictions_sorted_by_brier_ascending(predictions, event_id) -> None:
+    events = FakeEventGateway([])
+    events.set_resolved(event_id, True)
+    users = FakeUserDirectory()
+
+    worst, mid, best = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    for user_id, grade, brier, handle in (
+        (worst, ConfidenceGrade.DEFINITELY_NO, "0.81", "worst"),
+        (mid, ConfidenceGrade.FIFTY_FIFTY, "0.25", "mid"),
+        (best, ConfidenceGrade.DEFINITELY_YES, "0.01", "best"),
+    ):
+        await predictions.add(_resolved(user_id, event_id, grade, brier))
+        users.set_active(user_id, username=handle, display_name=handle.title())
+
+    entries = await _top_uc(predictions, events, users).execute(event_id=event_id)
+
+    assert [e.username for e in entries] == ["best", "mid", "worst"]
+    # crowd_mean = (0.81+0.25+0.01)/3 = 0.3566...
+    assert entries[0].beat_crowd is True  # 0.01 < crowd_mean
+    assert entries[1].beat_crowd is True  # 0.25 < crowd_mean
+    assert entries[2].beat_crowd is False  # 0.81 > crowd_mean
+    assert entries[0].confidence_grade is ConfidenceGrade.DEFINITELY_YES
+
+
+async def test_top_predictions_respects_limit(predictions, event_id) -> None:
+    events = FakeEventGateway([])
+    events.set_resolved(event_id, True)
+    users = FakeUserDirectory()
+
+    for i in range(5):
+        user_id = uuid.uuid4()
+        await predictions.add(
+            _resolved(user_id, event_id, ConfidenceGrade.FIFTY_FIFTY, f"0.{i:02d}")
+        )
+        users.set_active(user_id, username=f"user{i}", display_name=f"User {i}")
+
+    entries = await _top_uc(predictions, events, users).execute(event_id=event_id, limit=2)
+    assert len(entries) == 2
+    assert entries[0].username == "user0"  # Brier 0.00 — самый точный
+
+
+async def test_top_predictions_excludes_hidden_users(predictions, event_id) -> None:
+    """Удалённый/заблокированный пользователь не показан в доске."""
+    events = FakeEventGateway([])
+    events.set_resolved(event_id, True)
+    users = FakeUserDirectory()
+
+    visible_id, hidden_id = uuid.uuid4(), uuid.uuid4()
+    await predictions.add(
+        _resolved(visible_id, event_id, ConfidenceGrade.DEFINITELY_YES, "0.05")
+    )
+    await predictions.add(
+        _resolved(hidden_id, event_id, ConfidenceGrade.DEFINITELY_YES, "0.01")
+    )
+    # Только visible_id помечен активным — hidden_id имитирует deleted/suspended.
+    users.set_active(visible_id, username="visible", display_name="Видимый")
+
+    entries = await _top_uc(predictions, events, users).execute(event_id=event_id)
+
+    assert len(entries) == 1
+    assert entries[0].username == "visible"
+
+
+async def test_top_predictions_empty_when_nobody_scored(predictions, event_id) -> None:
+    events = FakeEventGateway([])
+    events.set_resolved(event_id, True)
+    users = FakeUserDirectory()
+
+    entries = await _top_uc(predictions, events, users).execute(event_id=event_id)
+    assert entries == []

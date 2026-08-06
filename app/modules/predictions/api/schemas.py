@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.predictions.application.dto import PredictionSummary
+from app.modules.predictions.application.dto import PredictionSummary, TopPredictionEntry
 from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
 
 
@@ -32,6 +32,34 @@ class PredictionSummaryResponse(BaseModel):
             total_count=summary.total_count,
             distribution=summary.distribution,
             mean_probability=summary.mean_probability,
+        )
+
+
+class TopPredictionResponse(BaseModel):
+    """Строка доски лучших прогнозов разрешённого события.
+
+    Градация отдаётся словом (как её хранит прогноз), а не сырой вероятностью
+    — маппинг слов в вероятности живёт на фронте как системная константа
+    (``web/lib/confidence.ts``), синхронная с бэкенд-шкалой ``ConfidenceGrade``.
+    """
+
+    user_id: uuid.UUID
+    username: str
+    display_name: str
+    confidence_grade: ConfidenceGrade
+    brier_score: Decimal
+    beat_crowd: bool
+
+    @classmethod
+    def from_domain(cls, entry: TopPredictionEntry) -> TopPredictionResponse:
+        """Маппинг доменной строки доски в ответ."""
+        return cls(
+            user_id=entry.user_id,
+            username=entry.username,
+            display_name=entry.display_name,
+            confidence_grade=entry.confidence_grade,
+            brier_score=entry.brier_score,
+            beat_crowd=entry.beat_crowd,
         )
 
 

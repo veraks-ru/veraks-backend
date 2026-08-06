@@ -30,6 +30,23 @@ class PredictionSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class TopPredictionEntry:
+    """Одна строка доски лучших прогнозов разрешённого события.
+
+    ``beat_crowd`` — точнее ли прогноз среднего Brier толпы события (простое
+    среднее по всем засчитанным прогнозам, та же величина, что уже показана
+    на экране разрешённого события как «средний Brier толпы»).
+    """
+
+    user_id: uuid.UUID
+    username: str
+    display_name: str
+    confidence_grade: ConfidenceGrade
+    brier_score: Decimal
+    beat_crowd: bool
+
+
+@dataclass(frozen=True, slots=True)
 class PredictionAuditEntry:
     """Запись истории изменения прогноза для порта аудита.
 
