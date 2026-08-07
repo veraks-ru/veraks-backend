@@ -9,10 +9,11 @@ ARCHITECTURE.md §6 требует ограничения частоты — б�
 - **Общий** (все пути) — fail-open: при сбое Redis запрос пропускается
   (лучше обслужить, чем положить сайт из-за недоступности лимитера — в
   отличие от биллинговой квоты B2B, которая намеренно fail-closed).
-- **``/auth/*``** (инициация ЕСИА, callback, refresh) — заметно более жёсткий
-  лимит и, наоборот, fail-closed (503 + ``Retry-After``): это точка входа для
-  брутфорса/подбора состояний и токенов, при недоступном лимитере лучше
-  временно отказать в аутентификации, чем снять с неё защиту.
+- **Строгий** (явный список «попыток входа», см. :data:`_STRICT_AUTH_ROUTES`) —
+  заметно более жёсткий лимит и, наоборот, fail-closed (503 +
+  ``Retry-After``): это точка входа для брутфорса/подбора состояний и
+  токенов, при недоступном лимитере лучше временно отказать в
+  аутентификации, чем снять с неё защиту.
 
 Оба лимита включаются вне ``local`` (в тестах не мешает).
 """
@@ -34,13 +35,57 @@ logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "ratelimit:"
 
-# Пути, на которые действует ужесточённый auth-лимит (см. docstring модуля).
-_AUTH_PATH_PREFIX = "/auth"
+_STRICT_AUTH_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", "/auth/email/request"),
+        ("POST", "/auth/email/callback"),
+        ("POST", "/auth/refresh"),
+        ("GET", "/auth/esia/login"),
+        ("GET", "/auth/esia/callback"),
+    }
+)
+"""Маршруты (метод + путь) под ужесточённым лимитом — «попытки входа».
+
+**Критерий:** строгий лимит там, где запрос ПОРОЖДАЕТ письмо, сессию или
+криптооперацию, а не там, где просто читается текущее состояние. Каждый
+маршрут из списка либо отправляет письмо со ссылкой входа, либо обменивает
+секрет (токен из письма, authorization code, refresh-токен) на новую сессию,
+либо выпускает серверный секрет (``state``/PKCE) — то есть стоит денег,
+писем или даёт материал для перебора. Именно их и имеет смысл душить 20
+запросами в минуту с IP.
+
+Остальное под ``/auth`` — ``GET /auth/me``, ``GET /auth/providers``,
+``POST /auth/logout`` — идёт под общий лимит. Это чтения/сброс состояния,
+которые фронт дёргает на каждом переходе по сайту: под строгим лимитом
+несколько человек за одним офисным NAT выбирали бы бакет за минуту обычной
+навигации и получали 429 на ровном месте. Раньше группа задавалась префиксом
+``/auth``, и все они попадали под строгий лимит — это и была та ошибка.
+
+Список ведётся вручную: новый эндпоинт под ``/auth`` по умолчанию окажется
+под общим лимитом, поэтому, добавляя «порождающий» маршрут, его нужно внести
+сюда явно (тесты в ``tests/test_rate_limit.py`` фиксируют текущий состав).
+"""
 
 
-def _is_auth_path(path: str) -> bool:
-    """Путь входит в группу ``/auth/*`` (с учётом границы сегмента)."""
-    return path == _AUTH_PATH_PREFIX or path.startswith(f"{_AUTH_PATH_PREFIX}/")
+def _normalize_path(path: str) -> str:
+    """Схлопывает хвостовой слэш: ``/auth/refresh/`` — тот же маршрут.
+
+    Middleware работает ДО роутинга, поэтому без нормализации приписанный
+    слэш переводил бы «попытку входа» под мягкий общий лимит (Starlette
+    всё равно отредиректит запрос на канонический путь).
+    """
+    return path.rstrip("/") or "/"
+
+
+def _is_strict_auth_route(method: str, path: str) -> bool:
+    """Относится ли запрос к «попыткам входа» (строгий лимит, fail-closed).
+
+    ``HEAD`` считается за ``GET``: Starlette обслуживает GET-маршруты и по
+    HEAD, то есть эндпоинт реально отработает (например, выпустит ``state``),
+    просто тело не уйдёт.
+    """
+    normalized_method = "GET" if method.upper() == "HEAD" else method.upper()
+    return (normalized_method, _normalize_path(path)) in _STRICT_AUTH_ROUTES
 
 
 @dataclass(frozen=True)
@@ -77,13 +122,13 @@ async def check_rate_limit(
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Ограничивает число запросов с одного IP в минуту (fixed window).
 
-    Для путей ``/auth/*`` применяется отдельный (обычно более жёсткий) лимит
-    ``auth_limit`` с fail-closed при сбое Redis; для остальных путей —
-    ``limit`` с fail-open. Каждая группа лимитов ведёт свой счётчик (ключи
-    разделены префиксом identity), чтобы обращения к /auth не расходовали
-    общий лимит и наоборот. ``limit``/``auth_limit`` равные 0 отключают
-    проверку для соответствующей группы путей (запрос пропускается без
-    обращения к Redis).
+    Для «попыток входа» (:data:`_STRICT_AUTH_ROUTES`) применяется отдельный
+    (обычно более жёсткий) лимит ``auth_limit`` с fail-closed при сбое Redis;
+    для всех остальных запросов, включая прочие пути под ``/auth``, —
+    ``limit`` с fail-open. Каждая группа ведёт свой счётчик (ключи разделены
+    префиксом identity), чтобы попытки входа не расходовали общий лимит и
+    наоборот. ``limit``/``auth_limit`` равные 0 отключают проверку для
+    соответствующей группы (запрос пропускается без обращения к Redis).
     """
 
     def __init__(
@@ -104,15 +149,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        is_auth_path = _is_auth_path(request.url.path)
-        limit = self._auth_limit if is_auth_path else self._limit
+        is_strict = _is_strict_auth_route(request.method, request.url.path)
+        limit = self._auth_limit if is_strict else self._limit
         if limit <= 0:
             return await call_next(request)
 
         ip = client_ip(request) or "unknown"
-        # Разные scope в identity — чтобы auth и общий лимит не делили один
+        # Разные scope в identity — чтобы строгий и общий лимит не делили один
         # счётчик даже при совпадении окна.
-        identity = f"{'auth' if is_auth_path else 'global'}:{ip}"
+        identity = f"{'auth' if is_strict else 'global'}:{ip}"
         try:
             result = await check_rate_limit(
                 self._redis_factory(),
@@ -121,11 +166,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 window_seconds=self._window,
             )
         except Exception:
-            if is_auth_path:
-                # Fail-closed: без лимитера auth-эндпоинты беззащитны перед
+            if is_strict:
+                # Fail-closed: без лимитера попытки входа беззащитны перед
                 # брутфорсом — временно отказываем, а не снимаем защиту.
                 logger.warning(
-                    "rate limiter unavailable — fail-closed on /auth", exc_info=True
+                    "rate limiter unavailable — fail-closed on login attempt",
+                    exc_info=True,
                 )
                 return JSONResponse(
                     status_code=503,
