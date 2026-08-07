@@ -290,20 +290,63 @@ async def test_username_race_reallocates_handle(
     assert created.display_name == created.username
 
 
-async def test_deleted_account_cannot_login_by_email(
+async def test_deletion_clears_email_and_frees_the_address(
     links, sender, repo, token_issuer
 ) -> None:
-    """Удаление — надгробие и для email: заново зарегистрироваться нельзя."""
+    """После удаления адрес свободен: вход по нему создаёт НОВЫЙ аккаунт.
+
+    Сознательный размен (решение координатора, 152-ФЗ): минимизация ПДн важнее
+    антиобхода. Гарантию «1 человек = 1 аккаунт» без государственной
+    идентификации мы всё равно не даём, поэтому держать адрес удалённого
+    пользователя ради блокировки повторной регистрации не за что. Прежний
+    аккаунт при этом остаётся удалённым — он не «воскресает», а адрес просто
+    больше ни на что не указывает.
+    """
     await _request_uc(links, sender).execute(email="user@example.com")
-    result = await _complete_uc(links, repo, token_issuer).execute(
+    first = await _complete_uc(links, repo, token_issuer).execute(
         token=sender.last_token()
     )
-    stored = await repo.get_by_id(result.user_id)
+    stored = await repo.get_by_id(first.user_id)
     assert stored is not None
     stored.anonymize_for_deletion()
     await repo.update(stored)
 
+    assert (await repo.get_by_id(first.user_id)).email is None
+    assert await repo.get_by_email("user@example.com") is None
+
     await _request_uc(links, sender).execute(email="user@example.com")
+    second = await _complete_uc(links, repo, token_issuer).execute(
+        token=sender.last_token()
+    )
+
+    assert second.is_new_user is True
+    assert second.user_id != first.user_id
+    # Старый аккаунт остался удалённым — это не восстановление доступа к нему.
+    old = await repo.get_by_id(first.user_id)
+    assert old is not None
+    assert old.status is UserStatus.DELETED
+
+
+async def test_deleted_esia_account_still_blocked_by_snils(
+    links, sender, repo, token_issuer
+) -> None:
+    """Надгробие по хэшам осталось: удалённый ЕСИА-аккаунт с адресом не пускает.
+
+    Проверяем, что обнуление email не отменило проверку статуса как таковую:
+    если у удалённой строки адрес почему-то сохранился (например, его вернул
+    админ), вход по нему по-прежнему получает ``AccountDeletedError``.
+    """
+    user = User(
+        username="gone",
+        display_name="gone",
+        real_name_enc=None,
+        email="gone@example.com",
+        snils_hash="hash-gone",
+        status=UserStatus.DELETED,
+    )
+    await repo.add(user)
+    await _request_uc(links, sender).execute(email="gone@example.com")
+
     with pytest.raises(AccountDeletedError):
         await _complete_uc(links, repo, token_issuer).execute(
             token=sender.last_token()

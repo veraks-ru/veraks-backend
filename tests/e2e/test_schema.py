@@ -88,6 +88,22 @@ async def test_users_esia_keys_are_nullable_after_0030(session: AsyncSession) ->
     assert count == 2  # NULL-ы не конфликтуют между собой в частичном индексе
 
 
+async def test_deleted_accounts_with_null_email_coexist(session: AsyncSession) -> None:
+    """Удаление обнуляет email — таких строк может быть сколько угодно.
+
+    Частичный индекс ``WHERE email IS NOT NULL`` не считает NULL-ы дублями,
+    иначе второе же удаление аккаунта упало бы на UNIQUE.
+    """
+    await _insert_user(session, username="deleted-1", display_name="Удалённый аккаунт")
+    await _insert_user(session, username="deleted-2", display_name="Удалённый аккаунт")
+    await session.commit()
+
+    count = (
+        await session.execute(text("SELECT count(*) FROM users WHERE email IS NULL"))
+    ).scalar_one()
+    assert count == 2
+
+
 async def test_users_email_is_unique_case_insensitively(
     session: AsyncSession,
 ) -> None:

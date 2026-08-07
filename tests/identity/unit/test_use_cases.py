@@ -870,15 +870,24 @@ def test_consent_domain_entity_defaults() -> None:
 
 
 def test_anonymize_for_deletion_clears_pii_keeps_hashes() -> None:
-    """Анонимизация стирает ФИО/публичный профиль, но хранит хэши-надгробия."""
+    """Анонимизация стирает ФИО, email и публичный профиль, но хранит хэши.
+
+    Email — ПДн в открытом виде, поэтому обнуляется вместе с ФИО (152-ФЗ,
+    минимизация): удерживать адрес удалённого пользователя ради блокировки
+    повторной регистрации не за что — гарантию «1 человек = 1 аккаунт» без
+    государственной идентификации мы и так не даём. Хэши, наоборот, остаются:
+    они необратимы и держат ту самую гарантию для ЕСИА-аккаунтов.
+    """
     user = _user(username="tobedeleted", display="Иван Петров")
     user.real_name_enc = b"encrypted-fio"
+    user.email = "tobedeleted@example.com"
 
     changed = user.anonymize_for_deletion()
 
     assert changed is True
     assert user.status is UserStatus.DELETED
     assert user.real_name_enc is None
+    assert user.email is None
     assert user.display_name == "Удалённый аккаунт"
     assert user.username == f"deleted-{user.id.hex[:8]}"
     # snils_hash/esia_oid_hash — антиобход «1 человек = 1 аккаунт», не трогаем.

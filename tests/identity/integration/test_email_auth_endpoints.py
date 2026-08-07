@@ -8,14 +8,18 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import AuthSettings, get_settings
 from app.main import create_app
+from app.modules.billing.application.use_cases import CancelSubscription
 from app.modules.identity.api.dependencies import (
     get_audit_trail,
+    get_billing_subscription_repository,
+    get_cancel_subscription_on_delete,
     get_consent_repository,
     get_email_sender,
     get_magic_link_store,
@@ -23,8 +27,9 @@ from app.modules.identity.api.dependencies import (
     get_security_audit_trail,
     get_user_repository,
 )
-from app.modules.identity.domain.entities import User, UserRole
+from app.modules.identity.domain.entities import User, UserRole, UserStatus
 from app.modules.identity.domain.magic_link import MAX_LETTERS_PER_EMAIL
+from tests.billing.fakes import FakeClock, InMemorySubscriptionRepository
 from tests.identity.fakes import (
     FakeAuditTrail,
     FakeEmailSender,
@@ -41,6 +46,8 @@ def context():
     repo = InMemoryUserRepository()
     links = FakeMagicLinkStore()
     sender = FakeEmailSender()
+    audit = FakeAuditTrail()
+    subscriptions = InMemorySubscriptionRepository()
 
     app = create_app()
     app.dependency_overrides[get_user_repository] = lambda: repo
@@ -50,8 +57,20 @@ def context():
     app.dependency_overrides[get_consent_repository] = lambda: (
         InMemoryConsentRepository()
     )
-    app.dependency_overrides[get_audit_trail] = FakeAuditTrail
+    app.dependency_overrides[get_audit_trail] = lambda: audit
     app.dependency_overrides[get_security_audit_trail] = FakeAuditTrail
+    # DELETE /users/me по пути отменяет подписку — billing тоже на фейках
+    # (та же техника, что в tests/identity/integration/test_account_deletion).
+    app.dependency_overrides[get_billing_subscription_repository] = (
+        lambda: subscriptions
+    )
+    app.dependency_overrides[get_cancel_subscription_on_delete] = (
+        lambda: CancelSubscription(
+            subscriptions=subscriptions,
+            audit=audit,
+            clock=FakeClock(datetime(2026, 8, 7, 12, 0, tzinfo=UTC)),
+        )
+    )
 
     with TestClient(app) as client:
         yield client, repo, sender
@@ -207,14 +226,40 @@ def test_link_cannot_be_used_twice(context) -> None:
     assert client.post("/auth/email/callback", json={"token": token}).status_code == 401
 
 
-def test_deleted_account_cannot_login(context) -> None:
+def test_self_deletion_clears_email_and_frees_the_address(context) -> None:
+    """Сквозь HTTP: DELETE /users/me обнуляет адрес, и он снова свободен.
+
+    Решение координатора (152-ФЗ): минимизация ПДн важнее антиобхода —
+    подробности в докстринге ``User.anonymize_for_deletion``.
+    """
     client, repo, sender = context
     created = _login(client, sender, "user@example.com")
     user_id = uuid.UUID(created.json()["id"])
+
+    assert client.delete("/users/me").status_code == 204
+
     stored = client.portal.call(repo.get_by_id, user_id)
     assert stored is not None
+    assert stored.email is None
+    assert stored.status is UserStatus.DELETED
+
+    client.cookies.clear()
+    again = _login(client, sender, "user@example.com")
+
+    assert again.status_code == 201  # новый аккаунт, а не воскрешение старого
+    assert again.json()["id"] != created.json()["id"]
+
+
+def test_deleted_account_with_email_still_rejected(context) -> None:
+    """Проверка статуса на месте: удалённый аккаунт с адресом входа не даёт."""
+    client, repo, sender = context
+    created = _login(client, sender, "user@example.com")
+    stored = client.portal.call(repo.get_by_id, uuid.UUID(created.json()["id"]))
+    assert stored is not None
     stored.anonymize_for_deletion()
+    stored.email = "user@example.com"  # как если бы адрес вернул админ
     client.portal.call(repo.update, stored)
+    client.cookies.clear()
 
     resp = _login(client, sender, "user@example.com")
 
