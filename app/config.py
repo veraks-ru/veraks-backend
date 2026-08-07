@@ -114,7 +114,10 @@ class MailSettings(BaseSettings):
     # Логин/пароль опциональны: локальный mailpit принимает почту без них.
     username: str = ""
     password: str = ""
-    from_address: str = "no-reply@veraks.ru"
+    # Совпадает с infra/helm values.yaml (mailFromAddress): именно на этот
+    # адрес настраиваются SPF/DKIM, расхождение дефолта с боевым значением
+    # означало бы, что письма из ненастроенного окружения летят «не оттуда».
+    from_address: str = "noreply@veraks.ru"
     from_name: str = "Веракс"
     # Прямое TLS-соединение (обычно порт 465).
     use_tls: bool = False
