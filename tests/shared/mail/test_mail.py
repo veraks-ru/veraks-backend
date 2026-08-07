@@ -60,7 +60,10 @@ async def test_log_sender_prints_the_login_link(caplog) -> None:
     Это осознанная утечка одноразового секрета в лог: смысл режима в том,
     чтобы при ненастроенном SMTP человека всё-таки можно было впустить.
     """
-    with caplog.at_level(logging.INFO, logger="app.shared.mail.adapters.log_sender"):
+    # Уровень WARNING, а не INFO: приложение не настраивает logging, и запись
+    # ниже WARNING не попала бы в вывод пода — режим «достать ссылку из логов»
+    # молча перестал бы работать (ровно это и случилось на боевом стенде).
+    with caplog.at_level(logging.WARNING, logger="app.shared.mail.adapters.log_sender"):
         await LoggingEmailSender().send(_LETTER)
 
     assert "secret-token" in caplog.text

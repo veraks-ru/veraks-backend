@@ -188,10 +188,12 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
                 snils_hash=hasher.hash(Snils.parse(digits)),
                 # Демо-аккаунты заведены как ЕСИА-пользователи, поэтому
                 # identity_verified=True. Адрес нужен, чтобы в демо можно было
-                # войти и по email-ссылке (ЕСИА сейчас выключена): домен
-                # .local заведомо недоставляемый — письмо уйдёт в mailpit или
-                # в лог, наружу ничего не улетит.
-                email=f"{username}@veraks.local",
+                # войти и по email-ссылке (ЕСИА сейчас выключена).
+                # Домен — example.com (RFC 2606, зарезервирован под примеры и
+                # никому не принадлежит), а НЕ .local: тот отвергается
+                # валидатором адреса как special-use, и запрос ссылки на такой
+                # адрес падал бы с 422 — проверено на боевом стенде.
+                email=f"{username}@example.com",
                 identity_verified=True,
                 username=username,
                 display_name=display,
