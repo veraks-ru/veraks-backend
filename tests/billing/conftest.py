@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -36,7 +36,7 @@ from tests.billing.fakes import (
     InMemorySubscriptionRepository,
 )
 
-FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
 PLAN_PRICES = {
     SubscriptionPlan.MONTHLY: 49_000,
     SubscriptionPlan.ANNUAL: 490_000,

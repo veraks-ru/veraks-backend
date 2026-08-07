@@ -111,7 +111,7 @@ def test_create_key_allowed_for_admin(ctx) -> None:
     assert body["secret"].startswith("vk_")
     assert body["key"]["daily_quota"] == 1000
     # Ключ принадлежит админу и записан факт выдачи в аудит.
-    owned = ctx.repo._by_id  # noqa: SLF001 — прямой доступ к состоянию фейка
+    owned = ctx.repo._by_id
     assert len(owned) == 1
     assert next(iter(owned.values())).owner_user_id == admin.id
     assert ctx.audit.actions() == ["b2b.key.issued"]

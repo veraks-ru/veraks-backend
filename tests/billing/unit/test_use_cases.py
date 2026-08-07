@@ -26,7 +26,6 @@ from app.modules.billing.domain.errors import (
 )
 from tests.billing.conftest import FIXED_NOW, Stand
 
-
 # ── Подписки / платежи (OPERATIONS) ───────────────────────────────────────
 
 
@@ -394,9 +393,7 @@ def _webhook_uc(payouts):
 async def test_dispatch_payout_sends_and_marks_processing() -> None:
     from app.modules.billing.application.dto import Actor
     from app.modules.identity.domain.entities import UserRole
-    from tests.billing.fakes import InMemoryPayoutRepository
-
-    from tests.billing.fakes import InMemoryPayoutRequisiteRepository
+    from tests.billing.fakes import InMemoryPayoutRepository, InMemoryPayoutRequisiteRepository
 
     payouts = InMemoryPayoutRepository()
     payout = _approved_payout()

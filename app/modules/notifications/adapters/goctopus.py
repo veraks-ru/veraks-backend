@@ -7,11 +7,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
 
 from app.config import RealtimeSettings
+
+_LOG = logging.getLogger(__name__)
 
 
 class GoctopusPusher:
@@ -28,5 +31,5 @@ class GoctopusPusher:
                     json={"key": key, "value": value},
                     auth=(self._settings.user, self._settings.password),
                 )
-        except Exception:  # noqa: BLE001 — пуш best-effort, не критичен
-            pass
+        except Exception as exc:  # noqa: BLE001 — пуш best-effort, не критичен
+            _LOG.warning("Не удалось отправить пуш в goctopus (best-effort): %s", exc)

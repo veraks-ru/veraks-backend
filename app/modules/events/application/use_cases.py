@@ -33,12 +33,12 @@ from app.modules.events.domain.policies import (
 )
 from app.modules.events.domain.value_objects import EventWindow
 from app.modules.events.ports.clock import Clock
+from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.repositories import (
     CategoryRepository,
     EventFilter,
     EventRepository,
 )
-from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.subscriptions import SubscriptionGate
 from app.modules.identity.domain.entities import UserRole
 from app.shared.audit.domain.entities import AuditActorType

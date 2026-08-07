@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.modules.events.adapters.repository import (
     SqlAlchemyCategoryRepository,
@@ -26,7 +26,6 @@ from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepos
 from app.modules.seasons.domain.entities import Season, SeasonStatus
 from app.modules.seasons.domain.value_objects import LeagueConfig
 
-UTC = timezone.utc
 # Времена окна события — в прошлом относительно реальных «сейчас» (для скоринга).
 BASE = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 OPENS_AT = BASE

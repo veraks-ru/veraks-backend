@@ -12,6 +12,38 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.modules.b2b.api.router import router as b2b_router
+from app.modules.b2b.domain.errors import (
+    ApiKeyNotFoundError,
+    B2bError,
+    InvalidApiKeyError,
+    InvalidB2bDataError,
+    QuotaExceededError,
+    SignalTargetNotFoundError,
+)
+from app.modules.billing.api.router import router as billing_router
+from app.modules.billing.domain.errors import (
+    BillingError,
+    BillingPermissionError,
+    CrossLedgerEntryError,
+    InsufficientPrizeFundError,
+    InvalidAmountError,
+    InvalidRequisiteError,
+    LedgerAccountNotFoundError,
+    ManualPayoutDispatchError,
+    PaymentGatewayError,
+    PayoutAlreadyDecidedError,
+    PayoutNotFoundError,
+    PayoutRequisitesMissingError,
+    PrizeFundNotFoundError,
+    SelfApprovalError,
+    SubscriptionNotFoundError,
+    SubscriptionPermissionError,
+    UnbalancedTransactionError,
+)
+from app.modules.billing.domain.errors import (
+    SeasonNotFoundError as BillingSeasonNotFoundError,
+)
 from app.modules.events.api.router import router as events_router
 from app.modules.events.domain.errors import (
     CategoryNotFoundError,
@@ -26,6 +58,38 @@ from app.modules.events.domain.errors import (
     InvalidEventWindowError,
     RestrictedCategoryError,
 )
+from app.modules.identity.api.admin_router import router as identity_admin_router
+from app.modules.identity.api.router import router as identity_router
+from app.modules.identity.api.users_router import router as users_router
+from app.modules.identity.domain.errors import (
+    AccountDeletedError,
+    AccountSuspendedError,
+    CannotSuspendAdminError,
+    CannotSuspendSelfError,
+    ConsentRequiredError,
+    EsiaAuthorizationDeniedError,
+    EsiaExchangeError,
+    IdentityError,
+    IncompleteConsentsError,
+    InvalidSnilsError,
+    InvalidStateError,
+    InvalidTokenError,
+    InvalidUserStatusError,
+    UnconfirmedEsiaAccountError,
+    UsernameAlreadyTakenError,
+    UserNotFoundError,
+)
+from app.modules.leagues.api.router import router as leagues_router
+from app.modules.leagues.domain.errors import (
+    DivisionNotFoundError,
+    InvalidLeagueDataError,
+    LeagueError,
+    LeagueNotFoundError,
+    LeaguePermissionError,
+    NotLeagueMemberError,
+)
+from app.modules.notifications.api.realtime import router as realtime_router
+from app.modules.notifications.api.router import router as notifications_router
 from app.modules.predictions.api.router import router as predictions_router
 from app.modules.predictions.domain.errors import (
     EventTopPredictionsUnavailableError,
@@ -37,6 +101,20 @@ from app.modules.predictions.domain.errors import (
     PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
     ProfileUserNotFoundError,
+)
+from app.modules.resolutions.api.router import router as resolutions_router
+from app.modules.resolutions.domain.errors import (
+    DisputeAlreadyDecidedError,
+    DisputeNotAllowedError,
+    DisputeNotFoundError,
+    DisputeWindowClosedError,
+    EventNotResolvableError,
+    InvalidResolutionDataError,
+    ResolutionError,
+    ResolutionNotFoundError,
+    ResolutionPermissionError,
+    ResolutionTargetEventNotFoundError,
+    SelfDisputeDecisionError,
 )
 from app.modules.scoring.api.router import router as scoring_router
 from app.modules.scoring.domain.errors import (
@@ -57,46 +135,6 @@ from app.modules.seasons.domain.errors import (
     SeasonPermissionError,
     SeasonSlugTakenError,
 )
-from app.modules.resolutions.api.router import router as resolutions_router
-from app.modules.resolutions.domain.errors import (
-    DisputeAlreadyDecidedError,
-    DisputeNotAllowedError,
-    DisputeNotFoundError,
-    DisputeWindowClosedError,
-    EventNotResolvableError,
-    InvalidResolutionDataError,
-    ResolutionError,
-    ResolutionNotFoundError,
-    ResolutionPermissionError,
-    ResolutionTargetEventNotFoundError,
-    SelfDisputeDecisionError,
-)
-from app.modules.billing.api.router import router as billing_router
-from app.modules.billing.domain.errors import (
-    BillingError,
-    BillingPermissionError,
-    CrossLedgerEntryError,
-    InsufficientPrizeFundError,
-    InvalidAmountError,
-    InvalidRequisiteError,
-    LedgerAccountNotFoundError,
-    ManualPayoutDispatchError,
-    PaymentGatewayError,
-    PayoutAlreadyDecidedError,
-    PayoutNotFoundError,
-    PayoutRequisitesMissingError,
-    PrizeFundNotFoundError,
-    SeasonNotFoundError as BillingSeasonNotFoundError,
-    SelfApprovalError,
-    SubscriptionNotFoundError,
-    SubscriptionPermissionError,
-    UnbalancedTransactionError,
-)
-from app.modules.identity.api.admin_router import router as identity_admin_router
-from app.modules.identity.api.router import router as identity_router
-from app.modules.identity.api.users_router import router as users_router
-from app.modules.notifications.api.router import router as notifications_router
-from app.modules.notifications.api.realtime import router as realtime_router
 from app.modules.social.api.router import router as social_router
 from app.modules.social.domain.errors import (
     CommentEventNotFoundError,
@@ -107,43 +145,7 @@ from app.modules.social.domain.errors import (
     SelfFollowError,
     SocialError,
 )
-from app.modules.leagues.api.router import router as leagues_router
-from app.modules.leagues.domain.errors import (
-    DivisionNotFoundError,
-    InvalidLeagueDataError,
-    LeagueError,
-    LeagueNotFoundError,
-    LeaguePermissionError,
-    NotLeagueMemberError,
-)
-from app.modules.b2b.api.router import router as b2b_router
-from app.modules.b2b.domain.errors import (
-    ApiKeyNotFoundError,
-    B2bError,
-    InvalidApiKeyError,
-    InvalidB2bDataError,
-    QuotaExceededError,
-    SignalTargetNotFoundError,
-)
 from app.shared.audit.api.router import router as audit_router
-from app.modules.identity.domain.errors import (
-    AccountDeletedError,
-    AccountSuspendedError,
-    CannotSuspendAdminError,
-    CannotSuspendSelfError,
-    ConsentRequiredError,
-    EsiaAuthorizationDeniedError,
-    EsiaExchangeError,
-    IdentityError,
-    IncompleteConsentsError,
-    InvalidSnilsError,
-    InvalidStateError,
-    InvalidTokenError,
-    InvalidUserStatusError,
-    UnconfirmedEsiaAccountError,
-    UsernameAlreadyTakenError,
-    UserNotFoundError,
-)
 
 # Карта «доменная ошибка → HTTP-статус».
 _ERROR_STATUS: dict[type[Exception], int] = {

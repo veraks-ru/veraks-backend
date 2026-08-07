@@ -7,13 +7,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from app.modules.scoring.domain.value_objects import PredictionVote, ResolvedEvent
 
-FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture

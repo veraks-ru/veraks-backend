@@ -42,16 +42,16 @@ class _FakeQuota:
         self.cap = cap
         self._n: dict[uuid.UUID, int] = {}
 
-    async def check_and_incr(self, key_id, *, daily_quota):  # noqa: ANN001
+    async def check_and_incr(self, key_id, *, daily_quota):
         self._n[key_id] = self._n.get(key_id, 0) + 1
         c = self._n[key_id]
         return c <= min(daily_quota, self.cap), c
 
-    async def used_today(self, key_id):  # noqa: ANN001
+    async def used_today(self, key_id):
         return self._n.get(key_id, 0)
 
 
-def _issue_uc(session):  # noqa: ANN001
+def _issue_uc(session):
     return IssueApiKey(
         keys=SqlAlchemyApiKeyRepository(session),
         generator=SecretsKeyGenerator(),
@@ -60,7 +60,7 @@ def _issue_uc(session):  # noqa: ANN001
     )
 
 
-async def _audit_actions(session: AsyncSession, entity_id) -> list[str]:  # noqa: ANN001
+async def _audit_actions(session: AsyncSession, entity_id) -> list[str]:
     rows = await session.execute(
         text(
             "SELECT action FROM audit_log "

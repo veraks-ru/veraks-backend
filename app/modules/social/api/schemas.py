@@ -33,7 +33,7 @@ class CommentResponse(BaseModel):
     author: AuthorRef | None
 
     @classmethod
-    def from_view(cls, view: CommentView) -> "CommentResponse":
+    def from_view(cls, view: CommentView) -> CommentResponse:
         c = view.comment
         author = (
             AuthorRef(
@@ -59,7 +59,7 @@ class UserRefResponse(BaseModel):
     display_name: str
 
     @classmethod
-    def from_ref(cls, ref: UserRef) -> "UserRefResponse":
+    def from_ref(cls, ref: UserRef) -> UserRefResponse:
         return cls(
             user_id=ref.id, username=ref.username, display_name=ref.display_name
         )
@@ -72,7 +72,7 @@ class SocialStatsResponse(BaseModel):
     is_following: bool
 
     @classmethod
-    def from_stats(cls, s: SocialStats) -> "SocialStatsResponse":
+    def from_stats(cls, s: SocialStats) -> SocialStatsResponse:
         return cls(
             user_id=s.user_id,
             followers=s.followers,
@@ -94,7 +94,7 @@ class FeedItemResponse(BaseModel):
     outcome: bool | None = None
 
     @classmethod
-    def from_item(cls, it: FeedItem) -> "FeedItemResponse":
+    def from_item(cls, it: FeedItem) -> FeedItemResponse:
         return cls(
             kind=it.kind,
             actor_id=it.actor_id,

@@ -17,10 +17,10 @@ from app.modules.events.adapters.repository import SqlAlchemyEventRepository
 from app.modules.predictions.adapters.audit_trail import AuditTrailRecorder
 from app.modules.predictions.adapters.clock import SystemClock
 from app.modules.predictions.adapters.event_gateway import EventRepositoryGateway
-from app.modules.predictions.adapters.user_gateway import SqlAlchemyUserDirectory
 from app.modules.predictions.adapters.repository import (
     SqlAlchemyPredictionRepository,
 )
+from app.modules.predictions.adapters.user_gateway import SqlAlchemyUserDirectory
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
     GetEventTopPredictions,

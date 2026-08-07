@@ -50,7 +50,7 @@ class ApiKeyORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, k: ApiKey) -> "ApiKeyORM":
+    def from_domain(cls, k: ApiKey) -> ApiKeyORM:
         return cls(
             id=k.id,
             owner_user_id=k.owner_user_id,

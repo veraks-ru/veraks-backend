@@ -13,10 +13,10 @@ from typing import Protocol, runtime_checkable
 from app.modules.billing.domain.entities import (
     Payment,
     PaymentProvider,
+    Payout,
     PayoutRequisites,
     PayoutStatus,
     PrizeFund,
-    Payout,
     Subscription,
 )
 from app.modules.billing.domain.ledger import (

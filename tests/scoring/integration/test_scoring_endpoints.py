@@ -9,7 +9,7 @@ rating_scope, FK) — отдельным e2e (TODO).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -360,7 +360,7 @@ def test_score_event_requires_elevated_role(make_client) -> None:
 
 
 def test_score_event_as_editor(make_client) -> None:
-    event, ids = make_event(outcome=1, probabilities=[0.9, 0.7])
+    event, _ids = make_event(outcome=1, probabilities=[0.9, 0.7])
     gateway = FakeEventScoringGateway(
         statuses={
             event.event_id: EventScoringStatus(
@@ -566,8 +566,8 @@ async def test_finalize_endpoint_finalizes_and_records_snapshot(make_client) -> 
     season = Season(
         slug="2026q3",
         title="Сезон III",
-        starts_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
-        ends_at=datetime(2026, 9, 30, tzinfo=timezone.utc),
+        starts_at=datetime(2026, 6, 1, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 30, tzinfo=UTC),
         status=SeasonStatus.ACTIVE,
         league_config=_EASY_CFG,
         id=season_id,

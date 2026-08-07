@@ -11,7 +11,7 @@ from __future__ import annotations
 import enum
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.modules.resolutions.domain.errors import (
     DisputeAlreadyDecidedError,
@@ -21,7 +21,7 @@ from app.modules.resolutions.domain.errors import (
 
 def _utcnow() -> datetime:
     """Текущее время в UTC (источник времени — сервер)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _require_text(raw: str, *, field_name: str, max_length: int = 10_000) -> str:

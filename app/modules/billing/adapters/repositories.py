@@ -32,13 +32,13 @@ from app.modules.billing.domain.entities import (
     PrizeFund,
     Subscription,
 )
-from app.modules.billing.ports.crypto import FieldEncryptor
 from app.modules.billing.domain.ledger import (
     EntryDirection,
     LedgerAccount,
     LedgerTransaction,
     LedgerType,
 )
+from app.modules.billing.ports.crypto import FieldEncryptor
 
 
 class _RowVanishedError(RuntimeError):

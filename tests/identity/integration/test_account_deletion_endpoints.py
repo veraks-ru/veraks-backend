@@ -9,7 +9,7 @@ billing подменяются in-memory фейками через ``dependency_
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -43,7 +43,7 @@ from tests.identity.fakes import (
     InMemoryUserRepository,
 )
 
-_NOW = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -93,7 +93,7 @@ def test_delete_me_requires_auth(context) -> None:
 
 
 def test_delete_me_returns_204_and_ends_session(context) -> None:
-    client, repo, _, audit = context
+    client, _repo, _, audit = context
     _login(client)  # cookie-сессия выставлена TestClient'ом
 
     resp = client.delete("/users/me")
@@ -131,7 +131,7 @@ async def test_delete_me_anonymizes_profile(context) -> None:
 
 
 async def test_delete_me_cancels_active_subscription(context) -> None:
-    client, repo, subscriptions, _ = context
+    client, _repo, subscriptions, _ = context
     access = _login(client)
     user_id = uuid.UUID(
         client.get("/auth/me", headers={"Authorization": f"Bearer {access}"}).json()[

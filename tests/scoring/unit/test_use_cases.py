@@ -132,7 +132,7 @@ async def test_score_event_not_final_raises() -> None:
 
 
 async def test_score_event_is_idempotent() -> None:
-    event, ids = make_event(outcome=0, probabilities=[0.1, 0.3])
+    event, _ids = make_event(outcome=0, probabilities=[0.1, 0.3])
     gateway = FakeEventScoringGateway(
         statuses={event.event_id: _final_status(0)},
         events={event.event_id: event},

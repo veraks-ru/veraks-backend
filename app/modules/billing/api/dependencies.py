@@ -16,11 +16,6 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, SettingsDep
-from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
-from app.modules.notifications.adapters.goctopus import GoctopusPusher
-from app.modules.notifications.adapters.repository import (
-    SqlAlchemyNotificationRepository,
-)
 from app.db.session import get_session
 from app.modules.billing.adapters.clock import SystemClock
 from app.modules.billing.adapters.gateways import (
@@ -28,7 +23,6 @@ from app.modules.billing.adapters.gateways import (
     ManualPayoutGateway,
 )
 from app.modules.billing.adapters.jump_gateway import JumpGateway
-from app.modules.billing.adapters.tbank_gateway import TBankGateway
 from app.modules.billing.adapters.repositories import (
     SqlAlchemyLedgerRepository,
     SqlAlchemyPaymentRepository,
@@ -38,6 +32,7 @@ from app.modules.billing.adapters.repositories import (
     SqlAlchemySubscriptionRepository,
 )
 from app.modules.billing.adapters.season_directory import SqlAlchemySeasonDirectory
+from app.modules.billing.adapters.tbank_gateway import TBankGateway
 from app.modules.billing.application.dto import Actor
 from app.modules.billing.application.use_cases import (
     AnnouncePrizeFund,
@@ -64,13 +59,13 @@ from app.modules.billing.domain.entities import SubscriptionPlan
 from app.modules.billing.domain.tbank_signing import verify_token
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.crypto import FieldEncryptor
-from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.ports.gateways import (
     PaymentRefundGateway,
     PayoutGateway,
     SeasonDirectory,
     SubscriptionCheckoutGateway,
 )
+from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.ports.repositories import (
     LedgerRepository,
     PaymentRepository,
@@ -81,6 +76,11 @@ from app.modules.billing.ports.repositories import (
 )
 from app.modules.identity.adapters.security import FernetFieldEncryptor
 from app.modules.identity.api.dependencies import CurrentUser
+from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
+from app.modules.notifications.adapters.goctopus import GoctopusPusher
+from app.modules.notifications.adapters.repository import (
+    SqlAlchemyNotificationRepository,
+)
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from app.shared.audit.ports.audit_trail import AuditTrail
 

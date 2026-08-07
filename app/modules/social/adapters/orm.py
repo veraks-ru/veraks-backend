@@ -44,7 +44,7 @@ class CommentORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, c: Comment) -> "CommentORM":
+    def from_domain(cls, c: Comment) -> CommentORM:
         return cls(
             id=c.id,
             event_id=c.event_id,
@@ -83,7 +83,7 @@ class FollowORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, f: Follow) -> "FollowORM":
+    def from_domain(cls, f: Follow) -> FollowORM:
         return cls(
             id=f.id,
             follower_id=f.follower_id,

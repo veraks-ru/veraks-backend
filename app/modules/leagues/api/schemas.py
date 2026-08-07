@@ -33,7 +33,7 @@ class LeagueResponse(BaseModel):
     members: int | None = None
 
     @classmethod
-    def from_domain(cls, x: League, *, members: int | None = None) -> "LeagueResponse":
+    def from_domain(cls, x: League, *, members: int | None = None) -> LeagueResponse:
         return cls(
             id=x.id,
             name=x.name,
@@ -44,7 +44,7 @@ class LeagueResponse(BaseModel):
         )
 
     @classmethod
-    def from_summary(cls, s: LeagueSummary) -> "LeagueResponse":
+    def from_summary(cls, s: LeagueSummary) -> LeagueResponse:
         return cls.from_domain(s.league, members=s.members)
 
 
@@ -58,7 +58,7 @@ class StandingRowResponse(BaseModel):
     n_resolved: int
 
     @classmethod
-    def from_row(cls, r: StandingRow) -> "StandingRowResponse":
+    def from_row(cls, r: StandingRow) -> StandingRowResponse:
         return cls(
             rank=r.rank,
             user_id=r.user_id,
@@ -76,7 +76,7 @@ class LeagueStandingsResponse(BaseModel):
     rows: list[StandingRowResponse]
 
     @classmethod
-    def from_result(cls, x: LeagueStandings) -> "LeagueStandingsResponse":
+    def from_result(cls, x: LeagueStandings) -> LeagueStandingsResponse:
         return cls(
             league=LeagueResponse.from_domain(x.league),
             is_member=x.is_member,
@@ -98,7 +98,7 @@ class DivisionStandingsResponse(BaseModel):
     rows: list[StandingRowResponse]
 
     @classmethod
-    def from_result(cls, x: DivisionStandings) -> "DivisionStandingsResponse":
+    def from_result(cls, x: DivisionStandings) -> DivisionStandingsResponse:
         return cls(
             level=x.division_level,
             title=x.division_title,

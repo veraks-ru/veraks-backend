@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import pairwise
 from typing import Any
 
 from app.modules.seasons.domain.errors import InvalidSeasonDataError
@@ -56,7 +57,7 @@ class LeagueConfig:
             raise InvalidSeasonDataError(
                 "Все градации должны лежать строго в интервале (0, 1)"
             )
-        if any(a >= b for a, b in zip(grid, grid[1:], strict=False)):
+        if any(a >= b for a, b in pairwise(grid)):
             raise InvalidSeasonDataError("Сетка градаций должна строго возрастать")
         if self.n_min < 0:
             raise InvalidSeasonDataError("n_min не может быть отрицательным")
@@ -133,7 +134,7 @@ class QualificationResult:
 
 def _utcnow() -> datetime:
     """Текущее время в UTC (источник времени — сервер)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True, slots=True)

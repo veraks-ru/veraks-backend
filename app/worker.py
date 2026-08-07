@@ -17,28 +17,14 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
+import httpx
 from arq import cron
 from arq.connections import ArqRedis, RedisSettings
 
 from app.config import get_settings
 from app.db.session import session_scope
-from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
-from app.modules.notifications.adapters.goctopus import GoctopusPusher
-from app.modules.notifications.adapters.repository import (
-    SqlAlchemyNotificationRepository,
-)
-from app.modules.events.adapters.clock import SystemClock as EventsClock
-from app.modules.events.adapters.repository import SqlAlchemyEventRepository
-from app.modules.events.application.use_cases import CloseExpiredEvents
-from app.modules.predictions.adapters.clock import SystemClock as PredictionsClock
-from app.modules.predictions.adapters.repository import (
-    SqlAlchemyPredictionRepository,
-)
-from app.modules.predictions.application.use_cases import LockEventPredictions
-import httpx
-
 from app.modules.billing.adapters.clock import SystemClock as BillingClock
 from app.modules.billing.adapters.jump_gateway import JumpGateway
 from app.modules.billing.adapters.repositories import (
@@ -54,7 +40,39 @@ from app.modules.billing.application.use_cases import (
     RecordPayoutResult,
 )
 from app.modules.billing.domain.errors import BillingError, PaymentGatewayError
+from app.modules.events.adapters.clock import SystemClock as EventsClock
+from app.modules.events.adapters.repository import SqlAlchemyEventRepository
+from app.modules.events.application.use_cases import CloseExpiredEvents
 from app.modules.identity.adapters.security import FernetFieldEncryptor
+from app.modules.leagues.adapters.repository import (
+    SqlAlchemyDivisionMembershipRepository,
+    SqlAlchemyDivisionRepository,
+)
+from app.modules.leagues.adapters.standings_gateway import (
+    SqlAlchemyStandingsGateway,
+)
+from app.modules.leagues.application.use_cases import ApplyPromotionRelegation
+from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
+from app.modules.notifications.adapters.goctopus import GoctopusPusher
+from app.modules.notifications.adapters.repository import (
+    SqlAlchemyNotificationRepository,
+)
+from app.modules.predictions.adapters.clock import SystemClock as PredictionsClock
+from app.modules.predictions.adapters.repository import (
+    SqlAlchemyPredictionRepository,
+)
+from app.modules.predictions.application.use_cases import LockEventPredictions
+from app.modules.resolutions.adapters.clock import SystemClock as ResolutionsClock
+from app.modules.resolutions.adapters.dispute_guard import ResolutionDisputeGuard
+from app.modules.resolutions.adapters.event_gateway import (
+    SqlAlchemyEventResolutionGateway,
+)
+from app.modules.resolutions.adapters.repositories import (
+    SqlAlchemyDisputeRepository,
+    SqlAlchemyResolutionRepository,
+    SqlAlchemyScoringDispatchRepository,
+)
+from app.modules.resolutions.application.use_cases import CloseDisputeWindows
 from app.modules.scoring.adapters.clock import SystemClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
 from app.modules.scoring.adapters.scoring_gateway import (
@@ -74,27 +92,8 @@ from app.modules.scoring.application.use_cases import (
     RecomputeRatings,
     ScoreEvent,
 )
-from app.modules.resolutions.adapters.clock import SystemClock as ResolutionsClock
-from app.modules.resolutions.adapters.dispute_guard import ResolutionDisputeGuard
-from app.modules.resolutions.adapters.event_gateway import (
-    SqlAlchemyEventResolutionGateway,
-)
-from app.modules.resolutions.adapters.repositories import (
-    SqlAlchemyDisputeRepository,
-    SqlAlchemyResolutionRepository,
-    SqlAlchemyScoringDispatchRepository,
-)
-from app.modules.resolutions.application.use_cases import CloseDisputeWindows
 from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
 from app.modules.seasons.domain.entities import SeasonStatus
-from app.modules.leagues.adapters.repository import (
-    SqlAlchemyDivisionMembershipRepository,
-    SqlAlchemyDivisionRepository,
-)
-from app.modules.leagues.adapters.standings_gateway import (
-    SqlAlchemyStandingsGateway,
-)
-from app.modules.leagues.application.use_cases import ApplyPromotionRelegation
 from app.shared.audit.adapters.reader import SqlAlchemyAuditLogReader
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from app.shared.audit.application.verify_chain import VerifyAuditChain
@@ -412,32 +411,36 @@ async def poll_jump_payouts(_ctx: dict[Any, Any]) -> int:
     settings = get_settings()
     if not settings.jump.enabled:
         return 0
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        async with session_scope() as session:
-            payouts = SqlAlchemyPayoutRepository(session)
-            clock = BillingClock()
-            uc = PollPayoutStatuses(
+    async with httpx.AsyncClient(timeout=15.0) as client, session_scope() as session:
+        payouts = SqlAlchemyPayoutRepository(session)
+        clock = BillingClock()
+        uc = PollPayoutStatuses(
+            payouts=payouts,
+            probe=JumpGateway(settings.jump, client),
+            recorder=RecordPayoutResult(
                 payouts=payouts,
-                probe=JumpGateway(settings.jump, client),
-                recorder=RecordPayoutResult(
-                    payouts=payouts,
-                    audit=SqlAlchemyAuditTrail(session),
-                    clock=clock,
-                ),
-                notifier=PushingNotificationEmitter(
-                    SqlAlchemyNotificationRepository(session),
-                    GoctopusPusher(settings.realtime),
-                ),
-            )
-            finalized = await uc.execute()
+                audit=SqlAlchemyAuditTrail(session),
+                clock=clock,
+            ),
+            notifier=PushingNotificationEmitter(
+                SqlAlchemyNotificationRepository(session),
+                GoctopusPusher(settings.realtime),
+            ),
+        )
+        finalized = await uc.execute()
     logger.info("poll_jump_payouts: %d выплат финализировано", finalized)
     return finalized
 
 
 class WorkerSettings:
-    """Настройки arq-воркера: задачи и расписание."""
+    """Настройки arq-воркера: задачи и расписание.
 
-    functions = [
+    Класс никогда не инстанцируется — arq читает атрибуты как namespace
+    настроек, поэтому списки безопасно жить как ``ClassVar``, а не через
+    ``__init__``.
+    """
+
+    functions: ClassVar[list[Any]] = [
         score_event,
         recompute_ratings,
         season_roll,
@@ -448,7 +451,7 @@ class WorkerSettings:
         poll_jump_payouts,
         verify_audit_chain,
     ]
-    cron_jobs = [
+    cron_jobs: ClassVar[list[Any]] = [
         # Ночной полный пересчёт рейтингов.
         # ``cron`` типизирован под слишком широкий ``WorkerCoroutine``
         # (``*args/**kwargs``); типизированные задачи не подходят структурно —

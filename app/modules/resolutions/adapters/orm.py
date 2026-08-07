@@ -11,7 +11,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Enum as SAEnum, ForeignKey, Text
+from sqlalchemy import Boolean, ForeignKey, Text
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 import enum
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.modules.billing.domain.errors import (
     CrossLedgerEntryError,
@@ -30,7 +30,7 @@ from app.modules.billing.domain.errors import (
 
 def _utcnow() -> datetime:
     """Текущее время в UTC (источник времени — сервер)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class LedgerType(str, enum.Enum):

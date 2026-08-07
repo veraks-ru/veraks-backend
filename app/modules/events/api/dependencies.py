@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import SettingsDep
 from app.db.session import get_session
 from app.modules.events.adapters.clock import SystemClock
 from app.modules.events.adapters.repository import (
@@ -24,6 +25,7 @@ from app.modules.events.application.use_cases import (
     AnnulEvent,
     ApproveEvent,
     CancelEvent,
+    CloseEvent,
     CreateCategory,
     CreateEvent,
     GetEvent,
@@ -31,20 +33,18 @@ from app.modules.events.application.use_cases import (
     ListEvents,
     ProposeEvent,
     PublishEvent,
-    CloseEvent,
     RejectEvent,
     UpdateEvent,
 )
 from app.modules.events.ports.clock import Clock
-from app.modules.events.ports.repositories import CategoryRepository, EventRepository
 from app.modules.events.ports.notifications import Notifier
+from app.modules.events.ports.repositories import CategoryRepository, EventRepository
 from app.modules.events.ports.subscriptions import SubscriptionGate
 from app.modules.identity.api.dependencies import (
     CurrentUser,
     OnboardedUser,
     OptionalCurrentUser,
 )
-from app.config import SettingsDep
 from app.modules.notifications.adapters.emitter import PushingNotificationEmitter
 from app.modules.notifications.adapters.goctopus import GoctopusPusher
 from app.modules.notifications.adapters.repository import (

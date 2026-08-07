@@ -26,17 +26,17 @@ from app.modules.identity.api.schemas import (
     CallbackRequest,
 )
 from app.modules.identity.application.dto import SessionTokens
-from app.modules.identity.domain.errors import (
-    EsiaAuthorizationDeniedError,
-    EsiaExchangeError,
-    IdentityError,
-)
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
     GetOnboardingStatus,
     InitiateEsiaLogin,
     LogoutSession,
     RefreshSession,
+)
+from app.modules.identity.domain.errors import (
+    EsiaAuthorizationDeniedError,
+    EsiaExchangeError,
+    IdentityError,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])

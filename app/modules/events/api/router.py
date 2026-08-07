@@ -58,12 +58,12 @@ from app.modules.events.application.use_cases import (
     RejectEvent,
     UpdateEvent,
 )
+from app.modules.events.domain.entities import EventStatus
+from app.modules.events.ports.repositories import EventFilter
 from app.modules.predictions.application.use_cases import LockEventPredictions
 from app.modules.resolutions.application.dto import Actor as ResolutionActor
 from app.modules.resolutions.application.use_cases import VoidEventDisputes
 from app.modules.scoring.application.use_cases import RecomputeRatings
-from app.modules.events.domain.entities import EventStatus
-from app.modules.events.ports.repositories import EventFilter
 
 router = APIRouter(tags=["events"])
 

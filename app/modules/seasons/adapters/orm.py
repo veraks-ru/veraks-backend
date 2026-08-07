@@ -13,7 +13,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, Index, Integer, Numeric, Text
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy import ForeignKey, Index, Integer, Numeric, Text
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 

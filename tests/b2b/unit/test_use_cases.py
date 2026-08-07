@@ -30,7 +30,7 @@ from tests.b2b.fakes import (
 )
 
 
-def _issue_uc(repo, audit, *, default_quota: int = 1000) -> IssueApiKey:  # noqa: ANN001
+def _issue_uc(repo, audit, *, default_quota: int = 1000) -> IssueApiKey:
     return IssueApiKey(
         keys=repo,
         generator=FakeKeyGenerator(),

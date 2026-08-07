@@ -30,6 +30,7 @@ from app.modules.events.application.use_cases import (
 from app.modules.events.domain.entities import EventStatus
 from app.modules.events.domain.errors import (
     CategoryNotFoundError,
+    CategorySlugTakenError,
     EventEditNotAllowedError,
     EventNotFoundError,
     EventPermissionError,
@@ -73,16 +74,16 @@ def clock() -> FakeClock:
 
 
 def _new_event_input(category_id: uuid.UUID, **over) -> NewEventInput:
-    base = dict(
-        title="Будет ли X к концу года?",
-        description="Подробности",
-        category_id=category_id,
-        opens_at=FIXED_NOW + timedelta(days=1),
-        closes_at=FIXED_NOW + timedelta(days=30),
-        resolves_at=FIXED_NOW + timedelta(days=31),
-        resolution_source="https://source.example",
-        resolution_criteria="Официальное подтверждение",
-    )
+    base = {
+        "title": "Будет ли X к концу года?",
+        "description": "Подробности",
+        "category_id": category_id,
+        "opens_at": FIXED_NOW + timedelta(days=1),
+        "closes_at": FIXED_NOW + timedelta(days=30),
+        "resolves_at": FIXED_NOW + timedelta(days=31),
+        "resolution_source": "https://source.example",
+        "resolution_criteria": "Официальное подтверждение",
+    }
     base.update(over)
     return NewEventInput(**base)  # type: ignore[arg-type]
 
@@ -403,7 +404,7 @@ async def test_annul_unknown_event(events, clock, audit, arbiter_actor) -> None:
 
 async def test_create_category_slug_conflict(categories, editor_actor, category) -> None:
     uc = CreateCategory(categories=categories)
-    with pytest.raises(Exception):  # CategorySlugTakenError
+    with pytest.raises(CategorySlugTakenError):
         await uc.execute(
             actor=editor_actor,
             data=NewCategoryInput(slug=category.slug, title="Дубль"),

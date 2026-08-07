@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -26,9 +26,9 @@ from app.modules.seasons.domain.errors import (
 from app.modules.seasons.domain.value_objects import LeagueConfig
 from tests.seasons.fakes import FakeAuditTrail, FakeClock, InMemorySeasonRepository
 
-NOW = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
-STARTS = datetime(2026, 7, 1, tzinfo=timezone.utc)
-ENDS = datetime(2026, 9, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
+STARTS = datetime(2026, 7, 1, tzinfo=UTC)
+ENDS = datetime(2026, 9, 30, tzinfo=UTC)
 ACTOR_ID = uuid.uuid4()
 
 

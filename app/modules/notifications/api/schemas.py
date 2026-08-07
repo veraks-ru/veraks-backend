@@ -21,7 +21,7 @@ class NotificationResponse(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_domain(cls, n: Notification) -> "NotificationResponse":
+    def from_domain(cls, n: Notification) -> NotificationResponse:
         return cls(
             id=n.id,
             kind=n.kind,

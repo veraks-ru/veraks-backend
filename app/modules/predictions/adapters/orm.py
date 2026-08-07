@@ -12,7 +12,8 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Enum as SAEnum, ForeignKey, Numeric
+from sqlalchemy import Boolean, ForeignKey, Numeric
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 

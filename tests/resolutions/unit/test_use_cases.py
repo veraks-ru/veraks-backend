@@ -20,6 +20,7 @@ from datetime import timedelta
 import pytest
 
 from app.modules.events.domain.entities import EventStatus
+from app.modules.identity.domain.entities import UserRole
 from app.modules.resolutions.application.dto import Actor
 from app.modules.resolutions.domain.entities import DisputeStatus, ResolutionStatus
 from app.modules.resolutions.domain.errors import (
@@ -34,7 +35,6 @@ from app.modules.resolutions.domain.errors import (
     ResolutionTargetEventNotFoundError,
     SelfDisputeDecisionError,
 )
-from app.modules.identity.domain.entities import UserRole
 from tests.resolutions.conftest import DISPUTE_WINDOW, FIXED_NOW
 
 

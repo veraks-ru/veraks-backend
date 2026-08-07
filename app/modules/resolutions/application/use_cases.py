@@ -20,8 +20,8 @@ from app.modules.identity.domain.entities import UserRole
 from app.modules.resolutions.application.dto import Actor
 from app.modules.resolutions.domain.entities import Dispute, Resolution
 from app.modules.resolutions.domain.errors import (
-    DisputeNotFoundError,
     DisputeNotAllowedError,
+    DisputeNotFoundError,
     DisputeWindowClosedError,
     EventNotResolvableError,
     InvalidResolutionDataError,

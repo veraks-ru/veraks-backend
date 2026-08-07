@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
 from app.shared.audit.domain.hashing import chain_hash, entry_payload
 
-FIXED_NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def build_valid_chain(n: int) -> list[AuditEntry]:

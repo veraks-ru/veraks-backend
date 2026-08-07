@@ -15,7 +15,7 @@ import hashlib
 import hmac
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from cryptography.fernet import Fernet, InvalidToken
@@ -117,7 +117,7 @@ class JwtTokenIssuer:
     def _encode(
         self, claims: SessionClaims, token_type: str, ttl: int
     ) -> tuple[str, str]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         jti = secrets.token_urlsafe(16)
         payload = {
             "sub": str(claims.user_id),

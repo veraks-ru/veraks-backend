@@ -120,7 +120,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 limit=limit,
                 window_seconds=self._window,
             )
-        except Exception:  # noqa: BLE001 — политика отказа зависит от группы путей
+        except Exception:
             if is_auth_path:
                 # Fail-closed: без лимитера auth-эндпоинты беззащитны перед
                 # брутфорсом — временно отказываем, а не снимаем защиту.

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass as _sponsor_dataclass
 from collections.abc import Mapping
+from dataclasses import dataclass as _sponsor_dataclass
 from datetime import timedelta
 
 from app.modules.billing.application.dto import (
@@ -29,15 +29,14 @@ from app.modules.billing.domain.entities import (
     PaymentProvider,
     PaymentPurpose,
     PaymentStatus,
-    PrizeFund,
     Payout,
     PayoutRequisites,
     PayoutStatus,
+    PrizeFund,
     Subscription,
     SubscriptionPlan,
     SubscriptionStatus,
 )
-from app.modules.billing.domain.jump import map_jump_status
 from app.modules.billing.domain.errors import (
     BillingPermissionError,
     InsufficientPrizeFundError,
@@ -52,7 +51,7 @@ from app.modules.billing.domain.errors import (
     SeasonNotFoundError,
     SubscriptionNotFoundError,
 )
-from app.modules.billing.domain.receipt import build_receipt
+from app.modules.billing.domain.jump import map_jump_status
 from app.modules.billing.domain.ledger import (
     EntryDirection,
     LedgerAccount,
@@ -61,7 +60,6 @@ from app.modules.billing.domain.ledger import (
     PostingLeg,
     TransactionKind,
 )
-from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.domain.policies import (
     ensure_can_announce_fund,
     ensure_can_approve_payout,
@@ -70,6 +68,7 @@ from app.modules.billing.domain.policies import (
     ensure_can_manage_prize_funds,
     ensure_distinct_approver,
 )
+from app.modules.billing.domain.receipt import build_receipt
 from app.modules.billing.ports.clock import Clock
 from app.modules.billing.ports.gateways import (
     PaymentRefundGateway,
@@ -79,6 +78,7 @@ from app.modules.billing.ports.gateways import (
     SeasonDirectory,
     SubscriptionCheckoutGateway,
 )
+from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.ports.repositories import (
     LedgerRepository,
     PaymentRepository,
@@ -1194,7 +1194,7 @@ class PollPayoutStatuses:
                     provider_payout_id=payout.provider_payout_id,
                     succeeded=succeeded,
                 )
-            except Exception:  # noqa: BLE001 — изолируем сбой одной выплаты
+            except Exception:
                 _logger.exception(
                     "Опрос выплаты Jump %s не удался", payout.provider_payout_id
                 )

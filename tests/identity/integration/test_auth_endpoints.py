@@ -85,7 +85,7 @@ def test_login_redirects_to_esia(context) -> None:
 
 
 def test_callback_creates_user_and_sets_cookies(context) -> None:
-    client, repo, _ = context
+    client, _repo, _ = context
     state = _login_and_get_state(client)
 
     resp = client.get("/auth/esia/callback", params={"code": "abc", "state": state})
@@ -136,7 +136,7 @@ def test_full_flow_login_me_refresh_logout(context) -> None:
 
 
 def test_second_login_same_citizen_reuses_account(context) -> None:
-    client, repo, _ = context
+    client, _repo, _ = context
 
     state1 = _login_and_get_state(client)
     first = client.get("/auth/esia/callback", params={"code": "a", "state": state1})
@@ -189,7 +189,7 @@ def test_login_url_carries_pkce_and_nonce(context) -> None:
     assert "code_challenge_method=S256" in location
     assert "nonce=" in location
     # Секреты потока сгенерированы и НЕ отданы клиенту: наружу ушёл только state.
-    state, verifier, nonce = gateway.authorize_args[0]
+    _state, verifier, nonce = gateway.authorize_args[0]
     assert verifier and nonce
     assert verifier not in location and verifier not in str(resp.cookies)
 

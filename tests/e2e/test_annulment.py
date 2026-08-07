@@ -40,9 +40,6 @@ from app.modules.resolutions.application.use_cases import (
     VoidEventDisputes,
 )
 from app.modules.resolutions.domain.entities import Dispute, DisputeStatus
-from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
-from app.modules.seasons.domain.errors import SeasonFinalizationBlockedError
-from app.modules.social.adapters.feed_gateway import SqlAlchemyFeedGateway
 from app.modules.scoring.adapters.clock import SystemClock as ScoringClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
 from app.modules.scoring.adapters.scoring_gateway import (
@@ -56,6 +53,9 @@ from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.application.use_cases import RecomputeRatings, ScoreEvent
 from app.modules.scoring.domain.entities import ScopeType
 from app.modules.scoring.domain.errors import EventNotResolvedError
+from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
+from app.modules.seasons.domain.errors import SeasonFinalizationBlockedError
+from app.modules.social.adapters.feed_gateway import SqlAlchemyFeedGateway
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from tests.e2e.helpers import (
     CLOSES_AT,

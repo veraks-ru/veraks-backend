@@ -31,15 +31,15 @@ os.environ.setdefault("ESIA_REQUIRE_CONFIRMED", "true")
 os.environ.setdefault("ESIA_ISSUER", "https://esia.test")
 os.environ.setdefault("ESIA_JWKS_URL", "https://esia.test/jwks")
 
-import pytest  # noqa: E402
+import pytest
 
-from app.modules.identity.adapters.security import (  # noqa: E402
+from app.modules.identity.adapters.security import (
     FernetFieldEncryptor,
     HmacEsiaOidHasher,
     HmacSnilsHasher,
     JwtTokenIssuer,
 )
-from app.modules.identity.domain.value_objects import EsiaIdentity, Snils  # noqa: E402
+from app.modules.identity.domain.value_objects import EsiaIdentity, Snils
 
 # Валидный СНИЛС (контрольная сумма корректна): 112-233-445 95.
 VALID_SNILS = "11223344595"

@@ -18,7 +18,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import SettingsDep
 from app.db.session import get_session
-from app.redis import get_redis
+
+# Отмена автопродления при самостоятельном удалении аккаунта (T4): identity
+# знает о billing ТОЛЬКО здесь, на уровне HTTP composition root — по тому же
+# паттерну, что events.api.dependencies.get_lock_event_predictions знает о
+# predictions (см. её докстринг). Ни domain, ни application identity billing
+# не импортируют.
+from app.modules.billing.adapters.clock import SystemClock as _BillingSystemClock
+from app.modules.billing.adapters.repositories import (
+    SqlAlchemySubscriptionRepository as _BillingSqlAlchemySubscriptionRepository,
+)
+from app.modules.billing.application.use_cases import (
+    CancelSubscription as BillingCancelSubscription,
+)
+from app.modules.billing.ports.repositories import (
+    SubscriptionRepository as BillingSubscriptionRepository,
+)
 from app.modules.identity.adapters.esia_gateway import EsiaOidcGateway
 from app.modules.identity.adapters.id_token import EsiaIdTokenVerifier
 from app.modules.identity.adapters.repository import (
@@ -65,27 +80,12 @@ from app.modules.identity.ports.security import (
     StateStore,
     TokenIssuer,
 )
+from app.redis import get_redis
 from app.shared.audit.adapters.trail import (
     ImmediatelyCommittingAuditTrail,
     SqlAlchemyAuditTrail,
 )
 from app.shared.audit.ports.audit_trail import AuditTrail
-
-# Отмена автопродления при самостоятельном удалении аккаунта (T4): identity
-# знает о billing ТОЛЬКО здесь, на уровне HTTP composition root — по тому же
-# паттерну, что events.api.dependencies.get_lock_event_predictions знает о
-# predictions (см. её докстринг). Ни domain, ни application identity billing
-# не импортируют.
-from app.modules.billing.adapters.clock import SystemClock as _BillingSystemClock
-from app.modules.billing.adapters.repositories import (
-    SqlAlchemySubscriptionRepository as _BillingSqlAlchemySubscriptionRepository,
-)
-from app.modules.billing.application.use_cases import (
-    CancelSubscription as BillingCancelSubscription,
-)
-from app.modules.billing.ports.repositories import (
-    SubscriptionRepository as BillingSubscriptionRepository,
-)
 
 # Способ фиксации согласий через веб-онбординг (PRD/т.з. T2).
 _ONBOARDING_METHOD = "onboarding_web"

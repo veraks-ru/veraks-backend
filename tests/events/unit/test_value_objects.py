@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -16,7 +16,7 @@ from app.modules.events.domain.value_objects import (
     validate_slug,
 )
 
-_NOW = datetime(2026, 6, 25, tzinfo=timezone.utc)
+_NOW = datetime(2026, 6, 25, tzinfo=UTC)
 
 
 def test_valid_window_accepts_ordered_aware_dates() -> None:
@@ -32,7 +32,7 @@ def test_valid_window_accepts_ordered_aware_dates() -> None:
 def test_window_rejects_naive_datetime() -> None:
     with pytest.raises(InvalidEventWindowError):
         EventWindow(
-            opens_at=datetime(2026, 6, 25),  # naive
+            opens_at=datetime(2026, 6, 25),  # noqa: DTZ001 — тест намеренно передаёт naive datetime
             closes_at=_NOW + timedelta(days=1),
             resolves_at=_NOW + timedelta(days=2),
         )

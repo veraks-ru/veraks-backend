@@ -15,7 +15,7 @@ Fail-closed: при недоступности Redis запрос БЛОКИРУ
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 
@@ -23,7 +23,7 @@ _DAY_SECONDS = 86_400
 
 
 def _bucket(key_id: uuid.UUID) -> str:
-    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    day = datetime.now(UTC).strftime("%Y%m%d")
     return f"b2b:quota:{key_id}:{day}"
 
 

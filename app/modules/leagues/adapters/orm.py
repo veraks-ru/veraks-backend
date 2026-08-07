@@ -45,7 +45,7 @@ class LeagueORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, x: League) -> "LeagueORM":
+    def from_domain(cls, x: League) -> LeagueORM:
         return cls(
             id=x.id,
             name=x.name,
@@ -83,7 +83,7 @@ class LeagueMembershipORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, x: LeagueMembership) -> "LeagueMembershipORM":
+    def from_domain(cls, x: LeagueMembership) -> LeagueMembershipORM:
         return cls(
             id=x.id,
             league_id=x.league_id,
@@ -105,7 +105,7 @@ class DivisionORM(Base):
         return Division(id=self.id, level=self.level, title=self.title)
 
     @classmethod
-    def from_domain(cls, x: Division) -> "DivisionORM":
+    def from_domain(cls, x: Division) -> DivisionORM:
         return cls(id=x.id, level=x.level, title=x.title)
 
 
@@ -141,7 +141,7 @@ class DivisionMembershipORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, x: DivisionMembership) -> "DivisionMembershipORM":
+    def from_domain(cls, x: DivisionMembership) -> DivisionMembershipORM:
         return cls(
             id=x.id,
             user_id=x.user_id,

@@ -15,8 +15,8 @@ import pytest
 from app.modules.scoring.domain.errors import NotEnoughPredictorsError
 from app.modules.scoring.domain.formulas import (
     brier,
-    crowd_advantage,
     consensus,
+    crowd_advantage,
     disagreement,
     event_contribution,
     event_weight,

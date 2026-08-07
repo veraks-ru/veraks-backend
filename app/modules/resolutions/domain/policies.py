@@ -39,7 +39,7 @@ def ensure_can_raise_dispute(role: UserRole) -> None:
     ``ParticipationGateway`` в use-case; роль здесь не ограничиваем
     (редактор/арбитр тоже могут быть участниками).
     """
-    return None
+    return
 
 
 def ensure_can_decide_dispute(role: UserRole) -> None:

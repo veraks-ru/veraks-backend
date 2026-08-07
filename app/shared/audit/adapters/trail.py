@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
@@ -74,7 +74,7 @@ class SqlAlchemyAuditTrail:
             )
         ).scalar_one_or_none()
 
-        occurred_at = datetime.now(timezone.utc)
+        occurred_at = datetime.now(UTC)
         meta = dict(metadata or {})
         payload = entry_payload(
             occurred_at=occurred_at,

@@ -301,7 +301,7 @@ async def test_lock_event_predictions_locks_all(
 # ── Трек-рекорд (ListMyPredictions / ListUserPredictions) ─────────────────
 
 
-def _resolved(user_id, event_id, grade, brier) -> "object":
+def _resolved(user_id, event_id, grade, brier) -> object:
     from decimal import Decimal
 
     from app.modules.predictions.domain.entities import Prediction

@@ -44,7 +44,7 @@ class ResolutionResponse(BaseModel):
     resolved_at: datetime
 
     @classmethod
-    def from_domain(cls, resolution: Resolution) -> "ResolutionResponse":
+    def from_domain(cls, resolution: Resolution) -> ResolutionResponse:
         """Доменная сущность → схема ответа."""
         return cls(
             id=resolution.id,
@@ -93,7 +93,7 @@ class DisputeResponse(BaseModel):
     decided_at: datetime | None
 
     @classmethod
-    def from_domain(cls, dispute: Dispute) -> "DisputeResponse":
+    def from_domain(cls, dispute: Dispute) -> DisputeResponse:
         """Доменная сущность → схема ответа."""
         return cls(
             id=dispute.id,

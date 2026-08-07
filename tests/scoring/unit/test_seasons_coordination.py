@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -47,15 +47,15 @@ EASY_CFG = LeagueConfig(
     k_shrink=6.0,
     min_predictors=5,
 )
-LATER = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+LATER = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
 
 
 def _active_season(season_id: uuid.UUID, *, ends_at: datetime | None = None) -> Season:
     return Season(
         slug="2026q3",
         title="Сезон III",
-        starts_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
-        ends_at=ends_at or datetime(2026, 9, 30, tzinfo=timezone.utc),
+        starts_at=datetime(2026, 6, 1, tzinfo=UTC),
+        ends_at=ends_at or datetime(2026, 9, 30, tzinfo=UTC),
         status=SeasonStatus.ACTIVE,
         league_config=EASY_CFG,
         id=season_id,
@@ -205,15 +205,15 @@ async def test_roll_activates_due_upcoming_seasons() -> None:
     due = Season(
         slug="due",
         title="Пора",
-        starts_at=datetime(2026, 6, 1, tzinfo=timezone.utc),  # <= LATER
-        ends_at=datetime(2026, 12, 1, tzinfo=timezone.utc),
+        starts_at=datetime(2026, 6, 1, tzinfo=UTC),  # <= LATER
+        ends_at=datetime(2026, 12, 1, tzinfo=UTC),
         status=SeasonStatus.UPCOMING,
     )
     future = Season(
         slug="future",
         title="Рано",
-        starts_at=datetime(2026, 12, 1, tzinfo=timezone.utc),  # > LATER
-        ends_at=datetime(2027, 3, 1, tzinfo=timezone.utc),
+        starts_at=datetime(2026, 12, 1, tzinfo=UTC),  # > LATER
+        ends_at=datetime(2027, 3, 1, tzinfo=UTC),
         status=SeasonStatus.UPCOMING,
     )
     await season_repo.add(due)
@@ -246,7 +246,7 @@ async def test_roll_does_not_auto_finalize_when_gated() -> None:
     season_id = uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
-        _active_season(season_id, ends_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+        _active_season(season_id, ends_at=datetime(2026, 6, 1, tzinfo=UTC))
     )  # ends в прошлом относительно LATER
     ratings = InMemoryRatingRepository()
     roll = RollSeasons(
@@ -274,7 +274,7 @@ async def test_roll_auto_finalizes_expired_active_season_by_default() -> None:
     season_id = uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
-        _active_season(season_id, ends_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+        _active_season(season_id, ends_at=datetime(2026, 6, 1, tzinfo=UTC))
     )  # ends в прошлом относительно LATER
     ratings = InMemoryRatingRepository()
     finalize_audit = FakeAuditTrail()
@@ -309,7 +309,7 @@ def _finished_season(season_id: uuid.UUID, *, ends_at: datetime) -> Season:
     return Season(
         slug=f"fin-{season_id.hex[:6]}",
         title="Завершён",
-        starts_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        starts_at=datetime(2026, 1, 1, tzinfo=UTC),
         ends_at=ends_at,
         status=SeasonStatus.FINISHED,
         league_config=EASY_CFG,
@@ -321,8 +321,8 @@ def _upcoming(season_id: uuid.UUID) -> Season:
     return Season(
         slug="new",
         title="Новый",
-        starts_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
-        ends_at=datetime(2026, 12, 1, tzinfo=timezone.utc),
+        starts_at=datetime(2026, 6, 1, tzinfo=UTC),
+        ends_at=datetime(2026, 12, 1, tzinfo=UTC),
         status=SeasonStatus.UPCOMING,
         id=season_id,
     )
@@ -358,7 +358,7 @@ async def test_provider_freezes_recalibrated_grid() -> None:
     prev_id = uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
-        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=UTC))
     )
     # Наблюдаемые частоты строго возрастают и лежат в (0,1) → PAV оставляет их:
     # сетка (0.2, 0.4, 0.5, 0.6, 0.8) ≠ дефолт.
@@ -388,7 +388,7 @@ async def test_provider_fills_holes_for_unused_gradations() -> None:
     prev_id = uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
-        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=UTC))
     )
     # Использованы только 2 градации: пропущенные заполняются их номиналом
     # (M-RECAL1) → сетка длины 5, рекалибровка применяется, а не откатывается.
@@ -407,7 +407,7 @@ async def test_provider_clamps_boundary_frequency() -> None:
     prev_id = uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
-        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=UTC))
     )
     # Верхняя градация с частотой 1.0 клампится в (0,1) (M-RECAL2) → рекалибровка
     # применяется, а не откатывается на дефолт из-за граничного значения.
@@ -432,10 +432,10 @@ async def test_provider_picks_most_recent_finished_season() -> None:
     older_id, newer_id = uuid.uuid4(), uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
-        _finished_season(older_id, ends_at=datetime(2025, 12, 31, tzinfo=timezone.utc))
+        _finished_season(older_id, ends_at=datetime(2025, 12, 31, tzinfo=UTC))
     )
     await season_repo.add(
-        _finished_season(newer_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+        _finished_season(newer_id, ends_at=datetime(2026, 5, 31, tzinfo=UTC))
     )
     # Свежий сезон даёт валидную сетку, старый — нет (короткую). Провайдер должен
     # взять свежий → получить рекалиброванную сетку, а не фолбэк.
@@ -455,7 +455,7 @@ async def test_roll_activates_with_provider_config() -> None:
     prev_id = uuid.uuid4()
     season_repo = InMemorySeasonRepository()
     await season_repo.add(
-        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=timezone.utc))
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 31, tzinfo=UTC))
     )
     due = _upcoming(uuid.uuid4())
     await season_repo.add(due)

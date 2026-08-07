@@ -8,14 +8,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.modules.predictions.domain.value_objects import EventSnapshot
 
 # Фиксированный момент «сейчас» для детерминированной проверки дедлайна.
-FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture

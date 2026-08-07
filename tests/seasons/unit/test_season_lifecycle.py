@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -10,8 +10,8 @@ from app.modules.seasons.domain.entities import Season, SeasonStatus
 from app.modules.seasons.domain.errors import InvalidSeasonTransitionError
 from app.modules.seasons.domain.value_objects import LeagueConfig
 
-NOW = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
-LATER = datetime(2026, 6, 25, 13, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
+LATER = datetime(2026, 6, 25, 13, 0, tzinfo=UTC)
 
 
 def _season(status: SeasonStatus = SeasonStatus.UPCOMING) -> Season:
@@ -19,7 +19,7 @@ def _season(status: SeasonStatus = SeasonStatus.UPCOMING) -> Season:
         slug="2026q3",
         title="Сезон III 2026",
         starts_at=NOW,
-        ends_at=datetime(2026, 9, 30, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 9, 30, tzinfo=UTC),
         status=status,
     )
 

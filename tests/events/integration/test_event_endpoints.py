@@ -33,9 +33,9 @@ from app.modules.events.api.dependencies import (
     get_void_event_disputes,
 )
 from app.modules.events.application.dto import Actor
-from app.modules.events.ports.repositories import EventFilter
 from app.modules.events.domain.entities import Category, Event, EventStatus
 from app.modules.events.domain.value_objects import EventWindow
+from app.modules.events.ports.repositories import EventFilter
 from app.modules.identity.api.dependencies import (
     get_consent_repository,
     get_current_user,
@@ -46,10 +46,6 @@ from app.modules.resolutions.application.use_cases import VoidEventDisputes
 from app.modules.resolutions.domain.entities import Dispute, DisputeStatus
 from app.modules.scoring.application.use_cases import RecomputeRatings
 from tests.events.conftest import FIXED_NOW
-from tests.identity.fakes import (
-    InMemoryConsentRepository,
-    onboarded_consent_repository,
-)
 from tests.events.fakes import (
     FakeAuditTrail,
     FakeClock,
@@ -57,14 +53,24 @@ from tests.events.fakes import (
     InMemoryCategoryRepository,
     InMemoryEventRepository,
 )
+from tests.identity.fakes import (
+    InMemoryConsentRepository,
+    onboarded_consent_repository,
+)
 from tests.predictions.fakes import InMemoryPredictionRepository
 from tests.resolutions.fakes import (
     FakeAuditTrail as ResolutionsFakeAuditTrail,
+)
+from tests.resolutions.fakes import (
     FakeClock as ResolutionsFakeClock,
+)
+from tests.resolutions.fakes import (
     InMemoryDisputeRepository,
 )
 from tests.scoring.fakes import (
     FakeClock as ScoringFakeClock,
+)
+from tests.scoring.fakes import (
     FakeEventScoringGateway,
     FakeSeasonConfigGateway,
     InMemoryRatingRepository,

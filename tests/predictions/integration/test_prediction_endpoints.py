@@ -186,7 +186,7 @@ def test_put_and_get_my_prediction(make_client, open_snapshot) -> None:
 
 
 def test_put_prediction_is_upsert(make_client, open_snapshot) -> None:
-    client, repo, _, _ = make_client()
+    client, _repo, _, _ = make_client()
     event_id = open_snapshot.event_id
 
     client.put(
@@ -350,8 +350,8 @@ def test_top_predictions_resolved_sorted_by_brier(make_client) -> None:
     """Разрешённое событие: топ по возрастанию Brier, скрытый пользователь исключён."""
     from decimal import Decimal
 
-    from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
     from app.modules.predictions.api.dependencies import get_user_directory
+    from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
 
     event_id = uuid.uuid4()
     gateway = FakeEventGateway([])

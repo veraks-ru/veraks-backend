@@ -26,7 +26,6 @@ from app.modules.b2b.ports.repositories import (
 from app.shared.audit.domain.entities import AuditActorType
 from app.shared.audit.ports.audit_trail import AuditTrail
 
-
 # ── Управление ключами ───────────────────────────────────────────────────────
 
 

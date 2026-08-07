@@ -201,5 +201,6 @@ class EsiaIdTokenVerifier:
         keys = {key.key_id: key for key in jwk_set.keys if key.key_id}
         if not keys:
             # Единственный ключ без ``kid`` — допустимо (см. ``_lookup``).
-            keys = {"": key for key in jwk_set.keys[:1]}
+            only = jwk_set.keys[:1]
+            keys = {"": only[0]} if only else {}
         return keys

@@ -265,7 +265,7 @@ class Settings(BaseSettings):
     public_api_base: str = "https://api.veraks.ru"
 
     @model_validator(mode="after")
-    def _require_billing_providers_in_prod(self) -> "Settings":
+    def _require_billing_providers_in_prod(self) -> Settings:
         """Вне ``local`` платёжные провайдеры обязаны быть явно и полно настроены.
 
         Прецедент — этот же паттерн раньше стоял на секретах вебхуков ЮKassa
@@ -321,7 +321,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _require_esia_id_token_verification(self) -> "Settings":
+    def _require_esia_id_token_verification(self) -> Settings:
         """Вне ``local`` ``id_token`` ЕСИА обязан проверяться криптографически.
 
         Тот же паттерн fail-fast, что и у платёжных провайдеров выше. Без

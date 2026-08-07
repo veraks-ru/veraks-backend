@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text
@@ -32,12 +32,11 @@ from app.modules.seasons.domain.entities import Season, SeasonStatus
 from tests.e2e.helpers import add_user
 
 pytestmark = pytest.mark.asyncio
-UTC = timezone.utc
 
 
 async def _insert_rating(
     session, *, user_id, scope, scope_id, skill, rank
-):  # noqa: ANN001
+):
     await session.execute(
         text(
             "INSERT INTO ratings "

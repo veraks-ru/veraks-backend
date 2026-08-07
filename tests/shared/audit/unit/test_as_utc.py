@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from app.shared.audit.api.router import _as_utc
 
 
 def test_naive_datetime_gets_utc_tzinfo() -> None:
-    naive = datetime(2026, 1, 1, 12, 0, 0)
+    naive = datetime(2026, 1, 1, 12, 0, 0)  # noqa: DTZ001 — тест проверяет именно normalize naive → UTC
     result = _as_utc(naive)
     assert result is not None
-    assert result.tzinfo == timezone.utc
+    assert result.tzinfo == UTC
     assert result.replace(tzinfo=None) == naive
 
 

@@ -10,8 +10,8 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, Self
 
 from app.modules.b2b.domain.entities import ApiKey
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
@@ -112,7 +112,7 @@ class FakeAuditTrail:
             }
         )
         return AuditEntry(
-            occurred_at=datetime.now(timezone.utc),
+            occurred_at=datetime.now(UTC),
             actor_id=actor_id,
             actor_type=actor_type,
             action=action,
@@ -129,21 +129,21 @@ class FakeAuditTrail:
 class _FakePipeline:
     """Пайплайн Redis в памяти: копит INCR/EXPIRE и применяет их в execute."""
 
-    def __init__(self, redis: "FakeRedis") -> None:
+    def __init__(self, redis: FakeRedis) -> None:
         self._redis = redis
         self._ops: list[tuple[str, str, int]] = []
 
-    async def __aenter__(self) -> "_FakePipeline":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *exc: object) -> bool:
         return False
 
-    def incr(self, key: str) -> "_FakePipeline":
+    def incr(self, key: str) -> _FakePipeline:
         self._ops.append(("incr", key, 0))
         return self
 
-    def expire(self, key: str, ttl: int) -> "_FakePipeline":
+    def expire(self, key: str, ttl: int) -> _FakePipeline:
         self._ops.append(("expire", key, ttl))
         return self
 

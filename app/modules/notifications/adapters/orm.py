@@ -46,7 +46,7 @@ class NotificationORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, n: Notification) -> "NotificationORM":
+    def from_domain(cls, n: Notification) -> NotificationORM:
         return cls(
             id=n.id,
             user_id=n.user_id,

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -18,7 +18,7 @@ from app.modules.events.domain.value_objects import EventWindow
 from app.modules.identity.domain.entities import UserRole
 
 # Фиксированный момент «сейчас» для детерминированных переходов.
-FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture

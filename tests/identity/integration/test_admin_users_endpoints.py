@@ -64,7 +64,7 @@ def _login_as(app, user: User) -> None:
 
 
 def test_suspend_requires_admin(ctx) -> None:
-    client, repo, _, _, _ = ctx
+    client, _repo, _, _, _ = ctx
     editor = _user("ed", role=UserRole.EDITOR)
     client.app.dependency_overrides[get_current_user] = lambda: editor
 

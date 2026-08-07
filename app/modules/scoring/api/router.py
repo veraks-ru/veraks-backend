@@ -13,6 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
+from app.modules.identity.domain.entities import User
 from app.modules.scoring.api.dependencies import (
     get_finalize_season,
     get_leaderboard_uc,
@@ -38,7 +39,6 @@ from app.modules.scoring.api.schemas import (
     RecomputeRatingsResponse,
     ScoreEventResponse,
 )
-from app.modules.identity.domain.entities import User
 from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,

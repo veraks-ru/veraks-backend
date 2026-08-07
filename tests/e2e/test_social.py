@@ -47,7 +47,7 @@ from tests.e2e.helpers import (
 pytestmark = pytest.mark.asyncio
 
 
-def _post_uc(session):  # noqa: ANN001
+def _post_uc(session):
     return PostComment(
         comments=SqlAlchemyCommentRepository(session),
         events=SqlAlchemyEventExistsGateway(session),
@@ -55,14 +55,14 @@ def _post_uc(session):  # noqa: ANN001
     )
 
 
-def _list_uc(session):  # noqa: ANN001
+def _list_uc(session):
     return ListEventComments(
         comments=SqlAlchemyCommentRepository(session),
         users=SqlAlchemyUserLookup(session),
     )
 
 
-async def _open_event(session, admin_id):  # noqa: ANN001
+async def _open_event(session, admin_id):
     category = await add_category(session)
     season = await add_active_season(session)
     await session.flush()

@@ -39,7 +39,6 @@ from app.modules.scoring.domain.constants import (
     LEADERBOARD_MIN_RESOLVED_GLOBAL,
     MIN_PREDICTORS,
 )
-from app.modules.scoring.domain.recalibration import recalibrate
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.scoring.domain.errors import (
     EventNotResolvedError,
@@ -53,14 +52,15 @@ from app.modules.scoring.domain.formulas import (
     event_weight,
     season_rating_from_contributions,
 )
+from app.modules.scoring.domain.recalibration import recalibrate
 from app.modules.scoring.domain.value_objects import ResolvedEvent, quantize_score
 from app.modules.scoring.ports.categories import CategoryDirectory
 from app.modules.scoring.ports.clock import Clock
-from app.modules.scoring.ports.notifications import Notifier
 from app.modules.scoring.ports.gateways import (
     EventScoringGateway,
     PredictionScoreWriter,
 )
+from app.modules.scoring.ports.notifications import Notifier
 from app.modules.scoring.ports.repositories import RatingRepository
 from app.modules.scoring.ports.season_config import SeasonConfigGateway
 from app.modules.scoring.ports.users import UserDirectory

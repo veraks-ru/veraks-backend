@@ -28,8 +28,8 @@ from app.modules.scoring.application.use_cases import (
     RecomputeRatings,
 )
 from app.modules.scoring.domain.constants import DEFAULT_GRADATIONS
-from app.modules.scoring.domain.recalibration import enforce_strict_grid
 from app.modules.scoring.domain.entities import ScopeType
+from app.modules.scoring.domain.recalibration import enforce_strict_grid
 from app.modules.scoring.ports.clock import Clock
 from app.modules.scoring.ports.repositories import RatingRepository
 from app.modules.seasons.domain.entities import Season, SeasonStatus
@@ -181,7 +181,7 @@ class DefaultLeagueConfigProvider:
     Обратная совместимость: активация без рекалибровки (как было раньше).
     """
 
-    async def config_for(self, season: Season) -> LeagueConfig:  # noqa: ARG002
+    async def config_for(self, season: Season) -> LeagueConfig:
         return LeagueConfig.default()
 
 

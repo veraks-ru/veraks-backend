@@ -37,7 +37,7 @@ class ApiKeyResponse(BaseModel):
     @classmethod
     def from_domain(
         cls, k: ApiKey, *, used_today: int | None = None
-    ) -> "ApiKeyResponse":
+    ) -> ApiKeyResponse:
         return cls(
             id=k.id,
             name=k.name,
@@ -50,7 +50,7 @@ class ApiKeyResponse(BaseModel):
         )
 
     @classmethod
-    def from_usage(cls, u: ApiKeyUsage) -> "ApiKeyResponse":
+    def from_usage(cls, u: ApiKeyUsage) -> ApiKeyResponse:
         return cls.from_domain(u.key, used_today=u.used_today)
 
 
@@ -61,7 +61,7 @@ class IssuedApiKeyResponse(BaseModel):
     secret: str
 
     @classmethod
-    def from_issued(cls, issued: IssuedApiKey) -> "IssuedApiKeyResponse":
+    def from_issued(cls, issued: IssuedApiKey) -> IssuedApiKeyResponse:
         return cls(
             key=ApiKeyResponse.from_domain(issued.key), secret=issued.plaintext
         )
@@ -77,7 +77,7 @@ class ConsensusSignalResponse(BaseModel):
     distribution: dict[str, int]
 
     @classmethod
-    def from_signal(cls, s: ConsensusSignal) -> "ConsensusSignalResponse":
+    def from_signal(cls, s: ConsensusSignal) -> ConsensusSignalResponse:
         return cls(
             event_id=s.event_id,
             total_count=s.total_count,
@@ -95,7 +95,7 @@ class LeaderboardSignalRowResponse(BaseModel):
     n_resolved: int
 
     @classmethod
-    def from_row(cls, r: LeaderboardSignalRow) -> "LeaderboardSignalRowResponse":
+    def from_row(cls, r: LeaderboardSignalRow) -> LeaderboardSignalRowResponse:
         return cls(
             rank=r.rank,
             user_id=r.user_id,
@@ -118,7 +118,7 @@ class EventSignalResponse(BaseModel):
     outcome: bool | None
 
     @classmethod
-    def from_signal(cls, s: EventSignal) -> "EventSignalResponse":
+    def from_signal(cls, s: EventSignal) -> EventSignalResponse:
         return cls(
             id=s.id,
             title=s.title,

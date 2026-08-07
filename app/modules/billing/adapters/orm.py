@@ -11,7 +11,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Enum as SAEnum, ForeignKey, Text
+from sqlalchemy import BigInteger, ForeignKey, Text
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -85,7 +86,7 @@ class LedgerAccountORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, account: LedgerAccount) -> "LedgerAccountORM":
+    def from_domain(cls, account: LedgerAccount) -> LedgerAccountORM:
         """Доменная сущность → новая строка ORM."""
         return cls(
             id=account.id,
@@ -113,7 +114,7 @@ class LedgerTransactionORM(Base):
     )
 
     @classmethod
-    def from_domain(cls, txn: LedgerTransaction) -> "LedgerTransactionORM":
+    def from_domain(cls, txn: LedgerTransaction) -> LedgerTransactionORM:
         """Доменная транзакция → новая строка ORM (без ног)."""
         return cls(
             id=txn.id,
@@ -151,7 +152,7 @@ class LedgerEntryORM(Base):
     @classmethod
     def from_domain(
         cls, entry: LedgerEntry, *, transaction_id: uuid.UUID, created_at: datetime
-    ) -> "LedgerEntryORM":
+    ) -> LedgerEntryORM:
         """Доменная нога → новая строка ORM."""
         return cls(
             id=entry.id,
@@ -215,7 +216,7 @@ class SubscriptionORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, sub: Subscription) -> "SubscriptionORM":
+    def from_domain(cls, sub: Subscription) -> SubscriptionORM:
         return cls(
             id=sub.id,
             user_id=sub.user_id,
@@ -282,7 +283,7 @@ class PaymentORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, payment: Payment) -> "PaymentORM":
+    def from_domain(cls, payment: Payment) -> PaymentORM:
         return cls(
             id=payment.id,
             provider=payment.provider,
@@ -345,7 +346,7 @@ class PrizeFundORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, fund: PrizeFund) -> "PrizeFundORM":
+    def from_domain(cls, fund: PrizeFund) -> PrizeFundORM:
         return cls(
             id=fund.id,
             season_id=fund.season_id,
@@ -421,7 +422,7 @@ class PayoutORM(Base):
         )
 
     @classmethod
-    def from_domain(cls, payout: Payout) -> "PayoutORM":
+    def from_domain(cls, payout: Payout) -> PayoutORM:
         return cls(
             id=payout.id,
             user_id=payout.user_id,

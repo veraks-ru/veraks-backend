@@ -23,7 +23,6 @@ from app.modules.billing.domain.entities import (
     SubscriptionStatus,
 )
 
-
 # ── Тарифы ────────────────────────────────────────────────────────────────
 
 
@@ -64,7 +63,7 @@ class SubscriptionResponse(BaseModel):
     current_period_end: datetime | None
 
     @classmethod
-    def from_domain(cls, sub: Subscription) -> "SubscriptionResponse":
+    def from_domain(cls, sub: Subscription) -> SubscriptionResponse:
         return cls(
             id=sub.id,
             user_id=sub.user_id,
@@ -95,7 +94,7 @@ class PaymentResponse(BaseModel):
     paid_at: datetime | None
 
     @classmethod
-    def from_domain(cls, payment: Payment) -> "PaymentResponse":
+    def from_domain(cls, payment: Payment) -> PaymentResponse:
         return cls(
             id=payment.id,
             provider=payment.provider,
@@ -138,7 +137,7 @@ class PrizeFundResponse(BaseModel):
     status: PrizeFundStatus
 
     @classmethod
-    def from_view(cls, view: PrizeFundView) -> "PrizeFundResponse":
+    def from_view(cls, view: PrizeFundView) -> PrizeFundResponse:
         fund: PrizeFund = view.fund
         return cls(
             id=fund.id,
@@ -151,7 +150,7 @@ class PrizeFundResponse(BaseModel):
         )
 
     @classmethod
-    def from_domain(cls, fund: PrizeFund, *, balance_kopecks: int) -> "PrizeFundResponse":
+    def from_domain(cls, fund: PrizeFund, *, balance_kopecks: int) -> PrizeFundResponse:
         return cls(
             id=fund.id,
             sponsor_name=fund.sponsor_name,
@@ -194,7 +193,7 @@ class PayoutResponse(BaseModel):
     paid_at: datetime | None
 
     @classmethod
-    def from_domain(cls, payout: Payout) -> "PayoutResponse":
+    def from_domain(cls, payout: Payout) -> PayoutResponse:
         return cls(
             id=payout.id,
             user_id=payout.user_id,
@@ -238,7 +237,7 @@ class PayoutRequisitesResponse(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_domain(cls, requisites: PayoutRequisites) -> "PayoutRequisitesResponse":
+    def from_domain(cls, requisites: PayoutRequisites) -> PayoutRequisitesResponse:
         return cls(
             id=requisites.id,
             sbp_phone=requisites.phone,
@@ -258,7 +257,7 @@ class SeasonPrizeFundResponse(BaseModel):
     payouts: list[PayoutResponse]
 
     @classmethod
-    def from_view(cls, view: SeasonPrizeFundView) -> "SeasonPrizeFundResponse":
+    def from_view(cls, view: SeasonPrizeFundView) -> SeasonPrizeFundResponse:
         return cls(
             season_slug=view.season_slug,
             funds=[PrizeFundResponse.from_view(f) for f in view.funds],
@@ -277,7 +276,7 @@ class SponsorFundDetailResponse(BaseModel):
     payouts: list[PayoutResponse]
 
     @classmethod
-    def from_detail(cls, detail: "SponsorFundDetail") -> "SponsorFundDetailResponse":
+    def from_detail(cls, detail: SponsorFundDetail) -> SponsorFundDetailResponse:
         return cls(
             fund=PrizeFundResponse.from_domain(
                 detail.fund, balance_kopecks=detail.available_kopecks

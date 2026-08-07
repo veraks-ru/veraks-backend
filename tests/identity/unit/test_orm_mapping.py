@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.modules.identity.adapters.orm import UserORM
 from app.modules.identity.domain.entities import User, UserRole, UserStatus
@@ -24,7 +24,7 @@ def _user() -> User:
         real_name_enc=None,
         role=UserRole.USER,
         status=UserStatus.ACTIVE,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
 

@@ -21,6 +21,8 @@ from app.modules.notifications.adapters.goctopus import GoctopusPusher
 from app.modules.notifications.adapters.repository import (
     SqlAlchemyNotificationRepository,
 )
+from app.modules.resolutions.adapters.dispute_guard import ResolutionDisputeGuard
+from app.modules.resolutions.adapters.repositories import SqlAlchemyDisputeRepository
 from app.modules.scoring.adapters.category_gateway import SqlAlchemyCategoryDirectory
 from app.modules.scoring.adapters.clock import SystemClock
 from app.modules.scoring.adapters.rating_repository import SqlAlchemyRatingRepository
@@ -32,6 +34,7 @@ from app.modules.scoring.adapters.season_config_gateway import (
     SqlAlchemySeasonConfigGateway,
 )
 from app.modules.scoring.adapters.user_gateway import SqlAlchemyUserDirectory
+from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
     GetProfileSummary,
@@ -42,7 +45,6 @@ from app.modules.scoring.application.use_cases import (
     RecomputeRatings,
     ScoreEvent,
 )
-from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.domain.policies import ensure_can_recompute, ensure_can_score
 from app.modules.scoring.ports.categories import CategoryDirectory
 from app.modules.scoring.ports.clock import Clock
@@ -54,8 +56,6 @@ from app.modules.scoring.ports.notifications import Notifier
 from app.modules.scoring.ports.repositories import RatingRepository
 from app.modules.scoring.ports.season_config import SeasonConfigGateway
 from app.modules.scoring.ports.users import UserDirectory
-from app.modules.resolutions.adapters.dispute_guard import ResolutionDisputeGuard
-from app.modules.resolutions.adapters.repositories import SqlAlchemyDisputeRepository
 from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
 from app.modules.seasons.domain.policies import ensure_can_transition
 from app.modules.seasons.ports.gateways import DisputeGuard

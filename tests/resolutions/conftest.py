@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -35,7 +35,7 @@ from tests.resolutions.fakes import (
     InMemoryScoringDispatchRepository,
 )
 
-FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
 DISPUTE_WINDOW = timedelta(hours=72)
 
 

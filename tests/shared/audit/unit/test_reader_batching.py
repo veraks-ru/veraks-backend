@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.shared.audit.adapters.reader import SqlAlchemyAuditLogReader
@@ -24,7 +24,7 @@ class _FakeRow:
 
     def to_domain(self) -> AuditEntry:
         return AuditEntry(
-            occurred_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
             actor_id=None,
             actor_type=AuditActorType.SYSTEM,
             action=f"test.action.{self.id}",

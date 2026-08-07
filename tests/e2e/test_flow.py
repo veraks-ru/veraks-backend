@@ -17,7 +17,8 @@ from app.modules.events.adapters.repository import (
     SqlAlchemyCategoryRepository,
     SqlAlchemyEventRepository,
 )
-from app.modules.events.application.dto import Actor as EventActor, NewEventInput
+from app.modules.events.application.dto import Actor as EventActor
+from app.modules.events.application.dto import NewEventInput
 from app.modules.events.application.use_cases import (
     ApproveEvent,
     ProposeEvent,
@@ -65,7 +66,7 @@ class _FakeGate:
     def __init__(self, active: bool) -> None:
         self._active = active
 
-    async def has_active_subscription(self, user_id, now) -> bool:  # noqa: ANN001
+    async def has_active_subscription(self, user_id, now) -> bool:
         return self._active
 
 
@@ -73,7 +74,7 @@ class _FakeNotifier:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    async def emit(self, **kwargs) -> None:  # noqa: ANN003
+    async def emit(self, **kwargs) -> None:
         self.calls.append(kwargs)
 
 

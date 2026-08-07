@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class SystemClock:
@@ -10,4 +10,4 @@ class SystemClock:
 
     def now(self) -> datetime:
         """Текущий момент в UTC."""
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
