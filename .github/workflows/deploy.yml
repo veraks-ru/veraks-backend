@@ -1,9 +1,10 @@
 name: CI + build (veraks-backend)
 
-# Пуш в main → тесты. Тег v* / ручной запуск → тесты + сборка/пуш образа.
+# Пуш в master (дефолтная ветка репо) → тесты. Тег v* / ручной запуск →
+# тесты + сборка/пуш образа.
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*"]
   workflow_dispatch: {}
 
