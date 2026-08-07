@@ -20,6 +20,28 @@ _USER_FAMILY_PREFIX = "identity:refresh-family:"
 _MAGIC_LINK_PREFIX = "identity:magic-link:"
 _MAGIC_LINK_QUOTA_PREFIX = "identity:magic-link-quota:"
 
+# Счётчик писем на адрес: INCR и установка TTL — одной атомарной операцией.
+#
+# Наивная пара «INCR, затем EXPIRE только при count == 1» имеет узкое, но
+# необратимое окно отказа: если процесс умрёт (или Redis отвергнет вторую
+# команду) между командами, ключ останется БЕЗ TTL — навсегда. Счётчик такого
+# адреса больше никогда не обнулится, ссылка входа на него не уйдёт НИКОГДА,
+# а инструмента сброса у поддержки нет. Скрипт закрывает окно и заодно лечит
+# уже испорченные ключи: TTL проставляется всякий раз, когда его нет
+# (``TTL`` возвращает -1 у ключа без срока жизни).
+#
+# Почему Lua, а не ``EXPIRE key ttl NX``: опция NX появилась только в Redis 7.
+# В проде и compose стоит 7 (infra/helm values.yaml, web/docker-compose.yml),
+# но у разработчика локально может оказаться 6.x, и вход падал бы с ошибкой
+# команды. ``EVAL`` есть с 2.6 и даёт ту же атомарность.
+_QUOTA_INCR_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+if redis.call('TTL', KEYS[1]) < 0 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+"""
+
 
 class RedisStateStore:
     """Одноразовый ``state`` + секреты OIDC-потока (PKCE ``code_verifier``, ``nonce``).
@@ -80,12 +102,16 @@ class RedisMagicLinkStore:
         return None if raw is None else str(raw)
 
     async def count_request(self, quota_key: str, window_seconds: int) -> int:
-        """Счётчик писем в фиксированном окне (``INCR`` + ``EXPIRE`` на первом)."""
+        """Счётчик писем в фиксированном окне; TTL проставляется атомарно.
+
+        См. :data:`_QUOTA_INCR_SCRIPT` — почему это скрипт, а не пара команд:
+        ключ, оставшийся без TTL, заблокировал бы адрес навсегда.
+        """
         key = f"{_MAGIC_LINK_QUOTA_PREFIX}{quota_key}"
-        count = int(await self._redis.incr(key))
-        if count == 1:
-            await self._redis.expire(key, window_seconds)
-        return count
+        count = await self._redis.eval(  # type: ignore[misc]  # redis stub sync/async union
+            _QUOTA_INCR_SCRIPT, 1, key, str(window_seconds)
+        )
+        return int(count)
 
 
 class RedisRefreshTokenStore:
