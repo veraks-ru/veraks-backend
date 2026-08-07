@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import NoReturn
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -13,6 +14,7 @@ from app.modules.identity.adapters.orm import ConsentORM, UserORM
 from app.modules.identity.domain.consent import Consent
 from app.modules.identity.domain.entities import User, UserStatus
 from app.modules.identity.ports.repositories import (
+    EmailAlreadyExistsError,
     SnilsAlreadyExistsError,
     UsernameTakenError,
 )
@@ -41,6 +43,12 @@ class SqlAlchemyUserRepository:
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm else None
 
+    async def get_by_email(self, email: str) -> User | None:
+        """Аккаунт по email (citext — регистронезависимо)."""
+        stmt = select(UserORM).where(UserORM.email == email)
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
+        return orm.to_domain() if orm else None
+
     async def get_by_username(self, username: str) -> User | None:
         """Аккаунт по публичному хэндлу (citext — регистронезависимо)."""
         stmt = select(UserORM).where(UserORM.username == username)
@@ -62,25 +70,23 @@ class SqlAlchemyUserRepository:
             await self._session.flush()
         except IntegrityError as exc:
             await self._session.rollback()
-            constraint = _constraint_name(exc)
-            if constraint and "snils_hash" in constraint:
-                raise SnilsAlreadyExistsError(str(exc)) from exc
-            if constraint and "username" in constraint:
-                raise UsernameTakenError(str(exc)) from exc
-            raise
+            _raise_unique_violation(exc)
         return orm.to_domain()
 
     async def update(self, user: User) -> User:
         """Обновляет изменяемые поля существующего аккаунта.
 
         Смена ``username`` может нарушить ``UNIQUE(username)`` (пользователь
-        выбрал занятый хэндл в PATCH /users/me или онбординге) — разбираем
-        так же, как в ``add()``.
+        выбрал занятый хэндл в PATCH /users/me или онбординге), смена
+        ``email`` — частичный ``UNIQUE(email)`` (админ переносит адрес на
+        аккаунт, где он уже есть) — разбираем так же, как в ``add()``.
         """
         orm = await self._session.get(UserORM, user.id)
         if orm is None:  # pragma: no cover — вызывается только для существующих
             raise SnilsAlreadyExistsError("Аккаунт исчез во время обновления")
         orm.esia_oid_hash = user.esia_oid_hash
+        orm.email = user.email
+        orm.identity_verified = user.identity_verified
         orm.username = user.username
         orm.display_name = user.display_name
         orm.real_name_enc = user.real_name_enc
@@ -91,10 +97,7 @@ class SqlAlchemyUserRepository:
             await self._session.flush()
         except IntegrityError as exc:
             await self._session.rollback()
-            constraint = _constraint_name(exc)
-            if constraint and "username" in constraint:
-                raise UsernameTakenError(str(exc)) from exc
-            raise
+            _raise_unique_violation(exc)
         return orm.to_domain()
 
 
@@ -139,6 +142,25 @@ def _constraint_name(exc: IntegrityError) -> str | None:
     if constraint:
         return str(constraint)
     return str(exc.orig)
+
+
+def _raise_unique_violation(exc: IntegrityError) -> NoReturn:
+    """Переводит нарушение UNIQUE в ошибку порта (или пробрасывает как есть).
+
+    Одна точка разбора на ``add``/``update``: имена ограничений и их смысл не
+    должны расходиться между вставкой и обновлением. Неопознанное нарушение
+    целостности не маскируем — пробрасываем, чтобы не выдать баг схемы за
+    «занятый хэндл».
+    """
+    constraint = _constraint_name(exc)
+    if constraint:
+        if "email" in constraint:
+            raise EmailAlreadyExistsError(str(exc)) from exc
+        if "snils_hash" in constraint:
+            raise SnilsAlreadyExistsError(str(exc)) from exc
+        if "username" in constraint:
+            raise UsernameTakenError(str(exc)) from exc
+    raise exc
 
 
 class SqlAlchemyConsentRepository:

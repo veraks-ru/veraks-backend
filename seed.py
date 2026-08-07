@@ -186,6 +186,13 @@ async def build() -> tuple[list[uuid.UUID], uuid.UUID]:
                 id=uuid.uuid4(),
                 esia_oid_hash=oid_hasher.hash(f"oid-{username}"),
                 snils_hash=hasher.hash(Snils.parse(digits)),
+                # Демо-аккаунты заведены как ЕСИА-пользователи, поэтому
+                # identity_verified=True. Адрес нужен, чтобы в демо можно было
+                # войти и по email-ссылке (ЕСИА сейчас выключена): домен
+                # .local заведомо недоставляемый — письмо уйдёт в mailpit или
+                # в лог, наружу ничего не улетит.
+                email=f"{username}@veraks.local",
+                identity_verified=True,
                 username=username,
                 display_name=display,
                 real_name_enc=None,

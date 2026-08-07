@@ -9,8 +9,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from sqlalchemy import Boolean, ForeignKey, String, Text
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import CITEXT, INET, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,13 +31,26 @@ _status_enum = SAEnum(
 
 
 class UserORM(Base):
-    """Таблица ``users`` — аккаунты, привязанные к гражданам (ЕСИА/СНИЛС)."""
+    """Таблица ``users`` — аккаунты участников (ЕСИА/СНИЛС либо email).
+
+    ``esia_oid_hash``/``snils_hash``/``email`` nullable: аккаунт заполняет
+    либо пару хэшей (регистрация через ЕСИА), либо адрес (регистрация по
+    ссылке на почту). Уникальность каждого из трёх — ЧАСТИЧНЫМИ уникальными
+    индексами ``WHERE … IS NOT NULL`` (миграция 0030): так ограничение
+    выражает ровно намерение «уникален заполненный», не полагаясь на то, что
+    Postgres не сравнивает NULL-ы между собой. Индексы объявлены в миграции и
+    здесь не дублируются, чтобы описания не разъезжались.
+    """
 
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    esia_oid_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    snils_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    esia_oid_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    snils_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    email: Mapped[str | None] = mapped_column(CITEXT, nullable=True)
+    identity_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     username: Mapped[str] = mapped_column(CITEXT, unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String, nullable=False)
     real_name_enc: Mapped[bytes | None] = mapped_column(nullable=True)
@@ -54,6 +67,8 @@ class UserORM(Base):
             id=self.id,
             esia_oid_hash=self.esia_oid_hash,
             snils_hash=self.snils_hash,
+            email=self.email,
+            identity_verified=self.identity_verified,
             username=self.username,
             display_name=self.display_name,
             real_name_enc=self.real_name_enc,
@@ -70,6 +85,8 @@ class UserORM(Base):
             id=user.id,
             esia_oid_hash=user.esia_oid_hash,
             snils_hash=user.snils_hash,
+            email=user.email,
+            identity_verified=user.identity_verified,
             username=user.username,
             display_name=user.display_name,
             real_name_enc=user.real_name_enc,

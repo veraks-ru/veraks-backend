@@ -28,6 +28,10 @@ class UserRepository(Protocol):
         """Аккаунт по HMAC-хешу стабильного идентификатора ЕСИА."""
         ...
 
+    async def get_by_email(self, email: str) -> User | None:
+        """Аккаунт по нормализованному email (citext) или ``None``."""
+        ...
+
     async def get_by_username(self, username: str) -> User | None:
         """Аккаунт по публичному хэндлу (citext, регистронезависимо) или ``None``."""
         ...
@@ -39,8 +43,9 @@ class UserRepository(Protocol):
     async def add(self, user: User) -> User:
         """Сохраняет новый аккаунт.
 
-        Поднимает :class:`UsernameTakenError` или :class:`SnilsAlreadyExistsError`
-        при нарушении уникальности (гонка параллельных регистраций).
+        Поднимает :class:`UsernameTakenError`, :class:`SnilsAlreadyExistsError`
+        или :class:`EmailAlreadyExistsError` при нарушении уникальности
+        (гонка параллельных регистраций).
         """
         ...
 
@@ -71,3 +76,7 @@ class UsernameTakenError(Exception):
 
 class SnilsAlreadyExistsError(Exception):
     """Нарушение ``UNIQUE(snils_hash)`` — параллельная регистрация того же гражданина."""
+
+
+class EmailAlreadyExistsError(Exception):
+    """Нарушение частичного ``UNIQUE(email)`` — адрес уже занят другим аккаунтом."""
