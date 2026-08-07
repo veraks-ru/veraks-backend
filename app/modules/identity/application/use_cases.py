@@ -31,6 +31,7 @@ from app.modules.identity.domain.errors import (
     InvalidMagicLinkError,
     InvalidStateError,
     InvalidTokenError,
+    InvalidUserStatusError,
     UsernameAlreadyTakenError,
     UserNotFoundError,
 )
@@ -69,6 +70,7 @@ from app.modules.identity.ports.security import (
 )
 from app.shared.audit.domain.entities import AuditActorType
 from app.shared.audit.ports.audit_trail import AuditTrail
+from app.shared.mail.domain.message import EmailMessage
 from app.shared.mail.ports.sender import EmailSender
 
 _LOG = logging.getLogger(__name__)
@@ -251,6 +253,17 @@ class RequestEmailLogin:
     превращает эндпоинт в проверялку «зарегистрирован ли такой человек».
     Ошибки уходят в лог, а не пользователю.
 
+    Операция намеренно разбита надвое:
+
+    * :meth:`execute` — то, что обязано случиться ДО ответа: учёт лимита и
+      сохранение ссылки. Ссылку нельзя откладывать «на потом» — иначе быстрый
+      переход по письму мог бы обогнать запись токена;
+    * :meth:`deliver` — сама отправка, которую вызывающий ставит в фон уже
+      ПОСЛЕ ответа 202. SMTP-сервер отвечает не мгновенно (а неотвечающий —
+      до таймаута), и держать человека на спиннере всё это время незачем.
+      Побочно это укрепляет анти-энумерацию: время ответа больше не зависит
+      от поведения почтового сервера.
+
     Пользователя тут НЕ создаём: аккаунт заводится только при реальном
     переходе по ссылке (``CompleteEmailLogin``), иначе чужой почтовый адрес
     можно было бы «занять» одним POST-запросом.
@@ -267,32 +280,46 @@ class RequestEmailLogin:
         self._sender = sender
         self._link_base_url = link_base_url.rstrip("/")
 
-    async def execute(self, *, email: str) -> None:
-        """Нормализует адрес, проверяет лимит, шлёт письмо со ссылкой."""
+    async def execute(self, *, email: str) -> EmailMessage | None:
+        """Учитывает лимит и выпускает ссылку; возвращает письмо к доставке.
+
+        ``None`` — доставлять нечего (исчерпан лимит писем на адрес). Вызвать
+        :meth:`deliver` для непустого результата — обязанность вызывающего.
+        """
         address = normalize_email(email)
         sent_in_window = await self._links.count_request(
             email_quota_key(address), LETTERS_WINDOW_SECONDS
         )
         if sent_in_window > MAX_LETTERS_PER_EMAIL:
-            # Адрес в лог не пишем — это ПДн; для расследования достаточно
-            # факта и счётчика (сам ключ счётчика уже псевдонимизирован).
+            # Адрес в лог не пишем — это ПДн; для разбора достаточно факта и
+            # счётчика.
             _LOG.warning(
                 "Превышен лимит писем со ссылкой входа на один адрес "
                 "(%s за %s секунд) — письмо не отправлено",
                 sent_in_window,
                 LETTERS_WINDOW_SECONDS,
             )
-            return
+            return None
 
         token = generate_magic_link_token()
         await self._links.save(
             hash_magic_link_token(token), address, MAGIC_LINK_TTL_SECONDS
         )
-        letter = build_magic_link_letter(
+        return build_magic_link_letter(
             to=address,
             link=f"{self._link_base_url}/auth/email/callback?token={token}",
             ttl_minutes=MAGIC_LINK_TTL_MINUTES,
         )
+
+    async def deliver(self, letter: EmailMessage) -> None:
+        """Отправляет письмо, гася любой сбой в лог (вызывается фоном).
+
+        Исключение отсюда наверх не уходит намеренно и по двум причинам: ответ
+        клиенту уже отдан (поднимать нечего и некому), а если бы сбой доставки
+        влиял на код ответа — по нему различались бы существующие адреса.
+        Ссылка при этом уже лежит в сторе: оператор может достать её из логов
+        и впустить человека вручную.
+        """
         try:
             await self._sender.send(letter)
         except Exception:  # noqa: BLE001 — см. докстринг: 202 в любом случае
@@ -309,6 +336,14 @@ class CompleteEmailLogin:
     Одноразовость ссылки обеспечивает атомарное гашение в сторе (``GETDEL``),
     а не проверка «а не использован ли токен» — иначе два параллельных
     перехода дали бы две сессии.
+
+    Токен гасится ДО обращения к БД, и это осознанный fail-closed: если
+    следом упадёт запись пользователя (недоступна БД, откат транзакции),
+    ссылка уже потрачена и человеку придётся запросить новую. Обратный
+    порядок был бы хуже: он оставлял бы окно, в котором сбой на любом шаге
+    после успешного входа возвращает ссылку в оборот, а значит одноразовость
+    перестаёт быть гарантией. Цена ошибки несимметрична — лишнее письмо
+    дешевле повторно используемой ссылки входа.
 
     Инвариант «1 человек = 1 аккаунт» здесь держится на адресе: find-or-create
     по ``email`` с той же защитой от гонки, что и у ЕСИА-потока (ловим
@@ -816,6 +851,13 @@ class ChangeUserEmail:
     всегда, даже если адрес совпал с прежним, — операция идемпотентна и
     дешевле, чем рассуждать о том, была ли смена «настоящей».
 
+    Удалённому аккаунту адрес назначить нельзя (``InvalidUserStatusError``,
+    409): удаление обнуляет email именно ради минимизации ПДн (см.
+    ``User.anonymize_for_deletion``), и вернуть его туда админской ручкой —
+    значит тихо отменить исполненное право на удаление. Заодно это закрывает
+    побочный эффект: адрес на удалённой строке блокировал бы регистрацию
+    живого человека на свой же ящик.
+
     Сам адрес в аудит НЕ пишем — это ПДн; в журнале остаются актор, цель и
     факт события.
     """
@@ -837,6 +879,11 @@ class ChangeUserEmail:
         target = await self._users.get_by_id(target_id)
         if target is None:
             raise UserNotFoundError("Пользователь не найден")
+        if target.status is UserStatus.DELETED:
+            raise InvalidUserStatusError(
+                "Нельзя назначить адрес удалённому аккаунту: удаление стирает "
+                "email намеренно (152-ФЗ)"
+            )
 
         if target.change_email(normalize_email(email)):
             try:

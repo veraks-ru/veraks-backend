@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -156,6 +157,66 @@ def test_request_over_limit_still_202(context) -> None:
 
     assert resp.status_code == 202
     assert len(sender.sent) == MAX_LETTERS_PER_EMAIL
+
+
+async def test_response_is_sent_before_the_letter() -> None:
+    """202 уходит клиенту ДО отправки письма (доставка — фоновой задачей).
+
+    Проверяем на уровне ASGI, а не через ``TestClient``: клиент дожидается
+    фоновых задач, поэтому по времени ответа ничего не докажешь, — зато сам
+    протокол упорядочен, и видно, что ``http.response.body`` отправлен раньше,
+    чем сработал отправитель. Смысл: SMTP отвечает не мгновенно, а
+    неотвечающий держал бы соединение до таймаута, и всё это время человек
+    смотрел бы на спиннер.
+    """
+    order: list[str] = []
+
+    class _RecordingSender:
+        async def send(self, message) -> None:
+            order.append("письмо отправлено")
+
+    links = FakeMagicLinkStore()
+    app = create_app()
+    app.dependency_overrides[get_magic_link_store] = lambda: links
+    app.dependency_overrides[get_email_sender] = _RecordingSender
+
+    body = json.dumps({"email": "user@example.com"}).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/auth/email/request",
+        "raw_path": b"/auth/email/request",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+    statuses: list[int] = []
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        if message["type"] == "http.response.start":
+            statuses.append(int(message["status"]))  # type: ignore[arg-type]
+        if message["type"] == "http.response.body" and not message.get("more_body"):
+            order.append("ответ отдан")
+
+    await app(scope, receive, send)
+
+    assert statuses == [202]
+    assert order == ["ответ отдан", "письмо отправлено"]
+    # Ссылка при этом выпущена ДО ответа — иначе быстрый переход по письму
+    # мог бы обогнать запись токена.
+    assert links.saved
 
 
 def test_request_rejects_malformed_address(context) -> None:
@@ -341,6 +402,41 @@ def test_admin_cannot_move_email_to_taken_address(context) -> None:
 
     assert resp.status_code == 409
     assert resp.json()["error"] == "EmailAlreadyTakenError"
+
+
+def test_admin_cannot_assign_email_to_deleted_account(context) -> None:
+    """Удалённому аккаунту адрес не вернуть: это отменяло бы удаление.
+
+    Удаление обнуляет email намеренно (152-ФЗ); админская ручка не должна
+    быть обходным путём вернуть ПДн на место. Побочно: адрес на удалённой
+    строке блокировал бы регистрацию живого человека на его же ящик.
+    """
+    client, repo, sender = context
+    victim = _login(client, sender, "gone@example.com").json()
+    stored = client.portal.call(repo.get_by_id, uuid.UUID(victim["id"]))
+    assert stored is not None
+    stored.anonymize_for_deletion()
+    client.portal.call(repo.update, stored)
+    client.cookies.clear()
+    admin = User(
+        username="admin",
+        display_name="Админ",
+        real_name_enc=None,
+        email="admin@example.com",
+        role=UserRole.ADMIN,
+    )
+    client.portal.call(repo.add, admin)
+    _login(client, sender, "admin@example.com")
+
+    resp = client.post(
+        f"/admin/users/{victim['id']}/email", json={"email": "back@example.com"}
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "InvalidUserStatusError"
+    restored = client.portal.call(repo.get_by_id, uuid.UUID(victim["id"]))
+    assert restored is not None
+    assert restored.email is None
 
 
 def test_change_email_requires_admin(context) -> None:

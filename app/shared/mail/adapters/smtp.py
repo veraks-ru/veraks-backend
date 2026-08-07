@@ -24,8 +24,9 @@ class SmtpEmailSender:
     STARTTLS не запрашивается.
     """
 
-    def __init__(self, settings: MailSettings) -> None:
+    def __init__(self, settings: MailSettings, *, timeout_seconds: float = 10.0) -> None:
         self._settings = settings
+        self._timeout = timeout_seconds
 
     async def send(self, message: EmailMessage) -> None:
         """Собирает multipart/alternative и отправляет его SMTP-серверу."""
@@ -48,4 +49,9 @@ class SmtpEmailSender:
             password=self._settings.password or None,
             use_tls=use_tls,
             start_tls=self._settings.use_starttls if not use_tls else False,
+            # Дефолт aiosmtplib — 60 секунд. Это не «на всякий случай»
+            # большое число: неотвечающий SMTP держал бы фоновую задачу
+            # (а раньше — и HTTP-запрос) целую минуту. Письмо со ссылкой
+            # входа либо уходит быстро, либо не уходит вовсе.
+            timeout=self._timeout,
         )

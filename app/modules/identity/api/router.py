@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Cookie,
+    Depends,
+    HTTPException,
+    Response,
+    status,
+)
 from fastapi.responses import RedirectResponse
 
 from app.config import SettingsDep
@@ -246,6 +254,7 @@ async def esia_callback(
 )
 async def request_email_login(
     payload: EmailLoginRequest,
+    background: BackgroundTasks,
     uc: Annotated[RequestEmailLogin, Depends(get_request_email_login)],
 ) -> Response:
     """Всегда 202 без тела — независимо от того, есть ли такой аккаунт.
@@ -257,10 +266,23 @@ async def request_email_login(
     а не клиенту.
 
     Различимо наружу только одно: 422 на синтаксически неверный адрес (это
-    свойство самой строки, а не факт регистрации) и 429 от общего лимита
-    ``/auth`` по IP.
+    свойство самой строки, а не факт регистрации) и 429 от лимита попыток
+    входа по IP.
+
+    Статус именно 202 Accepted, а не 200: письмо к моменту ответа ещё не
+    отправлено. Отправка уходит в фоновую задачу — SMTP-сервер отвечает не
+    мгновенно, а неотвечающий держал бы соединение до таймаута, и всё это
+    время человек смотрел бы на спиннер. Выдача самой ссылки (учёт лимита +
+    запись токена) происходит ДО ответа: отложи мы её, быстрый переход по
+    письму мог бы обогнать запись.
+
+    В фон уходит только отправка письма — она не держит ни сессию БД, ни
+    другие ресурсы запроса (``RequestEmailLogin`` работает с Redis и SMTP),
+    поэтому переживает закрытие запроса без сюрпризов.
     """
-    await uc.execute(email=str(payload.email))
+    letter = await uc.execute(email=str(payload.email))
+    if letter is not None:
+        background.add_task(uc.deliver, letter)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 

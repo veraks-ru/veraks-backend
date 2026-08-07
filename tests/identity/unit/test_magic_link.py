@@ -57,6 +57,21 @@ def _request_uc(links: FakeMagicLinkStore, sender: FakeEmailSender) -> RequestEm
     return RequestEmailLogin(links=links, sender=sender, link_base_url=LINK_BASE)
 
 
+async def _request_and_deliver(
+    links: FakeMagicLinkStore, sender: FakeEmailSender, email: str
+) -> None:
+    """Полный запрос ссылки, как его выполняет роутер: выпуск + фоновая отправка.
+
+    Отправка вынесена из ``execute`` (ответ 202 не ждёт SMTP), поэтому тесты,
+    которым важен факт письма, повторяют связку роутера, а не зовут ``execute``
+    в надежде на побочный эффект.
+    """
+    uc = _request_uc(links, sender)
+    letter = await uc.execute(email=email)
+    if letter is not None:
+        await uc.deliver(letter)
+
+
 def _complete_uc(
     links: FakeMagicLinkStore,
     repo: InMemoryUserRepository,
@@ -95,7 +110,7 @@ def test_token_is_unique_and_hash_is_deterministic() -> None:
 
 async def test_request_stores_hash_not_token(links, sender) -> None:
     """В хранилище уходит ХЭШ токена; сам токен есть только в письме."""
-    await _request_uc(links, sender).execute(email="Ivan@Example.RU")
+    await _request_and_deliver(links, sender, "Ivan@Example.RU")
 
     token = sender.last_token()
     stored_hash, stored_email, ttl = links.saved[-1]
@@ -107,7 +122,7 @@ async def test_request_stores_hash_not_token(links, sender) -> None:
 
 
 async def test_request_letter_contains_link_and_expiry_notice(links, sender) -> None:
-    await _request_uc(links, sender).execute(email=" user@example.com ")
+    await _request_and_deliver(links, sender, " user@example.com ")
 
     letter = sender.sent[-1]
     assert letter.to == "user@example.com"
@@ -125,12 +140,12 @@ async def test_request_stops_sending_after_limit_but_stays_silent(
     links, sender
 ) -> None:
     """Свыше N писем в час на адрес — письма нет, но и ошибки наружу нет."""
-    uc = _request_uc(links, sender)
     for _ in range(MAX_LETTERS_PER_EMAIL):
-        await uc.execute(email="victim@example.com")
+        await _request_and_deliver(links, sender, "victim@example.com")
     assert len(sender.sent) == MAX_LETTERS_PER_EMAIL
 
-    await uc.execute(email="victim@example.com")  # (N+1)-е — не уходит
+    # (N+1)-е — письма к доставке нет вовсе.
+    assert await _request_uc(links, sender).execute(email="victim@example.com") is None
 
     assert len(sender.sent) == MAX_LETTERS_PER_EMAIL
     # Лишняя ссылка даже не выпускалась: нечего было бы перехватывать.
@@ -139,20 +154,38 @@ async def test_request_stops_sending_after_limit_but_stays_silent(
 
 async def test_request_limit_counted_per_address(links, sender) -> None:
     """Лимит на один адрес не мешает писать на другой."""
-    uc = _request_uc(links, sender)
     for _ in range(MAX_LETTERS_PER_EMAIL + 1):
-        await uc.execute(email="one@example.com")
+        await _request_and_deliver(links, sender, "one@example.com")
 
-    await uc.execute(email="two@example.com")
+    await _request_and_deliver(links, sender, "two@example.com")
 
     assert sender.sent[-1].to == "two@example.com"
 
 
-async def test_request_survives_broken_smtp(links) -> None:
-    """Сбой отправки не поднимается наверх: иначе 202/500 выдали бы адреса."""
+async def test_delivery_is_not_part_of_the_request(links, sender) -> None:
+    """``execute`` НЕ отправляет письмо: 202 не должен ждать SMTP.
+
+    Ответ отдаётся сразу, доставка уходит в фоновую задачу роутера. Выдача
+    ссылки при этом обязана произойти до ответа — иначе быстрый переход по
+    письму мог бы обогнать запись токена.
+    """
+    uc = _request_uc(links, sender)
+
+    letter = await uc.execute(email="user@example.com")
+
+    assert sender.sent == []  # ничего не отправлено синхронно
+    assert links.saved  # но ссылка уже в сторе
+    assert letter is not None and letter.to == "user@example.com"
+
+    await uc.deliver(letter)
+    assert [m.to for m in sender.sent] == ["user@example.com"]
+
+
+async def test_delivery_survives_broken_smtp(links) -> None:
+    """Сбой фоновой отправки не поднимается наверх и не влияет на ответ."""
     sender = FakeEmailSender(fail=True)
 
-    await _request_uc(links, sender).execute(email="user@example.com")
+    await _request_and_deliver(links, sender, "user@example.com")
 
     assert sender.sent == []
     assert links.saved  # ссылка выпущена — оператор достанет её из логов
@@ -160,7 +193,7 @@ async def test_request_survives_broken_smtp(links) -> None:
 
 async def test_request_does_not_create_user(links, sender, repo) -> None:
     """Аккаунт заводится переходом по ссылке, а не запросом письма."""
-    await _request_uc(links, sender).execute(email="stranger@example.com")
+    await _request_and_deliver(links, sender, "stranger@example.com")
 
     assert await repo.get_by_email("stranger@example.com") is None
 
@@ -171,7 +204,7 @@ async def test_request_does_not_create_user(links, sender, repo) -> None:
 async def test_callback_creates_account_without_snils(
     links, sender, repo, token_issuer
 ) -> None:
-    await _request_uc(links, sender).execute(email="new@example.com")
+    await _request_and_deliver(links, sender, "new@example.com")
 
     result = await _complete_uc(links, repo, token_issuer).execute(
         token=sender.last_token()
@@ -192,7 +225,7 @@ async def test_callback_creates_account_without_snils(
 
 
 async def test_link_works_exactly_once(links, sender, repo, token_issuer) -> None:
-    await _request_uc(links, sender).execute(email="user@example.com")
+    await _request_and_deliver(links, sender, "user@example.com")
     token = sender.last_token()
     uc = _complete_uc(links, repo, token_issuer)
 
@@ -204,7 +237,7 @@ async def test_link_works_exactly_once(links, sender, repo, token_issuer) -> Non
 
 async def test_expired_link_rejected(links, sender, repo, token_issuer) -> None:
     """Истёкшая запись (TTL в Redis) неотличима от неизвестного токена."""
-    await _request_uc(links, sender).execute(email="user@example.com")
+    await _request_and_deliver(links, sender, "user@example.com")
     token = sender.last_token()
     links.expire(hash_magic_link_token(token))
 
@@ -221,11 +254,11 @@ async def test_second_login_same_email_reuses_account(
     links, sender, repo, token_issuer
 ) -> None:
     uc = _complete_uc(links, repo, token_issuer)
-    request = _request_uc(links, sender)
 
-    await request.execute(email="user@example.com")
+    await _request_and_deliver(links, sender, "user@example.com")
     first = await uc.execute(token=sender.last_token())
-    await request.execute(email="USER@example.com")  # другой регистр — тот же ящик
+    # Другой регистр — тот же ящик.
+    await _request_and_deliver(links, sender, "USER@example.com")
     second = await uc.execute(token=sender.last_token())
 
     assert second.is_new_user is False
@@ -240,7 +273,7 @@ async def test_race_on_email_enters_the_winner(
     Эмулируем гонку так же, как в ЕСИА-потоке: аккаунт появляется ПОСЛЕ
     проверки «есть ли такой email», уже во время вставки.
     """
-    await _request_uc(links, sender).execute(email="race@example.com")
+    await _request_and_deliver(links, sender, "race@example.com")
     token = sender.last_token()
 
     winner = User.register_with_email(email="race@example.com", username="winner")
@@ -266,7 +299,7 @@ async def test_username_race_reallocates_handle(
     links, sender, repo, token_issuer
 ) -> None:
     """Занятый в момент вставки хэндл переаллоцируется, вход не падает."""
-    await _request_uc(links, sender).execute(email="user@example.com")
+    await _request_and_deliver(links, sender, "user@example.com")
     original_add = repo.add
     calls = {"n": 0}
 
@@ -302,7 +335,7 @@ async def test_deletion_clears_email_and_frees_the_address(
     аккаунт при этом остаётся удалённым — он не «воскресает», а адрес просто
     больше ни на что не указывает.
     """
-    await _request_uc(links, sender).execute(email="user@example.com")
+    await _request_and_deliver(links, sender, "user@example.com")
     first = await _complete_uc(links, repo, token_issuer).execute(
         token=sender.last_token()
     )
@@ -314,7 +347,7 @@ async def test_deletion_clears_email_and_frees_the_address(
     assert (await repo.get_by_id(first.user_id)).email is None
     assert await repo.get_by_email("user@example.com") is None
 
-    await _request_uc(links, sender).execute(email="user@example.com")
+    await _request_and_deliver(links, sender, "user@example.com")
     second = await _complete_uc(links, repo, token_issuer).execute(
         token=sender.last_token()
     )
@@ -345,7 +378,7 @@ async def test_deleted_esia_account_still_blocked_by_snils(
         status=UserStatus.DELETED,
     )
     await repo.add(user)
-    await _request_uc(links, sender).execute(email="gone@example.com")
+    await _request_and_deliver(links, sender, "gone@example.com")
 
     with pytest.raises(AccountDeletedError):
         await _complete_uc(links, repo, token_issuer).execute(
@@ -365,7 +398,7 @@ async def test_suspended_account_cannot_login_by_email(
             status=UserStatus.SUSPENDED,
         )
     )
-    await _request_uc(links, sender).execute(email="blocked@example.com")
+    await _request_and_deliver(links, sender, "blocked@example.com")
 
     with pytest.raises(AccountSuspendedError):
         await _complete_uc(links, repo, token_issuer).execute(
@@ -378,7 +411,7 @@ async def test_login_audit_records_method_without_pii(
 ) -> None:
     """В аудите — способ входа и флаг новизны, но никакого адреса."""
     audit = FakeAuditTrail()
-    await _request_uc(links, sender).execute(email="user@example.com")
+    await _request_and_deliver(links, sender, "user@example.com")
 
     await _complete_uc(links, repo, token_issuer, audit=audit).execute(
         token=sender.last_token()
