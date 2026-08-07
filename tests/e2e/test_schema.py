@@ -58,6 +58,66 @@ async def test_subscription_plan_enum_has_tariffs(session: AsyncSession) -> None
     assert {"daily", "weekly", "monthly", "annual"} <= values
 
 
+async def _insert_user(session: AsyncSession, **columns: object) -> None:
+    """Вставляет строку users минимальным набором полей (остальное — server_default)."""
+    names = ", ".join(columns)
+    values = ", ".join(f":{name}" for name in columns)
+    await session.execute(
+        text(f"INSERT INTO users (id, {names}) VALUES (gen_random_uuid(), {values})"),
+        columns,
+    )
+
+
+async def test_users_esia_keys_are_nullable_after_0030(session: AsyncSession) -> None:
+    """Аккаунт без СНИЛС и без oid ЕСИА — легальное состояние (вход по email).
+
+    До 0030 оба поля были NOT NULL, то есть схема допускала только
+    ЕСИА-регистрацию.
+    """
+    await _insert_user(session, username="mailonly-1", display_name="Один",
+                       email="one@example.test")
+    await _insert_user(session, username="mailonly-2", display_name="Два",
+                       email="two@example.test")
+    await session.commit()
+
+    count = (
+        await session.execute(
+            text("SELECT count(*) FROM users WHERE snils_hash IS NULL")
+        )
+    ).scalar_one()
+    assert count == 2  # NULL-ы не конфликтуют между собой в частичном индексе
+
+
+async def test_users_email_is_unique_case_insensitively(
+    session: AsyncSession,
+) -> None:
+    """citext + частичный UNIQUE: один ящик — один аккаунт, регистр не спасает."""
+    await _insert_user(session, username="first", display_name="Первый",
+                       email="User@Example.test")
+    await session.commit()
+
+    with pytest.raises(DBAPIError) as exc:
+        await _insert_user(session, username="second", display_name="Второй",
+                           email="user@example.test")
+        await session.commit()
+    assert "ux_users_email" in str(exc.value)
+    await session.rollback()
+
+
+async def test_identity_verified_defaults_to_false(session: AsyncSession) -> None:
+    """Новый аккаунт не считается идентифицированным, пока не доказано обратное."""
+    await _insert_user(session, username="fresh", display_name="Новый",
+                       email="fresh@example.test")
+    await session.commit()
+
+    verified = (
+        await session.execute(
+            text("SELECT identity_verified FROM users WHERE username = 'fresh'")
+        )
+    ).scalar_one()
+    assert verified is False
+
+
 async def test_audit_log_is_append_only_delete_blocked(
     session: AsyncSession,
 ) -> None:

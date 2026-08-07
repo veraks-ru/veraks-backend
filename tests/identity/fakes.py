@@ -19,10 +19,12 @@ from app.modules.identity.domain.consent import Consent
 from app.modules.identity.domain.entities import User, UserStatus
 from app.modules.identity.domain.value_objects import EsiaIdentity, EsiaTokens
 from app.modules.identity.ports.repositories import (
+    EmailAlreadyExistsError,
     SnilsAlreadyExistsError,
     UsernameTakenError,
 )
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
+from app.shared.mail.domain.message import EmailMessage
 
 
 class InMemoryUserRepository:
@@ -46,6 +48,12 @@ class InMemoryUserRepository:
                 return self._clone(user)
         return None
 
+    async def get_by_email(self, email: str) -> User | None:
+        for user in self._by_id.values():
+            if user.email is not None and user.email.lower() == email.lower():
+                return self._clone(user)
+        return None
+
     async def get_by_username(self, username: str) -> User | None:
         for user in self._by_id.values():
             if user.username.lower() == username.lower():
@@ -57,8 +65,11 @@ class InMemoryUserRepository:
 
     async def add(self, user: User) -> User:
         for existing in self._by_id.values():
-            if existing.snils_hash == user.snils_hash:
+            # Частичный UNIQUE: NULL-и не конфликтуют между собой.
+            if user.snils_hash is not None and existing.snils_hash == user.snils_hash:
                 raise SnilsAlreadyExistsError(user.snils_hash)
+            if user.email is not None and _same_email(existing.email, user.email):
+                raise EmailAlreadyExistsError(user.email)
             if existing.username.lower() == user.username.lower():
                 raise UsernameTakenError(user.username)
         self._by_id[user.id] = self._clone(user)
@@ -66,8 +77,12 @@ class InMemoryUserRepository:
 
     async def update(self, user: User) -> User:
         for existing in self._by_id.values():
-            if existing.id != user.id and existing.username.lower() == user.username.lower():
+            if existing.id == user.id:
+                continue
+            if existing.username.lower() == user.username.lower():
                 raise UsernameTakenError(user.username)
+            if user.email is not None and _same_email(existing.email, user.email):
+                raise EmailAlreadyExistsError(user.email)
         self._by_id[user.id] = self._clone(user)
         return self._clone(user)
 
@@ -104,6 +119,8 @@ class InMemoryUserRepository:
             id=user.id,
             esia_oid_hash=user.esia_oid_hash,
             snils_hash=user.snils_hash,
+            email=user.email,
+            identity_verified=user.identity_verified,
             username=user.username,
             display_name=user.display_name,
             real_name_enc=user.real_name_enc,
@@ -112,6 +129,67 @@ class InMemoryUserRepository:
             created_at=user.created_at,
             onboarded_at=user.onboarded_at,
         )
+
+
+def _same_email(left: str | None, right: str | None) -> bool:
+    """Сравнение адресов как в БД (citext — регистронезависимо)."""
+    if left is None or right is None:
+        return False
+    return left.lower() == right.lower()
+
+
+class FakeMagicLinkStore:
+    """Ссылки входа в памяти: одноразовость и счётчик писем на адрес.
+
+    TTL не эмулируется по времени — тестам достаточно того, что запись можно
+    выбросить вручную (``expire``); за реальное истечение отвечает Redis.
+    """
+
+    def __init__(self) -> None:
+        self._links: dict[str, str] = {}
+        self.counters: dict[str, int] = {}
+        # (token_hash, email, ttl) каждой выданной ссылки — для ассертов о TTL.
+        self.saved: list[tuple[str, str, int]] = []
+
+    async def save(self, token_hash: str, email: str, ttl_seconds: int) -> None:
+        self._links[token_hash] = email
+        self.saved.append((token_hash, email, ttl_seconds))
+
+    async def consume(self, token_hash: str) -> str | None:
+        return self._links.pop(token_hash, None)
+
+    async def count_request(self, quota_key: str, window_seconds: int) -> int:
+        self.counters[quota_key] = self.counters.get(quota_key, 0) + 1
+        return self.counters[quota_key]
+
+    def expire(self, token_hash: str) -> None:
+        """Тестовый помощник: «протухание» ссылки до её использования."""
+        self._links.pop(token_hash, None)
+
+
+class FakeEmailSender:
+    """Перехватывает письма вместо отправки; умеет притворяться сломанным SMTP."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.sent: list[EmailMessage] = []
+        self.fail = fail
+
+    async def send(self, message: EmailMessage) -> None:
+        if self.fail:
+            raise RuntimeError("SMTP недоступен")
+        self.sent.append(message)
+
+    def last_link(self) -> str:
+        """Ссылка входа из последнего письма (как её увидит пользователь)."""
+        body = self.sent[-1].text_body
+        for chunk in body.split():
+            if "token=" in chunk:
+                return chunk
+        raise AssertionError("В письме нет ссылки со ссылочным токеном")
+
+    def last_token(self) -> str:
+        """Одноразовый токен из последнего письма."""
+        return self.last_link().split("token=", 1)[1]
 
 
 class InMemoryConsentRepository:

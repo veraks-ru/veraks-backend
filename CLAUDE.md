@@ -86,9 +86,11 @@ arq app.worker.WorkerSettings   # фоновый воркер: скоринг, r
 
 ## Текущее состояние
 
-Реализованы все домены MVP (`app/modules/`): **identity** (ЕСИА OIDC, сессии
-JWT access + ротируемый refresh, «один человек = один аккаунт» по
-`UNIQUE(snils_hash)`), **events**, **predictions**, **scoring** (Brier,
+Реализованы все домены MVP (`app/modules/`): **identity** (два способа входа,
+включаются `AUTH_PROVIDERS`: email с одноразовой ссылкой — сейчас единственный
+включённый, и ЕСИА OIDC — выключена до договора с интегратором; сессии JWT
+access + ротируемый refresh; «один человек = один аккаунт» по частичным
+`UNIQUE(snils_hash)`/`UNIQUE(email)`), **events**, **predictions**, **scoring** (Brier,
 рейтинги, калибровка), **seasons**, **resolutions** (разрешение + споры),
 **billing** (две кассы, подписки, выплаты maker-checker), **notifications**
 (+ реал-тайм через goctopus), **social**, **leagues**, **b2b** (API-ключи,

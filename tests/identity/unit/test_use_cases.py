@@ -18,6 +18,7 @@ from app.modules.identity.adapters.security import (
     JwtTokenIssuer,
 )
 from app.modules.identity.application.dto import ConsentInput
+from app.modules.identity.application.login import SessionIssuer
 from app.modules.identity.application.use_cases import (
     CompleteEsiaLogin,
     CompleteOnboarding,
@@ -81,12 +82,14 @@ def _build_complete_login(
         snils_hasher=hasher,
         esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
-        tokens=token_issuer,
-        refresh_store=refresh_store,
+        sessions=SessionIssuer(
+            tokens=token_issuer,
+            refresh_store=refresh_store,
+            access_ttl_seconds=900,
+            refresh_ttl_seconds=3600,
+        ),
         state_store=state_store,
         require_confirmed=require_confirmed,
-        access_ttl_seconds=900,
-        refresh_ttl_seconds=3600,
         audit=audit if audit is not None else FakeAuditTrail(),
     )
 

@@ -19,6 +19,14 @@ os.environ.setdefault("SECURITY_JWT_SECRET", "test-jwt-secret-0123456789abcdef-p
 os.environ.setdefault("SECURITY_ACCESS_TOKEN_TTL_SECONDS", "900")
 os.environ.setdefault("SECURITY_REFRESH_TOKEN_TTL_SECONDS", "3600")
 os.environ.setdefault("SECURITY_COOKIE_SECURE", "false")
+# Оба провайдера входа включены: ЕСИА-поток из кода не удалён и обязан
+# оставаться работоспособным (его тесты — не про выключенный провайдер), а
+# email-поток тестируется рядом. Тесты «провайдер выключен» строят Settings
+# явно, а не через env.
+os.environ.setdefault("AUTH_PROVIDERS", "esia,email")
+# Почта в тестах не настроена (MAIL_HOST пуст) — это штатный режим «письма в
+# лог»; интеграционные тесты всё равно подменяют отправителя фейком.
+os.environ.setdefault("MAIL_LINK_BASE_URL", "https://veraks.test")
 os.environ.setdefault("ESIA_CLIENT_ID", "test-client")
 os.environ.setdefault("ESIA_REDIRECT_URI", "https://orakul.test/auth/esia/callback")
 os.environ.setdefault("ESIA_AUTHORIZATION_ENDPOINT", "https://esia.test/authorize")
