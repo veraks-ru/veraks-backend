@@ -8,6 +8,10 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    # Валидация формата email (pydantic EmailStr) — вход по одноразовой ссылке.
+    "email-validator>=2.0",
+    # SMTP поверх asyncio: письмо со ссылкой входа (см. app/shared/mail).
+    "aiosmtplib>=3.0",
     "sqlalchemy[asyncio]>=2.0.30",
     "asyncpg>=0.29",
     "alembic>=1.13",

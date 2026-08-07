@@ -32,6 +32,107 @@ class SecuritySettings(BaseSettings):
     cookie_domain: str | None = None
 
 
+_KNOWN_AUTH_PROVIDERS = ("esia", "email")
+
+
+class AuthSettings(BaseSettings):
+    """Какие способы входа включены в этой инсталляции (``AUTH_PROVIDERS``).
+
+    Список через запятую из ``esia`` и/или ``email``. Разбор — по образцу
+    ``EsiaSettings.scope_list``.
+
+    Дефолт — только ``email``: договор с интегратором ЕСИА ещё не заключён,
+    а запускаться нужно сейчас. Код ЕСИА при этом не удаляется — провайдер
+    возвращается одной переменной окружения, когда договор появится.
+
+    Выключенный провайдер означает, что его эндпоинты недоступны (404, см.
+    ``identity.api.dependencies.require_esia_provider``), а его настройки не
+    обязательны к заполнению (см. ``Settings._require_esia_when_enabled``).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="AUTH_", extra="ignore")
+
+    providers: str = "email"
+
+    @property
+    def provider_set(self) -> frozenset[str]:
+        """Множество включённых провайдеров (нормализованное)."""
+        return frozenset(
+            item.strip().lower() for item in self.providers.split(",") if item.strip()
+        )
+
+    @property
+    def esia_enabled(self) -> bool:
+        """Включён ли вход через Госуслуги."""
+        return "esia" in self.provider_set
+
+    @property
+    def email_enabled(self) -> bool:
+        """Включён ли вход по email и одноразовой ссылке."""
+        return "email" in self.provider_set
+
+    @model_validator(mode="after")
+    def _validate_providers(self) -> AuthSettings:
+        """Хотя бы один известный провайдер; опечатки — ошибка старта.
+
+        Без этой проверки опечатка (``AUTH_PROVIDERS=emails``) молча оставила
+        бы платформу вообще без способа входа, и обнаружилось бы это только
+        первым пользователем.
+        """
+        providers = self.provider_set
+        unknown = sorted(providers - set(_KNOWN_AUTH_PROVIDERS))
+        if unknown:
+            raise ValueError(
+                f"Неизвестные провайдеры входа в AUTH_PROVIDERS: {', '.join(unknown)}. "
+                f"Допустимые значения: {', '.join(_KNOWN_AUTH_PROVIDERS)}."
+            )
+        if not providers:
+            raise ValueError(
+                "AUTH_PROVIDERS не может быть пустым: платформа осталась бы без "
+                f"единственного способа входа. Допустимо: {', '.join(_KNOWN_AUTH_PROVIDERS)}."
+            )
+        return self
+
+
+class MailSettings(BaseSettings):
+    """Отправка писем (ссылка входа по email).
+
+    ``host`` пуст = SMTP не настроен. Это НЕ валит старт приложения: выбор
+    адаптера идёт по факту настройки (см.
+    ``app.shared.mail.adapters.factory.build_email_sender``) — с пустым
+    ``MAIL_HOST`` письма пишутся в лог. Обоснование такой деградации вместо
+    fail-fast — в докстринге фабрики.
+
+    ``link_base_url`` — базовый URL фронта, от которого строится ссылка входа
+    (``<link_base_url>/auth/email/callback?token=…``).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="MAIL_", extra="ignore")
+
+    host: str = ""
+    port: int = Field(default=587, ge=1, le=65535)
+    # Логин/пароль опциональны: локальный mailpit принимает почту без них.
+    username: str = ""
+    password: str = ""
+    from_address: str = "no-reply@veraks.ru"
+    from_name: str = "Веракс"
+    # Прямое TLS-соединение (обычно порт 465).
+    use_tls: bool = False
+    # Апгрейд открытого соединения командой STARTTLS (обычно порт 587).
+    use_starttls: bool = True
+    link_base_url: str = "https://veraks.ru"
+
+    @property
+    def configured(self) -> bool:
+        """Задан ли SMTP-хост (иначе письма уходят в лог)."""
+        return bool(self.host.strip())
+
+    @property
+    def sender_header(self) -> str:
+        """Значение заголовка ``From``: ``Имя <адрес>``."""
+        return f"{self.from_name} <{self.from_address}>"
+
+
 class EsiaSettings(BaseSettings):
     """Параметры подключения к ЕСИА (через сертифицированный шлюз).
 
@@ -40,15 +141,20 @@ class EsiaSettings(BaseSettings):
     — режим «доверие каналу»: id_token не проверяется, что допустимо только
     локально с моком (вне ``local`` пустое значение валит старт приложения,
     см. ``Settings._require_esia_id_token_verification``).
+
+    Все поля имеют пустые дефолты: при выключенном провайдере ``esia``
+    (``AUTH_PROVIDERS`` без ``esia``) приложение обязано подниматься вообще
+    без переменных ``ESIA_*``. Обязательность возвращается валидатором
+    ``Settings._require_esia_when_enabled`` — но только когда ЕСИА включена.
     """
 
     model_config = SettingsConfigDict(env_prefix="ESIA_", extra="ignore")
 
-    client_id: str
-    redirect_uri: str
-    authorization_endpoint: str
-    token_endpoint: str
-    userinfo_endpoint: str
+    client_id: str = ""
+    redirect_uri: str = ""
+    authorization_endpoint: str = ""
+    token_endpoint: str = ""
+    userinfo_endpoint: str = ""
     scopes: str = "openid snils fullname"
     # Требовать «подтверждённую» учётную запись ЕСИА (отклонять упрощённую/стандартную).
     require_confirmed: bool = True
@@ -251,6 +357,8 @@ class Settings(BaseSettings):
     seasons_auto_finalize: bool = True
 
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
+    mail: MailSettings = Field(default_factory=MailSettings)
     esia: EsiaSettings = Field(default_factory=EsiaSettings)
     consents: ConsentsSettings = Field(default_factory=ConsentsSettings)
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
@@ -321,6 +429,37 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _require_esia_when_enabled(self) -> Settings:
+        """Настройки ЕСИА обязательны ровно тогда, когда провайдер включён.
+
+        Раньше ``EsiaSettings`` были обязательным вложенным полем без
+        дефолтов: без ``ESIA_*`` приложение не стартовало вовсе. Пока договор
+        с интегратором не заключён, ЕСИА выключена (``AUTH_PROVIDERS=email``),
+        и требовать её реквизиты — значит держать в проде фиктивные значения,
+        неотличимые от настоящих. Поэтому обязательность привязана к факту
+        включения провайдера, а не к самому существованию кода ЕСИА.
+        """
+        if not self.auth.esia_enabled:
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("ESIA_CLIENT_ID", self.esia.client_id),
+                ("ESIA_REDIRECT_URI", self.esia.redirect_uri),
+                ("ESIA_AUTHORIZATION_ENDPOINT", self.esia.authorization_endpoint),
+                ("ESIA_TOKEN_ENDPOINT", self.esia.token_endpoint),
+                ("ESIA_USERINFO_ENDPOINT", self.esia.userinfo_endpoint),
+            )
+            if not value.strip()
+        ]
+        if missing:
+            raise ValueError(
+                "AUTH_PROVIDERS включает 'esia', поэтому обязательны настройки: "
+                f"{', '.join(missing)}."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _require_esia_id_token_verification(self) -> Settings:
         """Вне ``local`` ``id_token`` ЕСИА обязан проверяться криптографически.
 
@@ -336,7 +475,13 @@ class Settings(BaseSettings):
         пройдёт (``iss`` сверяется с пустой строкой), и локально это
         выглядело бы как невнятная ошибка входа вместо явной ошибки
         конфигурации.
+
+        Вся проверка применяется только при включённом провайдере ``esia``:
+        с выключенной ЕСИА её эндпоинты недоступны (404), и требовать от
+        оператора корректный JWKS для мёртвого кода не за что.
         """
+        if not self.auth.esia_enabled:
+            return self
         if self.esia.jwks_url.strip() and not self.esia.issuer.strip():
             raise ValueError(
                 "ESIA_ISSUER обязателен, если задан ESIA_JWKS_URL: без "
