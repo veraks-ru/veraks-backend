@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.modules.identity.domain.consent import Consent, ConsentDocument
 from app.modules.identity.domain.entities import User, UserRole, UserStatus
@@ -51,6 +51,40 @@ class AccessTokenResponse(BaseModel):
     expires_in: int
 
 
+class AuthProvidersResponse(BaseModel):
+    """``GET /auth/providers`` — какие способы входа включены (``AUTH_PROVIDERS``).
+
+    Публичный и намеренно бедный ответ: два булевых флага, по которым фронт
+    решает, что показать на экране входа. Никаких адресов эндпоинтов ЕСИА,
+    имён провайдеров почты и прочих деталей конфигурации сюда не попадает.
+    """
+
+    esia: bool
+    email: bool
+
+
+class EmailLoginRequest(BaseModel):
+    """Тело ``POST /auth/email/request`` — запрос ссылки для входа."""
+
+    email: EmailStr = Field(description="Адрес, на который отправить ссылку входа")
+
+
+class EmailCallbackRequest(BaseModel):
+    """Тело ``POST /auth/email/callback`` — обмен токена из письма на сессию."""
+
+    token: str = Field(
+        min_length=16,
+        max_length=512,
+        description="Одноразовый токен из ссылки в письме",
+    )
+
+
+class ChangeEmailRequest(BaseModel):
+    """Тело ``POST /admin/users/{id}/email`` — смена адреса по обращению."""
+
+    email: EmailStr = Field(description="Новый адрес аккаунта")
+
+
 class MeResponse(BaseModel):
     """Публичная проекция текущего пользователя (без ПДн)."""
 
@@ -87,8 +121,17 @@ class AuthMeResponse(MeResponse):
     ``needs_onboarding`` — онбординг не пройден ИЛИ есть недостающие
     обязательные согласия (в т.ч. из-за смены версии документа в конфиге).
     ``missing_consents`` — что именно нужно принять (пусто, если ничего).
+
+    ``email`` отдаётся только здесь и только владельцу сессии: свой адрес
+    человек видеть должен (иначе непонятно, куда придёт ссылка входа), а в
+    публичный профиль он не попадает — там ``PublicProfileResponse`` без
+    единого поля с ПДн. ``None`` — аккаунт заведён через ЕСИА и адреса не
+    имеет. ``identity_verified`` — подтверждена ли личность государственной
+    идентификацией (PRD §7: от этого зависит выплата приза).
     """
 
+    email: str | None
+    identity_verified: bool
     needs_onboarding: bool
     missing_consents: list[MissingConsentSchema]
 
@@ -106,6 +149,8 @@ class AuthMeResponse(MeResponse):
             display_name=user.display_name,
             role=user.role,
             status=user.status,
+            email=user.email,
+            identity_verified=user.identity_verified,
             needs_onboarding=needs_onboarding,
             missing_consents=[
                 MissingConsentSchema(document=doc.document, version=doc.version)
@@ -219,7 +264,13 @@ class SuspendUserRequest(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
-    """Изменение собственного профиля. Поля опциональны (partial update)."""
+    """Изменение собственного профиля. Поля опциональны (partial update).
+
+    ``email`` здесь НЕ принимается: pydantic по умолчанию отбрасывает
+    неизвестные поля, поэтому пришедший ``email`` молча игнорируется и адрес
+    не меняется. Так и задумано — сменить адрес можно только через поддержку
+    (``POST /admin/users/{id}/email``), см. ``ChangeUserEmail``.
+    """
 
     display_name: str | None = Field(
         default=None, min_length=1, max_length=100, description="Отображаемое имя"

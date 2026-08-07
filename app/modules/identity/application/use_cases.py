@@ -21,19 +21,27 @@ from app.modules.identity.application.dto import (
     SessionClaims,
     SessionTokens,
 )
+from app.modules.identity.application.letters import build_magic_link_letter
+from app.modules.identity.application.login import SessionIssuer, allocate_username
 from app.modules.identity.domain.consent import Consent, ConsentDocument
-from app.modules.identity.domain.entities import (
-    User,
-    UserRole,
-    UserStatus,
-    generate_username_seed,
-)
+from app.modules.identity.domain.entities import User, UserRole, UserStatus
 from app.modules.identity.domain.errors import (
+    EmailAlreadyTakenError,
     IncompleteConsentsError,
+    InvalidMagicLinkError,
     InvalidStateError,
     InvalidTokenError,
     UsernameAlreadyTakenError,
     UserNotFoundError,
+)
+from app.modules.identity.domain.magic_link import (
+    LETTERS_WINDOW_SECONDS,
+    MAGIC_LINK_TTL_MINUTES,
+    MAGIC_LINK_TTL_SECONDS,
+    MAX_LETTERS_PER_EMAIL,
+    email_quota_key,
+    generate_magic_link_token,
+    hash_magic_link_token,
 )
 from app.modules.identity.domain.policies import (
     ensure_account_can_authenticate,
@@ -41,10 +49,12 @@ from app.modules.identity.domain.policies import (
     ensure_esia_confirmed,
     missing_consents,
 )
-from app.modules.identity.domain.value_objects import EsiaIdentity
+from app.modules.identity.domain.value_objects import EsiaIdentity, normalize_email
 from app.modules.identity.ports.consents import ConsentRepository
 from app.modules.identity.ports.esia import EsiaGateway
+from app.modules.identity.ports.magic_link import MagicLinkStore
 from app.modules.identity.ports.repositories import (
+    EmailAlreadyExistsError,
     SnilsAlreadyExistsError,
     UsernameTakenError,
     UserRepository,
@@ -59,11 +69,11 @@ from app.modules.identity.ports.security import (
 )
 from app.shared.audit.domain.entities import AuditActorType
 from app.shared.audit.ports.audit_trail import AuditTrail
+from app.shared.mail.ports.sender import EmailSender
 
 _LOG = logging.getLogger(__name__)
 
 _STATE_TTL_SECONDS = 600
-_MAX_USERNAME_ATTEMPTS = 1000
 # Сколько раз переаллоцировать username при гонке на UNIQUE(username) во вставке.
 _MAX_REGISTER_ATTEMPTS = 5
 
@@ -120,9 +130,19 @@ class CompleteEsiaLogin:
     поиск по ``snils_hash`` → вход в существующий аккаунт либо создание нового.
     Гонку параллельных регистраций ловим по UNIQUE-нарушению и повторяем поиск.
 
+    ВНИМАНИЕ на будущее (актуально в момент, когда ЕСИА включат обратно):
+    связывания аккаунтов между провайдерами здесь НЕТ. Человек, уже
+    зарегистрированный по email, войдя через Госуслуги, получит ВТОРОЙ
+    аккаунт — поиск идёт только по ``snils_hash``, которого у email-аккаунта
+    нет. Пока ``AUTH_PROVIDERS`` не содержит ``esia``, ситуация невозможна;
+    перед возвратом ЕСИА нужно продуктовое и юридическое решение о слиянии
+    (сопоставлять ли по адресу, требовать ли подтверждения владения ящиком) —
+    это не техническая недоделка, а сознательно отложенный вопрос.
+
     Пишет в аудит ``identity.login`` (T10): и создание аккаунта, и повторный
-    вход — различаются флагом ``is_new_user`` в ``metadata``. ПДн (СНИЛС, ФИО,
-    ip) в payload не попадают — только ``user_id`` и служебный флаг.
+    вход — различаются флагом ``is_new_user`` в ``metadata``, а способ входа —
+    полем ``method`` (симметрично потоку по email). ПДн (СНИЛС, ФИО, ip) в
+    payload не попадают — только ``user_id`` и служебные флаги.
     """
 
     def __init__(
@@ -133,12 +153,9 @@ class CompleteEsiaLogin:
         snils_hasher: SnilsHasher,
         esia_oid_hasher: EsiaOidHasher,
         encryptor: FieldEncryptor,
-        tokens: TokenIssuer,
-        refresh_store: RefreshTokenStore,
+        sessions: SessionIssuer,
         state_store: StateStore,
         require_confirmed: bool,
-        access_ttl_seconds: int,
-        refresh_ttl_seconds: int,
         audit: AuditTrail,
     ) -> None:
         self._esia = esia
@@ -146,12 +163,9 @@ class CompleteEsiaLogin:
         self._snils_hasher = snils_hasher
         self._esia_oid_hasher = esia_oid_hasher
         self._encryptor = encryptor
-        self._tokens = tokens
-        self._refresh_store = refresh_store
+        self._sessions = sessions
         self._state_store = state_store
         self._require_confirmed = require_confirmed
-        self._access_ttl = access_ttl_seconds
-        self._refresh_ttl = refresh_ttl_seconds
         self._audit = audit
 
     async def execute(self, *, code: str, state: str) -> LoginResult:
@@ -170,14 +184,14 @@ class CompleteEsiaLogin:
         esia_oid_hash = self._esia_oid_hasher.hash(identity.oid)
 
         user, is_new = await self._find_or_create(identity, snils_hash, esia_oid_hash)
-        session = await self._issue_session(user)
+        session = await self._sessions.issue(user)
         await self._audit.record(
             actor_id=user.id,
             actor_type=_actor_type(user.role),
             action="identity.login",
             entity_type="user",
             entity_id=user.id,
-            metadata={"is_new_user": is_new},
+            metadata={"method": "esia", "is_new_user": is_new},
         )
         return LoginResult(user_id=user.id, tokens=session, is_new_user=is_new)
 
@@ -197,7 +211,7 @@ class CompleteEsiaLogin:
         user = User.register_from_esia(
             esia_oid_hash=esia_oid_hash,
             snils_hash=snils_hash,
-            username=await self._allocate_username(),
+            username=await allocate_username(self._users),
             real_name_enc=self._encrypt_name(identity),
         )
         # Регистрация с защитой от двух гонок на UNIQUE-индексах:
@@ -214,7 +228,7 @@ class CompleteEsiaLogin:
                 ensure_account_can_authenticate(winner)
                 return winner, False
             except UsernameTakenError:
-                user.username = await self._allocate_username()
+                user.username = await allocate_username(self._users)
                 continue
             return created, True
         # Исчерпали попытки переаллокации хэндла — крайне маловероятно.
@@ -227,29 +241,143 @@ class CompleteEsiaLogin:
         full = identity.full_name()
         return self._encryptor.encrypt(full) if full else None
 
-    async def _allocate_username(self) -> str:
-        """Подбирает свободный псевдонимный хэндл (seed + суффикс при коллизии)."""
-        seed = generate_username_seed()
-        if not await self._users.username_exists(seed):
-            return seed
-        for suffix in range(1, _MAX_USERNAME_ATTEMPTS):
-            candidate = f"{seed}{suffix}"
-            if not await self._users.username_exists(candidate):
-                return candidate
-        # Крайне маловероятно: добавляем случайный хвост.
-        return f"{seed}{secrets.token_hex(4)}"
 
-    async def _issue_session(self, user: User) -> SessionTokens:
-        """Выпускает пару токенов и регистрирует refresh для отзыва."""
-        claims = SessionClaims(user_id=user.id, role=user.role)
-        access = self._tokens.issue_access(claims)
-        refresh, jti = self._tokens.issue_refresh(claims)
-        await self._refresh_store.register(jti, self._refresh_ttl, str(user.id))
-        return SessionTokens(
-            access_token=access,
-            refresh_token=refresh,
-            access_ttl_seconds=self._access_ttl,
-            refresh_ttl_seconds=self._refresh_ttl,
+class RequestEmailLogin:
+    """Шаг 1 входа по email: выдать одноразовую ссылку и отправить письмо.
+
+    Всегда завершается успешно, что бы ни случилось: существует адрес или
+    нет, исчерпан ли лимит писем, отвечает ли SMTP. Причина — анти-энумерация:
+    любое различие в наблюдаемом поведении (код ответа, задержка, текст)
+    превращает эндпоинт в проверялку «зарегистрирован ли такой человек».
+    Ошибки уходят в лог, а не пользователю.
+
+    Пользователя тут НЕ создаём: аккаунт заводится только при реальном
+    переходе по ссылке (``CompleteEmailLogin``), иначе чужой почтовый адрес
+    можно было бы «занять» одним POST-запросом.
+    """
+
+    def __init__(
+        self,
+        *,
+        links: MagicLinkStore,
+        sender: EmailSender,
+        link_base_url: str,
+    ) -> None:
+        self._links = links
+        self._sender = sender
+        self._link_base_url = link_base_url.rstrip("/")
+
+    async def execute(self, *, email: str) -> None:
+        """Нормализует адрес, проверяет лимит, шлёт письмо со ссылкой."""
+        address = normalize_email(email)
+        sent_in_window = await self._links.count_request(
+            email_quota_key(address), LETTERS_WINDOW_SECONDS
+        )
+        if sent_in_window > MAX_LETTERS_PER_EMAIL:
+            # Адрес в лог не пишем — это ПДн; для расследования достаточно
+            # факта и счётчика (сам ключ счётчика уже псевдонимизирован).
+            _LOG.warning(
+                "Превышен лимит писем со ссылкой входа на один адрес "
+                "(%s за %s секунд) — письмо не отправлено",
+                sent_in_window,
+                LETTERS_WINDOW_SECONDS,
+            )
+            return
+
+        token = generate_magic_link_token()
+        await self._links.save(
+            hash_magic_link_token(token), address, MAGIC_LINK_TTL_SECONDS
+        )
+        letter = build_magic_link_letter(
+            to=address,
+            link=f"{self._link_base_url}/auth/email/callback?token={token}",
+            ttl_minutes=MAGIC_LINK_TTL_MINUTES,
+        )
+        try:
+            await self._sender.send(letter)
+        except Exception:  # noqa: BLE001 — см. докстринг: 202 в любом случае
+            _LOG.error(
+                "Не удалось отправить письмо со ссылкой входа "
+                "(проверьте настройки MAIL_*)",
+                exc_info=True,
+            )
+
+
+class CompleteEmailLogin:
+    """Шаг 2 входа по email: погасить ссылку, найти/создать аккаунт, выдать сессию.
+
+    Одноразовость ссылки обеспечивает атомарное гашение в сторе (``GETDEL``),
+    а не проверка «а не использован ли токен» — иначе два параллельных
+    перехода дали бы две сессии.
+
+    Инвариант «1 человек = 1 аккаунт» здесь держится на адресе: find-or-create
+    по ``email`` с той же защитой от гонки, что и у ЕСИА-потока (ловим
+    нарушение UNIQUE и входим в победителя гонки). Заблокированный/удалённый
+    аккаунт получает те же отказы, что и в ЕСИА-потоке —
+    ``ensure_account_can_authenticate``.
+    """
+
+    def __init__(
+        self,
+        *,
+        links: MagicLinkStore,
+        users: UserRepository,
+        sessions: SessionIssuer,
+        audit: AuditTrail,
+    ) -> None:
+        self._links = links
+        self._users = users
+        self._sessions = sessions
+        self._audit = audit
+
+    async def execute(self, *, token: str) -> LoginResult:
+        """Обменивает токен из письма на сессию."""
+        address = await self._links.consume(hash_magic_link_token(token))
+        if address is None:
+            raise InvalidMagicLinkError("Ссылка устарела или уже использована")
+
+        user, is_new = await self._find_or_create(address)
+        session = await self._sessions.issue(user)
+        await self._audit.record(
+            actor_id=user.id,
+            actor_type=_actor_type(user.role),
+            action="identity.login",
+            entity_type="user",
+            entity_id=user.id,
+            metadata={"method": "email", "is_new_user": is_new},
+        )
+        return LoginResult(user_id=user.id, tokens=session, is_new_user=is_new)
+
+    async def _find_or_create(self, address: str) -> tuple[User, bool]:
+        """Находит аккаунт по email или создаёт новый (с защитой от гонки)."""
+        existing = await self._users.get_by_email(address)
+        if existing is not None:
+            ensure_account_can_authenticate(existing)
+            return existing, False
+
+        user = User.register_with_email(
+            email=address, username=await allocate_username(self._users)
+        )
+        # Две гонки на UNIQUE-индексах, как и при регистрации через ЕСИА:
+        #  * email — тот же человек открыл две ссылки одновременно → входим
+        #    в победителя;
+        #  * username — хэндл заняли между pre-check и INSERT → переаллоцируем.
+        for _attempt in range(_MAX_REGISTER_ATTEMPTS):
+            try:
+                created = await self._users.add(user)
+            except EmailAlreadyExistsError:
+                winner = await self._users.get_by_email(address)
+                if winner is None:  # pragma: no cover — UNIQUE гарантирует наличие
+                    raise
+                ensure_account_can_authenticate(winner)
+                return winner, False
+            except UsernameTakenError:
+                user.username = await allocate_username(self._users)
+                user.display_name = user.username
+                continue
+            return created, True
+        raise UsernameTakenError(  # pragma: no cover — защитный предел
+            "Не удалось подобрать свободный username при регистрации"
         )
 
 
@@ -672,6 +800,61 @@ class ReinstateUser:
             entity_id=target_id,
         )
         return saved
+
+
+class ChangeUserEmail:
+    """Смена email аккаунта администратором (ADMIN).
+
+    Самостоятельной смены адреса нет намеренно: подтверждения владения новым
+    ящиком мы не делаем, а без него «сменить себе email» — это способ увести
+    аккаунт при кратковременном доступе к чужой сессии. Поэтому адрес меняется
+    по обращению в поддержку, руками админа, со следом в аудите.
+
+    Отзывает всё семейство refresh-токенов цели: после переноса адреса вход по
+    ссылке идёт уже на новый ящик, и старые сессии (например, у того, кто
+    контролировал прежний адрес) не должны переживать смену. Отзыв делается
+    всегда, даже если адрес совпал с прежним, — операция идемпотентна и
+    дешевле, чем рассуждать о том, была ли смена «настоящей».
+
+    Сам адрес в аудит НЕ пишем — это ПДн; в журнале остаются актор, цель и
+    факт события.
+    """
+
+    def __init__(
+        self,
+        *,
+        users: UserRepository,
+        refresh_store: RefreshTokenStore,
+        audit: AuditTrail,
+    ) -> None:
+        self._users = users
+        self._refresh_store = refresh_store
+        self._audit = audit
+
+    async def execute(
+        self, *, actor: User, target_id: uuid.UUID, email: str
+    ) -> User:
+        target = await self._users.get_by_id(target_id)
+        if target is None:
+            raise UserNotFoundError("Пользователь не найден")
+
+        if target.change_email(normalize_email(email)):
+            try:
+                target = await self._users.update(target)
+            except EmailAlreadyExistsError as exc:
+                raise EmailAlreadyTakenError(
+                    "Этот адрес уже привязан к другому аккаунту"
+                ) from exc
+
+        await self._refresh_store.revoke_all_for_user(str(target_id))
+        await self._audit.record(
+            actor_id=actor.id,
+            actor_type=_actor_type(actor.role),
+            action="identity.user.email_changed",
+            entity_type="user",
+            entity_id=target_id,
+        )
+        return target
 
 
 @dataclass(frozen=True, slots=True)

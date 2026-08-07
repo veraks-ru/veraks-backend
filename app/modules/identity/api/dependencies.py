@@ -47,10 +47,14 @@ from app.modules.identity.adapters.security import (
     JwtTokenIssuer,
 )
 from app.modules.identity.adapters.stores import (
+    RedisMagicLinkStore,
     RedisRefreshTokenStore,
     RedisStateStore,
 )
+from app.modules.identity.application.login import SessionIssuer
 from app.modules.identity.application.use_cases import (
+    ChangeUserEmail,
+    CompleteEmailLogin,
     CompleteEsiaLogin,
     CompleteOnboarding,
     DeleteMyAccount,
@@ -63,14 +67,20 @@ from app.modules.identity.application.use_cases import (
     LogoutSession,
     RefreshSession,
     ReinstateUser,
+    RequestEmailLogin,
     SuspendUser,
     UpdateMyProfile,
 )
 from app.modules.identity.domain.consent import ConsentDocument
 from app.modules.identity.domain.entities import User, UserRole
-from app.modules.identity.domain.errors import ConsentRequiredError, IdentityError
+from app.modules.identity.domain.errors import (
+    AuthProviderDisabledError,
+    ConsentRequiredError,
+    IdentityError,
+)
 from app.modules.identity.ports.consents import ConsentRepository
 from app.modules.identity.ports.esia import EsiaGateway
+from app.modules.identity.ports.magic_link import MagicLinkStore
 from app.modules.identity.ports.repositories import UserRepository
 from app.modules.identity.ports.security import (
     EsiaOidHasher,
@@ -86,6 +96,8 @@ from app.shared.audit.adapters.trail import (
     SqlAlchemyAuditTrail,
 )
 from app.shared.audit.ports.audit_trail import AuditTrail
+from app.shared.mail.adapters.factory import build_email_sender
+from app.shared.mail.ports.sender import EmailSender
 
 # Способ фиксации согласий через веб-онбординг (PRD/т.з. T2).
 _ONBOARDING_METHOD = "onboarding_web"
@@ -239,6 +251,58 @@ def get_refresh_store(redis: RedisDep) -> RefreshTokenStore:
     return RedisRefreshTokenStore(redis)
 
 
+def get_magic_link_store(redis: RedisDep) -> MagicLinkStore:
+    """Хранилище одноразовых ссылок входа и счётчика писем на адрес."""
+    return RedisMagicLinkStore(redis)
+
+
+def get_email_sender(settings: SettingsDep) -> EmailSender:
+    """Транспорт писем: SMTP при заданном ``MAIL_HOST``, иначе — лог.
+
+    Выбор осознанно без fail-fast (обоснование —
+    ``app.shared.mail.adapters.factory``): вход по email сейчас единственный,
+    и падение старта из-за ненастроенного SMTP означало бы недоступность
+    платформы целиком.
+    """
+    return build_email_sender(settings.mail)
+
+
+def get_session_issuer(
+    settings: SettingsDep,
+    tokens: Annotated[TokenIssuer, Depends(get_token_issuer)],
+    refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
+) -> SessionIssuer:
+    """Выпуск сессии — один и тот же для обоих потоков входа."""
+    sec = settings.security
+    return SessionIssuer(
+        tokens=tokens,
+        refresh_store=refresh_store,
+        access_ttl_seconds=sec.access_token_ttl_seconds,
+        refresh_ttl_seconds=sec.refresh_token_ttl_seconds,
+    )
+
+
+# ── Гарды провайдеров входа ───────────────────────────────────────────────
+
+
+def require_esia_provider(settings: SettingsDep) -> None:
+    """Гард: эндпоинты ЕСИА доступны, только если провайдер включён.
+
+    При выключенной ЕСИА её код остаётся в приложении (вернуть провайдер —
+    это одна переменная окружения), но снаружи эндпоинтов как бы нет: 404.
+    Без гарда обращение к ним при пустых ``ESIA_*`` давало бы 500 из недр
+    HTTP-клиента — сбой вместо внятного «такого способа входа здесь нет».
+    """
+    if not settings.auth.esia_enabled:
+        raise AuthProviderDisabledError("Вход через Госуслуги сейчас недоступен")
+
+
+def require_email_provider(settings: SettingsDep) -> None:
+    """Гард: эндпоинты входа по email доступны, только если провайдер включён."""
+    if not settings.auth.email_enabled:
+        raise AuthProviderDisabledError("Вход по email сейчас недоступен")
+
+
 # ── Use-cases ─────────────────────────────────────────────────────────────
 
 
@@ -257,26 +321,44 @@ def get_complete_login(
     hasher: Annotated[SnilsHasher, Depends(get_snils_hasher)],
     esia_oid_hasher: Annotated[EsiaOidHasher, Depends(get_esia_oid_hasher)],
     encryptor: Annotated[FieldEncryptor, Depends(get_field_encryptor)],
-    tokens: Annotated[TokenIssuer, Depends(get_token_issuer)],
-    refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
+    sessions: Annotated[SessionIssuer, Depends(get_session_issuer)],
     state_store: Annotated[StateStore, Depends(get_state_store)],
     audit: AuditDep,
 ) -> CompleteEsiaLogin:
-    """Use-case завершения логина (find-or-create + сессия)."""
-    sec = settings.security
+    """Use-case завершения логина ЕСИА (find-or-create + сессия)."""
     return CompleteEsiaLogin(
         esia=esia,
         users=users,
         snils_hasher=hasher,
         esia_oid_hasher=esia_oid_hasher,
         encryptor=encryptor,
-        tokens=tokens,
-        refresh_store=refresh_store,
+        sessions=sessions,
         state_store=state_store,
         require_confirmed=settings.esia.require_confirmed,
-        access_ttl_seconds=sec.access_token_ttl_seconds,
-        refresh_ttl_seconds=sec.refresh_token_ttl_seconds,
         audit=audit,
+    )
+
+
+def get_request_email_login(
+    settings: SettingsDep,
+    links: Annotated[MagicLinkStore, Depends(get_magic_link_store)],
+    sender: Annotated[EmailSender, Depends(get_email_sender)],
+) -> RequestEmailLogin:
+    """Use-case запроса ссылки входа (письмо со ссылкой на фронт)."""
+    return RequestEmailLogin(
+        links=links, sender=sender, link_base_url=settings.mail.link_base_url
+    )
+
+
+def get_complete_email_login(
+    links: Annotated[MagicLinkStore, Depends(get_magic_link_store)],
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+    sessions: Annotated[SessionIssuer, Depends(get_session_issuer)],
+    audit: AuditDep,
+) -> CompleteEmailLogin:
+    """Use-case входа по ссылке из письма (find-or-create по email + сессия)."""
+    return CompleteEmailLogin(
+        links=links, users=users, sessions=sessions, audit=audit
     )
 
 
@@ -386,6 +468,15 @@ def get_reinstate_user_uc(
 ) -> ReinstateUser:
     """Use-case снятия блокировки (B7)."""
     return ReinstateUser(users=users, audit=audit)
+
+
+def get_change_user_email_uc(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+    refresh_store: Annotated[RefreshTokenStore, Depends(get_refresh_store)],
+    audit: AuditDep,
+) -> ChangeUserEmail:
+    """Use-case смены email аккаунта администратором (по обращению в поддержку)."""
+    return ChangeUserEmail(users=users, refresh_store=refresh_store, audit=audit)
 
 
 def get_list_users_uc(

@@ -15,6 +15,22 @@ from app.modules.identity.domain.errors import InvalidSnilsError
 _SNILS_DIGITS_RE = re.compile(r"\d")
 
 
+def normalize_email(raw: str) -> str:
+    """Нормализует адрес перед хранением и сравнением: trim + lower.
+
+    Единая нормализация нужна, чтобы ``Ivan@Example.RU`` и ``ivan@example.ru``
+    не стали двумя аккаунтами. Регистр локальной части формально значим по
+    RFC 5321, но на практике ни один массовый почтовый провайдер его не
+    различает, а два аккаунта на один ящик ломают инвариант «1 человек =
+    1 аккаунт» сильнее, чем гипотетический регистрозависимый сервер.
+    В БД это подкреплено типом ``citext``.
+
+    Формат адреса здесь не проверяется — это делает pydantic (``EmailStr``)
+    на границе API.
+    """
+    return raw.strip().lower()
+
+
 def _normalize_snils(raw: str) -> str:
     """Убирает разделители (пробелы/дефисы), оставляя только цифры."""
     return "".join(_SNILS_DIGITS_RE.findall(raw))

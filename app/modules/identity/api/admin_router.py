@@ -16,16 +16,19 @@ from fastapi import APIRouter, Depends, Query
 
 from app.modules.identity.api.dependencies import (
     AdminUser,
+    get_change_user_email_uc,
     get_list_users_uc,
     get_reinstate_user_uc,
     get_suspend_user_uc,
 )
 from app.modules.identity.api.schemas import (
     AdminUserResponse,
+    ChangeEmailRequest,
     SuspendUserRequest,
     UserPageResponse,
 )
 from app.modules.identity.application.use_cases import (
+    ChangeUserEmail,
     ListUsers,
     ReinstateUser,
     SuspendUser,
@@ -75,6 +78,28 @@ async def suspend_user(
     и уходит в аудит (``identity.user.suspended``), но не в публичный профиль.
     """
     user = await uc.execute(actor=admin, target_id=user_id, reason=payload.reason)
+    return AdminUserResponse.from_domain(user)
+
+
+@router.post(
+    "/{user_id}/email",
+    response_model=AdminUserResponse,
+    summary="Сменить email пользователя (admin, по обращению в поддержку)",
+)
+async def change_user_email(
+    user_id: uuid.UUID,
+    payload: ChangeEmailRequest,
+    admin: AdminUser,
+    uc: Annotated[ChangeUserEmail, Depends(get_change_user_email_uc)],
+) -> AdminUserResponse:
+    """Переносит аккаунт на новый адрес и отзывает его refresh-сессии.
+
+    Единственный способ сменить email: самостоятельной смены нет намеренно
+    (подтверждения владения новым ящиком мы не делаем — см. ``ChangeUserEmail``).
+    Занятый адрес → 409 ``EmailAlreadyTakenError``. В аудит
+    (``identity.user.email_changed``) уходит факт, но НЕ сам адрес — это ПДн.
+    """
+    user = await uc.execute(actor=admin, target_id=user_id, email=str(payload.email))
     return AdminUserResponse.from_domain(user)
 
 

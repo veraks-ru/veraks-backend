@@ -1,7 +1,8 @@
-"""Redis-адаптеры для OIDC-state и реестра refresh-токенов.
+"""Redis-адаптеры для OIDC-state, ссылок входа и реестра refresh-токенов.
 
-State и refresh-jti — короткоживущие записи с TTL, идеально ложатся на Redis.
-В тестах вместо них подставляются in-memory фейки (см. tests/identity/fakes.py).
+State, magic-link и refresh-jti — короткоживущие записи с TTL, идеально
+ложатся на Redis. В тестах вместо них подставляются in-memory фейки (см.
+tests/identity/fakes.py).
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ _STATE_PREFIX = "identity:oidc-state:"
 _REFRESH_PREFIX = "identity:refresh-jti:"
 _ROTATED_PREFIX = "identity:refresh-rotated:"
 _USER_FAMILY_PREFIX = "identity:refresh-family:"
+_MAGIC_LINK_PREFIX = "identity:magic-link:"
+_MAGIC_LINK_QUOTA_PREFIX = "identity:magic-link-quota:"
 
 
 class RedisStateStore:
@@ -54,6 +57,35 @@ class RedisStateStore:
             # Битое/устаревшее значение (например, запись прежнего формата,
             # пережившая деплой) — трактуем как невалидный state.
             return None
+
+
+class RedisMagicLinkStore:
+    """Одноразовые ссылки входа (``sha256(токен) → адрес``) и лимит писем.
+
+    По ключу лежит хэш токена, а не сам токен (см. ``domain.magic_link``);
+    гашение — атомарным ``GETDEL``, как у ``RedisStateStore``, поэтому
+    параллельный повтор перехода по ссылке получит ``None``.
+    """
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+
+    async def save(self, token_hash: str, email: str, ttl_seconds: int) -> None:
+        """Кладёт адрес под хэшем токена с TTL ссылки."""
+        await self._redis.set(f"{_MAGIC_LINK_PREFIX}{token_hash}", email, ex=ttl_seconds)
+
+    async def consume(self, token_hash: str) -> str | None:
+        """Атомарно (``GETDEL``) гасит ссылку и отдаёт адрес."""
+        raw = await self._redis.getdel(f"{_MAGIC_LINK_PREFIX}{token_hash}")
+        return None if raw is None else str(raw)
+
+    async def count_request(self, quota_key: str, window_seconds: int) -> int:
+        """Счётчик писем в фиксированном окне (``INCR`` + ``EXPIRE`` на первом)."""
+        key = f"{_MAGIC_LINK_QUOTA_PREFIX}{quota_key}"
+        count = int(await self._redis.incr(key))
+        if count == 1:
+            await self._redis.expire(key, window_seconds)
+        return count
 
 
 class RedisRefreshTokenStore:

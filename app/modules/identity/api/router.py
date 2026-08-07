@@ -14,24 +14,35 @@ from fastapi.responses import RedirectResponse
 from app.config import SettingsDep
 from app.modules.identity.api.dependencies import (
     CurrentUser,
+    get_complete_email_login,
     get_complete_login,
+    get_current_user_uc,
     get_initiate_login,
     get_logout_session,
     get_onboarding_status_uc,
     get_refresh_session,
+    get_request_email_login,
+    require_email_provider,
+    require_esia_provider,
 )
 from app.modules.identity.api.schemas import (
     AccessTokenResponse,
     AuthMeResponse,
+    AuthProvidersResponse,
     CallbackRequest,
+    EmailCallbackRequest,
+    EmailLoginRequest,
 )
 from app.modules.identity.application.dto import SessionTokens
 from app.modules.identity.application.use_cases import (
+    CompleteEmailLogin,
     CompleteEsiaLogin,
+    GetCurrentUser,
     GetOnboardingStatus,
     InitiateEsiaLogin,
     LogoutSession,
     RefreshSession,
+    RequestEmailLogin,
 )
 from app.modules.identity.domain.errors import (
     EsiaAuthorizationDeniedError,
@@ -126,7 +137,27 @@ def clear_session_cookies(response: Response, settings: SettingsDep) -> None:
     response.delete_cookie(_REFRESH_COOKIE, path="/auth", domain=domain)
 
 
-@router.get("/esia/login", summary="Редирект на страницу авторизации ЕСИА")
+@router.get(
+    "/providers",
+    response_model=AuthProvidersResponse,
+    summary="Какие способы входа включены",
+)
+async def auth_providers(settings: SettingsDep) -> AuthProvidersResponse:
+    """Публично: по этому ответу фронт решает, что показать на экране входа.
+
+    Без авторизации — экран входа рисуется до неё. Настройки наружу не
+    утекают: только два флага, без адресов и имён провайдеров.
+    """
+    return AuthProvidersResponse(
+        esia=settings.auth.esia_enabled, email=settings.auth.email_enabled
+    )
+
+
+@router.get(
+    "/esia/login",
+    summary="Редирект на страницу авторизации ЕСИА",
+    dependencies=[Depends(require_esia_provider)],
+)
 async def esia_login(
     settings: SettingsDep,
     uc: Annotated[InitiateEsiaLogin, Depends(get_initiate_login)],
@@ -158,6 +189,7 @@ async def esia_login(
     "/esia/callback",
     response_model=AccessTokenResponse,
     summary="Callback ЕСИА: обмен кода на сессию (find-or-create)",
+    dependencies=[Depends(require_esia_provider)],
 )
 async def esia_callback(
     params: Annotated[CallbackRequest, Depends()],
@@ -203,6 +235,70 @@ async def esia_callback(
     return AccessTokenResponse(
         access_token=result.tokens.access_token,
         expires_in=result.tokens.access_ttl_seconds,
+    )
+
+
+@router.post(
+    "/email/request",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Запросить ссылку для входа по email",
+    dependencies=[Depends(require_email_provider)],
+)
+async def request_email_login(
+    payload: EmailLoginRequest,
+    uc: Annotated[RequestEmailLogin, Depends(get_request_email_login)],
+) -> Response:
+    """Всегда 202 без тела — независимо от того, есть ли такой аккаунт.
+
+    Анти-энумерация: любой различимый ответ («такого адреса нет», «письмо
+    отправлено») превратил бы эндпоинт в проверялку, зарегистрирован ли
+    человек на платформе. По той же причине 202 отдаётся и когда исчерпан
+    лимит писем на адрес, и когда SMTP не ответил — эти случаи видны в логах,
+    а не клиенту.
+
+    Различимо наружу только одно: 422 на синтаксически неверный адрес (это
+    свойство самой строки, а не факт регистрации) и 429 от общего лимита
+    ``/auth`` по IP.
+    """
+    await uc.execute(email=str(payload.email))
+    return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post(
+    "/email/callback",
+    response_model=AuthMeResponse,
+    summary="Вход по ссылке из письма (find-or-create по email)",
+    dependencies=[Depends(require_email_provider)],
+)
+async def email_callback(
+    payload: EmailCallbackRequest,
+    response: Response,
+    settings: SettingsDep,
+    uc: Annotated[CompleteEmailLogin, Depends(get_complete_email_login)],
+    onboarding: Annotated[GetOnboardingStatus, Depends(get_onboarding_status_uc)],
+    current_user_uc: Annotated[GetCurrentUser, Depends(get_current_user_uc)],
+) -> AuthMeResponse:
+    """Гасит токен, ставит сессионные cookie и отдаёт профиль.
+
+    В отличие от ЕСИА-callback'а access-токен в теле НЕ возвращается: сюда
+    ходит сам фронт (fetch), а не браузер редиректом, поэтому достаточно
+    httpOnly-cookie — токен, доступный JavaScript, только расширил бы
+    поверхность XSS. Вместо него в теле сразу профиль со статусом онбординга,
+    чтобы фронт не делал второй запрос ради решения «вести ли на /onboarding».
+
+    201 — аккаунт заведён этим входом, 200 — вход в существующий (симметрично
+    ЕСИА-потоку). Просроченная/использованная/неизвестная ссылка —
+    ``InvalidMagicLinkError`` → 401 (маппинг в ``app/main.py``).
+    """
+    result = await uc.execute(token=payload.token)
+    _set_session_cookies(response, result.tokens, settings)
+    if result.is_new_user:
+        response.status_code = status.HTTP_201_CREATED
+
+    user = await current_user_uc.by_id(result.user_id)
+    needs_onboarding, missing = await onboarding.execute(user=user)
+    return AuthMeResponse.build(
+        user, needs_onboarding=needs_onboarding, missing=missing
     )
 
 

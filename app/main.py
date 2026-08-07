@@ -64,13 +64,16 @@ from app.modules.identity.api.users_router import router as users_router
 from app.modules.identity.domain.errors import (
     AccountDeletedError,
     AccountSuspendedError,
+    AuthProviderDisabledError,
     CannotSuspendAdminError,
     CannotSuspendSelfError,
     ConsentRequiredError,
+    EmailAlreadyTakenError,
     EsiaAuthorizationDeniedError,
     EsiaExchangeError,
     IdentityError,
     IncompleteConsentsError,
+    InvalidMagicLinkError,
     InvalidSnilsError,
     InvalidStateError,
     InvalidTokenError,
@@ -146,6 +149,7 @@ from app.modules.social.domain.errors import (
     SocialError,
 )
 from app.shared.audit.api.router import router as audit_router
+from app.shared.mail.adapters.factory import warn_if_mail_unconfigured
 
 # Карта «доменная ошибка → HTTP-статус».
 _ERROR_STATUS: dict[type[Exception], int] = {
@@ -160,8 +164,15 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     # Невалидный id_token (InvalidIdTokenError) — подвид сбоя шлюза, 502.
     EsiaExchangeError: status.HTTP_502_BAD_GATEWAY,
     InvalidTokenError: status.HTTP_401_UNAUTHORIZED,
+    # Ссылка входа просрочена/уже использована/неизвестна — все три случая
+    # неразличимы снаружи (иначе по ответу проверялось бы существование токена).
+    InvalidMagicLinkError: status.HTTP_401_UNAUTHORIZED,
+    # Способ входа выключен в этой инсталляции: не «временно недоступен» (503),
+    # а «такого здесь нет» — см. докстринг AuthProviderDisabledError.
+    AuthProviderDisabledError: status.HTTP_404_NOT_FOUND,
     UserNotFoundError: status.HTTP_404_NOT_FOUND,
     UsernameAlreadyTakenError: status.HTTP_409_CONFLICT,
+    EmailAlreadyTakenError: status.HTTP_409_CONFLICT,
     IncompleteConsentsError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     # Участие в конкурсе без акцепта оферты/ПДн — отказ (PRD §7); фронт по
     # коду ошибки ведёт на /onboarding.
@@ -294,6 +305,12 @@ def create_app() -> FastAPI:
     from app.redis import get_redis
 
     _settings = get_settings()
+
+    # Почта выбирается без fail-fast (см. app/shared/mail/adapters/factory.py):
+    # ненастроенный SMTP не валит старт, но вне local обязан быть громко виден
+    # в логах — иначе «письма не приходят» выясняется от пользователей.
+    warn_if_mail_unconfigured(_settings.mail, app_env=_settings.app_env)
+
     if _settings.app_env != "local" and (
         _settings.rate_limit_per_minute > 0 or _settings.rate_limit_auth_per_minute > 0
     ):
