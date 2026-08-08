@@ -15,6 +15,7 @@ import uuid
 
 from app.modules.events.application.dto import (
     Actor,
+    CategoryPatchInput,
     EventPatchInput,
     NewCategoryInput,
     NewEventInput,
@@ -81,6 +82,16 @@ def _event_snapshot(event: Event) -> dict[str, object]:
         "window": _window_snapshot(event.window),
         "resolution_source": event.resolution_source,
         "resolution_criteria": event.resolution_criteria,
+    }
+
+
+def _category_snapshot(category: Category) -> dict[str, object]:
+    """Снимок редактируемых полей категории для дифа ``category.updated``."""
+    return {
+        "slug": category.slug,
+        "title": category.title,
+        "description": category.description,
+        "is_restricted": category.is_restricted,
     }
 
 
@@ -628,6 +639,53 @@ class CreateCategory:
             is_restricted=data.is_restricted,
         )
         return await self._categories.add(category)
+
+
+class UpdateCategory:
+    """Частичное редактирование категории (editor/admin).
+
+    Нужна прежде всего для исправления опечаток в названии и для смены флага
+    запрещённой тематики. Категория участвует в пороге разнообразия ``C_MIN``,
+    поэтому переименование не влияет на зачёт — меняется только подпись.
+    """
+
+    def __init__(
+        self, *, categories: CategoryRepository, audit: AuditTrail
+    ) -> None:
+        self._categories = categories
+        self._audit = audit
+
+    async def execute(
+        self, *, actor: Actor, category_id: uuid.UUID, patch: CategoryPatchInput
+    ) -> Category:
+        """Применяет правки и пишет аудит; без изменений — тихий no-op."""
+        ensure_can_manage_events(actor.role)
+        category = await self._categories.get_by_id(category_id)
+        if category is None:
+            raise CategoryNotFoundError("Категория не найдена")
+
+        before = _category_snapshot(category)
+        changed = category.apply_edits(
+            slug=patch.slug,
+            title=patch.title,
+            description=patch.description,
+            is_restricted=patch.is_restricted,
+        )
+        if not changed:
+            return category
+
+        saved = await self._categories.update(category)
+        diff_before, diff_after = _diff_snapshots(before, _category_snapshot(saved))
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action="category.updated",
+            entity_type="category",
+            entity_id=saved.id,
+            before=diff_before,
+            after=diff_after,
+        )
+        return saved
 
 
 class ListCategories:

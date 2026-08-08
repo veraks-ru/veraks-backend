@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.events.adapters.orm import CategoryORM, EventORM
 from app.modules.events.domain.entities import Category, Event, EventStatus
-from app.modules.events.domain.errors import CategorySlugTakenError
+from app.modules.events.domain.errors import (
+    CategoryNotFoundError,
+    CategorySlugTakenError,
+)
 from app.modules.events.ports.repositories import EventFilter
 
 
@@ -138,6 +141,24 @@ class SqlAlchemyCategoryRepository:
         """Вставляет категорию, разбирая нарушение ``UNIQUE(slug)``."""
         orm = CategoryORM.from_domain(category)
         self._session.add(orm)
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            if "slug" in str(exc.orig):
+                raise CategorySlugTakenError(category.slug) from exc
+            raise
+        return orm.to_domain()
+
+    async def update(self, category: Category) -> Category:
+        """Обновляет категорию на месте, разбирая нарушение ``UNIQUE(slug)``."""
+        orm = await self._session.get(CategoryORM, category.id)
+        if orm is None:
+            raise CategoryNotFoundError("Категория не найдена")
+        orm.slug = category.slug
+        orm.title = category.title
+        orm.description = category.description
+        orm.is_restricted = category.is_restricted
         try:
             await self._session.flush()
         except IntegrityError as exc:

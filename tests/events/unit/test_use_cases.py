@@ -12,6 +12,7 @@ from datetime import timedelta
 import pytest
 
 from app.modules.events.application.dto import (
+    CategoryPatchInput,
     EventPatchInput,
     NewCategoryInput,
     NewEventInput,
@@ -25,6 +26,7 @@ from app.modules.events.application.use_cases import (
     CreateEvent,
     ProposeEvent,
     PublishEvent,
+    UpdateCategory,
     UpdateEvent,
 )
 from app.modules.events.domain.entities import EventStatus
@@ -418,6 +420,107 @@ async def test_create_category_is_restricted_flag_persisted(categories, editor_a
         data=NewCategoryInput(slug="new-restricted", title="Новая", is_restricted=True),
     )
     assert created.is_restricted is True
+
+
+async def test_update_category_edits_title_and_writes_audit(
+    categories, audit, editor_actor, category
+) -> None:
+    uc = UpdateCategory(categories=categories, audit=audit)
+
+    updated = await uc.execute(
+        actor=editor_actor,
+        category_id=category.id,
+        patch=CategoryPatchInput(title="Политика и выборы"),
+    )
+
+    assert updated.title == "Политика и выборы"
+    assert updated.slug == category.slug  # не тронут
+    assert audit.actions() == ["category.updated"]
+    # В дифе только изменившееся поле — не весь снимок.
+    assert set(audit.records[-1]["after"]) == {"title"}
+
+
+async def test_update_category_toggles_restricted_flag(
+    categories, audit, editor_actor, category
+) -> None:
+    """Флаг запрета — замена удалению: новые события в категории не создать."""
+    uc = UpdateCategory(categories=categories, audit=audit)
+
+    updated = await uc.execute(
+        actor=editor_actor,
+        category_id=category.id,
+        patch=CategoryPatchInput(is_restricted=True),
+    )
+
+    assert updated.is_restricted is True
+
+
+async def test_update_category_without_changes_is_silent_noop(
+    categories, audit, editor_actor, category
+) -> None:
+    uc = UpdateCategory(categories=categories, audit=audit)
+
+    result = await uc.execute(
+        actor=editor_actor,
+        category_id=category.id,
+        patch=CategoryPatchInput(title=category.title),
+    )
+
+    assert result.title == category.title
+    assert audit.records == []
+
+
+async def test_update_category_slug_conflict(
+    categories, audit, editor_actor, category
+) -> None:
+    other = await CreateCategory(categories=categories).execute(
+        actor=editor_actor, data=NewCategoryInput(slug="sport", title="Спорт")
+    )
+    uc = UpdateCategory(categories=categories, audit=audit)
+
+    with pytest.raises(CategorySlugTakenError):
+        await uc.execute(
+            actor=editor_actor,
+            category_id=other.id,
+            patch=CategoryPatchInput(slug=category.slug),
+        )
+
+
+async def test_update_category_rejects_invalid_slug(
+    categories, audit, editor_actor, category
+) -> None:
+    uc = UpdateCategory(categories=categories, audit=audit)
+
+    with pytest.raises(InvalidEventDataError):
+        await uc.execute(
+            actor=editor_actor,
+            category_id=category.id,
+            patch=CategoryPatchInput(slug="Политика Ру"),
+        )
+
+
+async def test_update_category_requires_editor_role(
+    categories, audit, user_actor, category
+) -> None:
+    uc = UpdateCategory(categories=categories, audit=audit)
+
+    with pytest.raises(EventPermissionError):
+        await uc.execute(
+            actor=user_actor,
+            category_id=category.id,
+            patch=CategoryPatchInput(title="Взлом"),
+        )
+
+
+async def test_update_unknown_category(categories, audit, editor_actor) -> None:
+    uc = UpdateCategory(categories=categories, audit=audit)
+
+    with pytest.raises(CategoryNotFoundError):
+        await uc.execute(
+            actor=editor_actor,
+            category_id=uuid.uuid4(),
+            patch=CategoryPatchInput(title="Нет такой"),
+        )
 
 
 async def test_propose_event_as_user_with_subscription(

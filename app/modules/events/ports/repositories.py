@@ -86,6 +86,14 @@ class CategoryRepository(Protocol):
         """
         ...
 
+    async def update(self, category: Category) -> Category:
+        """Сохраняет изменения существующей категории.
+
+        Поднимает :class:`CategorySlugTakenError` при нарушении ``UNIQUE(slug)``
+        и :class:`CategoryNotFoundError`, если строка исчезла.
+        """
+        ...
+
     async def list_all(self) -> list[Category]:
         """Все категории (дерево собирается на чтении из плоского списка)."""
         ...

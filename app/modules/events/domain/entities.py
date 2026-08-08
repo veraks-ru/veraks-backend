@@ -120,6 +120,41 @@ class Category:
             is_restricted=is_restricted,
         )
 
+    def apply_edits(
+        self,
+        *,
+        slug: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        is_restricted: bool | None = None,
+    ) -> bool:
+        """Применяет частичные правки; возвращает ``True``, если что-то изменилось.
+
+        ``None`` — поле не трогаем. Валидация та же, что в :meth:`create`:
+        менять slug можно, но только на корректный kebab-case. ``parent_id``
+        не правится (см. ``CategoryPatchInput``).
+        """
+        changed = False
+        if slug is not None:
+            value = validate_slug(slug)
+            if value != self.slug:
+                self.slug = value
+                changed = True
+        if title is not None:
+            value = require_text(title, field="title", max_length=200)
+            if value != self.title:
+                self.title = value
+                changed = True
+        if description is not None:
+            value = description.strip()
+            if value != self.description:
+                self.description = value
+                changed = True
+        if is_restricted is not None and is_restricted != self.is_restricted:
+            self.is_restricted = is_restricted
+            changed = True
+        return changed
+
 
 @dataclass(slots=True)
 class Event:

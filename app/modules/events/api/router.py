@@ -31,6 +31,7 @@ from app.modules.events.api.dependencies import (
     get_publish_event,
     get_recompute_ratings,
     get_reject_event,
+    get_update_category,
     get_update_event,
     get_void_event_disputes,
 )
@@ -41,6 +42,7 @@ from app.modules.events.api.schemas import (
     CreateEventRequest,
     EventResponse,
     RejectEventRequest,
+    UpdateCategoryRequest,
     UpdateEventRequest,
 )
 from app.modules.events.application.use_cases import (
@@ -56,6 +58,7 @@ from app.modules.events.application.use_cases import (
     ProposeEvent,
     PublishEvent,
     RejectEvent,
+    UpdateCategory,
     UpdateEvent,
 )
 from app.modules.events.domain.entities import EventStatus
@@ -93,6 +96,29 @@ async def create_category(
 ) -> CategoryResponse:
     """Создаёт категорию; права проверяет доменная политика."""
     category = await uc.execute(actor=actor, data=payload.to_input())
+    return CategoryResponse.from_domain(category)
+
+
+@router.patch(
+    "/categories/{category_id}",
+    response_model=CategoryResponse,
+    summary="Редактировать категорию (editor/admin)",
+)
+async def update_category(
+    category_id: uuid.UUID,
+    payload: UpdateCategoryRequest,
+    actor: ActorDep,
+    uc: Annotated[UpdateCategory, Depends(get_update_category)],
+) -> CategoryResponse:
+    """Частично правит категорию (название, slug, описание, флаг запрета).
+
+    Родителя не меняет: перевешивание узла дерева меняет смысл уже сделанных
+    прогнозов. Удаления категории нет — вместо него ``is_restricted``, который
+    закрывает создание новых событий, не трогая историю.
+    """
+    category = await uc.execute(
+        actor=actor, category_id=category_id, patch=payload.to_input()
+    )
     return CategoryResponse.from_domain(category)
 
 

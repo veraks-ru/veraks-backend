@@ -68,3 +68,18 @@ class NewCategoryInput:
     description: str = ""
     parent_id: uuid.UUID | None = None
     is_restricted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CategoryPatchInput:
+    """Частичные правки категории (``None`` — поле не меняется).
+
+    ``parent_id`` намеренно не правится: перевешивание узла дерева меняет
+    смысл уже сделанных прогнозов в подкатегориях и требует отдельной операции
+    с проверкой на циклы.
+    """
+
+    slug: str | None = None
+    title: str | None = None
+    description: str | None = None
+    is_restricted: bool | None = None

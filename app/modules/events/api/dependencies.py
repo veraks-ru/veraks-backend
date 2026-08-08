@@ -34,6 +34,7 @@ from app.modules.events.application.use_cases import (
     ProposeEvent,
     PublishEvent,
     RejectEvent,
+    UpdateCategory,
     UpdateEvent,
 )
 from app.modules.events.ports.clock import Clock
@@ -289,6 +290,13 @@ def get_list_events(events: EventRepoDep) -> ListEvents:
 def get_create_category(categories: CategoryRepoDep) -> CreateCategory:
     """Use-case создания категории."""
     return CreateCategory(categories=categories)
+
+
+def get_update_category(
+    categories: CategoryRepoDep, audit: AuditDep
+) -> UpdateCategory:
+    """Use-case правки категории (с аудитом)."""
+    return UpdateCategory(categories=categories, audit=audit)
 
 
 def get_list_categories(categories: CategoryRepoDep) -> ListCategories:

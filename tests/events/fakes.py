@@ -13,7 +13,10 @@ from datetime import datetime
 from typing import Any
 
 from app.modules.events.domain.entities import Category, Event, EventStatus
-from app.modules.events.domain.errors import CategorySlugTakenError
+from app.modules.events.domain.errors import (
+    CategoryNotFoundError,
+    CategorySlugTakenError,
+)
 from app.modules.events.ports.repositories import EventFilter
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
 
@@ -138,6 +141,18 @@ class InMemoryCategoryRepository:
     async def add(self, category: Category) -> Category:
         for existing in self._by_id.values():
             if existing.slug.lower() == category.slug.lower():
+                raise CategorySlugTakenError(category.slug)
+        self._by_id[category.id] = category
+        return category
+
+    async def update(self, category: Category) -> Category:
+        if category.id not in self._by_id:
+            raise CategoryNotFoundError("Категория не найдена")
+        for existing in self._by_id.values():
+            if (
+                existing.id != category.id
+                and existing.slug.lower() == category.slug.lower()
+            ):
                 raise CategorySlugTakenError(category.slug)
         self._by_id[category.id] = category
         return category

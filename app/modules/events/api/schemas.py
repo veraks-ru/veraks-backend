@@ -13,6 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.events.application.dto import (
+    CategoryPatchInput,
     EventPatchInput,
     NewCategoryInput,
     NewEventInput,
@@ -158,6 +159,28 @@ class CreateCategoryRequest(BaseModel):
             title=self.title,
             description=self.description,
             parent_id=self.parent_id,
+            is_restricted=self.is_restricted,
+        )
+
+
+class UpdateCategoryRequest(BaseModel):
+    """Частичные правки категории; пропущенные поля не меняются.
+
+    ``parent_id`` не редактируется — перевешивание узла дерева меняет смысл
+    уже сделанных прогнозов и требует отдельной операции.
+    """
+
+    slug: str | None = Field(default=None, min_length=1, max_length=120)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    is_restricted: bool | None = None
+
+    def to_input(self) -> CategoryPatchInput:
+        """Трансляция в прикладной DTO."""
+        return CategoryPatchInput(
+            slug=self.slug,
+            title=self.title,
+            description=self.description,
             is_restricted=self.is_restricted,
         )
 
