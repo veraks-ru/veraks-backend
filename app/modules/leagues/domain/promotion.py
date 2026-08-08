@@ -13,6 +13,46 @@ import uuid
 from collections.abc import Mapping, Sequence
 
 
+def compute_initial_placement(
+    ranked: Sequence[uuid.UUID],
+    *,
+    num_levels: int,
+    even_split: bool,
+) -> dict[uuid.UUID, int]:
+    """Первичная раскладка по дивизионам для сезона без предшественника.
+
+    ``ranked`` — участники от сильнейшего к слабейшему (без трек-рекорда порядок
+    произволен, и это нормально: раскладка всё равно временная до первой
+    промоции). ``even_split=False`` — все в низший дивизион (честный холодный
+    старт: высший уровень никем не заслужен). ``even_split=True`` — поровну по
+    уровням сверху вниз; остаток от деления достаётся верхним дивизионам.
+
+    Без I/O — как и :func:`compute_promotion`.
+    """
+    if num_levels < 1:
+        return {}
+    members = list(ranked)
+    if not members:
+        return {}
+    if not even_split:
+        return {user_id: num_levels for user_id in members}
+
+    n = len(members)
+    base, extra = divmod(n, num_levels)
+    result: dict[uuid.UUID, int] = {}
+    cursor = 0
+    for level in range(1, num_levels + 1):
+        # Остаток раздаём верхним уровням — они заполняются первыми.
+        size = base + (1 if level <= extra else 0)
+        for user_id in members[cursor : cursor + size]:
+            result[user_id] = level
+        cursor += size
+    # Хвост (возможен только при num_levels > n) — в низший.
+    for user_id in members[cursor:]:
+        result[user_id] = num_levels
+    return result
+
+
 def compute_promotion(
     standings_by_level: Mapping[int, Sequence[uuid.UUID]],
     *,

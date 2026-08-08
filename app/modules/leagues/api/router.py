@@ -5,17 +5,21 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from app.modules.identity.api.dependencies import CurrentUser
 from app.modules.leagues.api.dependencies import (
     get_apply_promotion,
     get_create_league,
+    get_delete_league,
     get_division_standings,
     get_join_league,
     get_league_standings,
     get_leave_league,
+    get_list_all_leagues,
     get_list_my_leagues,
+    get_rename_league,
+    get_seed_divisions,
     require_admin,
 )
 from app.modules.leagues.api.schemas import (
@@ -23,17 +27,24 @@ from app.modules.leagues.api.schemas import (
     DivisionStandingsResponse,
     LeagueCreateRequest,
     LeagueJoinRequest,
+    LeagueListResponse,
+    LeagueRenameRequest,
     LeagueResponse,
     LeagueStandingsResponse,
+    SeedDivisionsRequest,
 )
 from app.modules.leagues.application.use_cases import (
     ApplyPromotionRelegation,
     CreateLeague,
+    DeleteLeague,
     GetDivisionStandings,
     GetLeagueStandings,
     JoinLeague,
     LeaveLeague,
+    ListAllLeagues,
     ListMyLeagues,
+    RenameLeague,
+    SeedSeasonDivisions,
 )
 
 router = APIRouter(tags=["leagues"])
@@ -113,6 +124,63 @@ async def league_standings(
     return LeagueStandingsResponse.from_result(result)
 
 
+# ── Модерация лиг (admin) ────────────────────────────────────────────────────
+
+
+@router.get(
+    "/admin/leagues",
+    response_model=LeagueListResponse,
+    summary="Все приватные лиги (admin)",
+)
+async def list_all_leagues(
+    _role: Annotated[object, Depends(require_admin)],
+    uc: Annotated[ListAllLeagues, Depends(get_list_all_leagues)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> LeagueListResponse:
+    """Список для модерации: владелец видит только свои лиги, админ — все."""
+    page = await uc.execute(limit=limit, offset=offset)
+    return LeagueListResponse.from_page(page)
+
+
+@router.patch(
+    "/admin/leagues/{league_id}",
+    response_model=LeagueResponse,
+    summary="Переименовать лигу (admin)",
+)
+async def rename_league(
+    league_id: uuid.UUID,
+    payload: LeagueRenameRequest,
+    current_user: CurrentUser,
+    _role: Annotated[object, Depends(require_admin)],
+    uc: Annotated[RenameLeague, Depends(get_rename_league)],
+) -> LeagueResponse:
+    """Модерация недопустимого названия; факт правки уходит в аудит."""
+    league = await uc.execute(
+        actor_id=current_user.id, league_id=league_id, name=payload.name
+    )
+    return LeagueResponse.from_domain(league)
+
+
+@router.delete(
+    "/admin/leagues/{league_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить лигу (admin)",
+)
+async def delete_league(
+    league_id: uuid.UUID,
+    current_user: CurrentUser,
+    _role: Annotated[object, Depends(require_admin)],
+    uc: Annotated[DeleteLeague, Depends(get_delete_league)],
+) -> None:
+    """Сносит лигу вместе с участием.
+
+    Обычное удаление, а не мягкое: лига не связана ни с прогнозами, ни с
+    призовым зачётом, ни с деньгами. Сам факт остаётся в append-only аудите.
+    """
+    await uc.execute(actor_id=current_user.id, league_id=league_id)
+
+
 # ── Дивизионы ────────────────────────────────────────────────────────────────
 
 
@@ -128,6 +196,30 @@ async def division_standings(
 ) -> DivisionStandingsResponse:
     result = await uc.execute(season_id=season_id, level=level)
     return DivisionStandingsResponse.from_result(result)
+
+
+@router.post(
+    "/admin/divisions/seed",
+    summary="Первичный посев дивизионов в сезоне (admin)",
+)
+async def seed_divisions(
+    payload: SeedDivisionsRequest,
+    _role: Annotated[object, Depends(require_admin)],
+    uc: Annotated[SeedSeasonDivisions, Depends(get_seed_divisions)],
+) -> dict[str, int]:
+    """Раскладывает участников по дивизионам, когда прошлого сезона ещё нет.
+
+    ``/admin/divisions/apply`` строит расстановку из membership завершённого
+    сезона — для первого сезона брать неоткуда. Здесь берутся все активные
+    аккаунты без дивизиона в этом сезоне. Повтор безопасен: уже назначенных не
+    трогаем, пока не передан ``overwrite``.
+    """
+    written = await uc.execute(
+        season_id=payload.season_id,
+        even_split=payload.even_split,
+        overwrite=payload.overwrite,
+    )
+    return {"placed": written}
 
 
 @router.post(

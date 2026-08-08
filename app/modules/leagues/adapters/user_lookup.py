@@ -28,6 +28,11 @@ class SqlAlchemyUserLookup:
             id=user.id, username=user.username, display_name=user.display_name
         )
 
+    async def active_user_ids(self) -> list[uuid.UUID]:
+        """Id всех активных аккаунтов (для первичного посева дивизионов)."""
+        stmt = select(UserORM.id).where(UserORM.status == UserStatus.ACTIVE)
+        return list((await self._session.execute(stmt)).scalars().all())
+
     async def refs_by_ids(
         self, ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, UserRef]:

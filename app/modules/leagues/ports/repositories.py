@@ -40,6 +40,27 @@ class LeagueRepository(Protocol):
     async def get_by_id(self, league_id: uuid.UUID) -> League | None: ...
     async def get_by_invite_code(self, code: str) -> League | None: ...
 
+    async def list_all(self, *, limit: int, offset: int) -> list[League]:
+        """Все лиги, новые первыми (админская модерация)."""
+        ...
+
+    async def count_all(self) -> int:
+        """Общее число лиг — для пагинации в админке."""
+        ...
+
+    async def rename(self, league_id: uuid.UUID, name: str) -> League:
+        """Переименовать лигу; :class:`LeagueNotFoundError`, если её нет."""
+        ...
+
+    async def delete(self, league_id: uuid.UUID) -> bool:
+        """Удалить лигу вместе с участием; ``False`` — лиги не было.
+
+        Лига не связана ни с прогнозами, ни с деньгами, ни с призовым зачётом —
+        это просто группа с собственным лидербордом, поэтому обычное удаление
+        здесь допустимо (в отличие от событий и сезонов).
+        """
+        ...
+
 
 class LeagueMembershipRepository(Protocol):
     async def add(self, membership: LeagueMembership) -> LeagueMembership: ...
@@ -77,6 +98,14 @@ class UserLookup(Protocol):
     async def refs_by_ids(
         self, ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, UserRef]: ...
+
+    async def active_user_ids(self) -> list[uuid.UUID]:
+        """Id всех активных аккаунтов.
+
+        Нужен первичному посеву дивизионов: на старте первого сезона рейтингов
+        ещё нет, поэтому распределять приходится по составу участников.
+        """
+        ...
 
 
 @runtime_checkable

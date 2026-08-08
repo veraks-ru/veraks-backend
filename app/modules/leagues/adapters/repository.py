@@ -21,6 +21,7 @@ from app.modules.leagues.domain.entities import (
     League,
     LeagueMembership,
 )
+from app.modules.leagues.domain.errors import LeagueNotFoundError
 
 
 class SqlAlchemyLeagueRepository:
@@ -41,6 +42,40 @@ class SqlAlchemyLeagueRepository:
         stmt = select(LeagueORM).where(LeagueORM.invite_code == code)
         orm = (await self._session.execute(stmt)).scalar_one_or_none()
         return orm.to_domain() if orm is not None else None
+
+    async def list_all(self, *, limit: int, offset: int) -> list[League]:
+        stmt = (
+            select(LeagueORM)
+            .order_by(LeagueORM.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]
+
+    async def count_all(self) -> int:
+        stmt = select(func.count()).select_from(LeagueORM)
+        return int((await self._session.execute(stmt)).scalar_one())
+
+    async def rename(self, league_id: uuid.UUID, name: str) -> League:
+        orm = await self._session.get(LeagueORM, league_id)
+        if orm is None:
+            raise LeagueNotFoundError("Лига не найдена")
+        orm.name = name
+        await self._session.flush()
+        return orm.to_domain()
+
+    async def delete(self, league_id: uuid.UUID) -> bool:
+        # Участие сносим явно: FK на leagues без ON DELETE CASCADE.
+        await self._session.execute(
+            delete(LeagueMembershipORM).where(
+                LeagueMembershipORM.league_id == league_id
+            )
+        )
+        result = await self._session.execute(
+            delete(LeagueORM).where(LeagueORM.id == league_id)
+        )
+        return (cast("CursorResult[Any]", result).rowcount or 0) > 0
 
 
 class SqlAlchemyLeagueMembershipRepository:

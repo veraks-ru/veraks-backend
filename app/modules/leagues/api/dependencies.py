@@ -19,17 +19,25 @@ from app.modules.leagues.adapters.repository import (
 from app.modules.leagues.adapters.standings_gateway import (
     SqlAlchemyStandingsGateway,
 )
-from app.modules.leagues.adapters.user_lookup import SecretsInviteCodeGenerator
+from app.modules.leagues.adapters.user_lookup import (
+    SecretsInviteCodeGenerator,
+    SqlAlchemyUserLookup,
+)
 from app.modules.leagues.application.use_cases import (
     ApplyPromotionRelegation,
     CreateLeague,
+    DeleteLeague,
     GetDivisionStandings,
     GetLeagueStandings,
     JoinLeague,
     LeaveLeague,
+    ListAllLeagues,
     ListMyLeagues,
+    RenameLeague,
+    SeedSeasonDivisions,
 )
 from app.modules.leagues.domain.errors import LeaguePermissionError
+from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -80,6 +88,36 @@ def get_division_standings(session: SessionDep) -> GetDivisionStandings:
         divisions=SqlAlchemyDivisionRepository(session),
         memberships=SqlAlchemyDivisionMembershipRepository(session),
         standings=SqlAlchemyStandingsGateway(session),
+    )
+
+
+def get_list_all_leagues(session: SessionDep) -> ListAllLeagues:
+    return ListAllLeagues(
+        leagues=SqlAlchemyLeagueRepository(session),
+        memberships=SqlAlchemyLeagueMembershipRepository(session),
+    )
+
+
+def get_rename_league(session: SessionDep) -> RenameLeague:
+    return RenameLeague(
+        leagues=SqlAlchemyLeagueRepository(session),
+        audit=SqlAlchemyAuditTrail(session),
+    )
+
+
+def get_delete_league(session: SessionDep) -> DeleteLeague:
+    return DeleteLeague(
+        leagues=SqlAlchemyLeagueRepository(session),
+        audit=SqlAlchemyAuditTrail(session),
+    )
+
+
+def get_seed_divisions(session: SessionDep) -> SeedSeasonDivisions:
+    return SeedSeasonDivisions(
+        divisions=SqlAlchemyDivisionRepository(session),
+        memberships=SqlAlchemyDivisionMembershipRepository(session),
+        standings=SqlAlchemyStandingsGateway(session),
+        users=SqlAlchemyUserLookup(session),
     )
 
 

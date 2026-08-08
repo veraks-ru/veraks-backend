@@ -19,7 +19,10 @@ from app.modules.leagues.domain.errors import (
     DivisionNotFoundError,
     LeagueNotFoundError,
 )
-from app.modules.leagues.domain.promotion import compute_promotion
+from app.modules.leagues.domain.promotion import (
+    compute_initial_placement,
+    compute_promotion,
+)
 from app.modules.leagues.ports.repositories import (
     DivisionMembershipRepository,
     DivisionRepository,
@@ -28,7 +31,10 @@ from app.modules.leagues.ports.repositories import (
     LeagueRepository,
     StandingRow,
     StandingsGateway,
+    UserLookup,
 )
+from app.shared.audit.domain.entities import AuditActorType
+from app.shared.audit.ports.audit_trail import AuditTrail
 
 
 def _rank_rows(rows: list[StandingRow]) -> list[StandingRow]:
@@ -175,6 +181,108 @@ class GetLeagueStandings:
         return LeagueStandings(league=league, is_member=is_member, rows=rows)
 
 
+# ── Админская модерация лиг ──────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class LeaguePage:
+    """Страница списка лиг для админки: элементы + общее число."""
+
+    items: list[LeagueSummary]
+    total: int
+
+
+class ListAllLeagues:
+    """Все приватные лиги с числом участников (admin).
+
+    Владелец видит только свои лиги, поэтому лига с оскорбительным названием
+    иначе недосягаема для модерации.
+    """
+
+    def __init__(
+        self,
+        *,
+        leagues: LeagueRepository,
+        memberships: LeagueMembershipRepository,
+    ) -> None:
+        self._leagues = leagues
+        self._memberships = memberships
+
+    async def execute(self, *, limit: int = 50, offset: int = 0) -> LeaguePage:
+        found = await self._leagues.list_all(limit=limit, offset=offset)
+        items = [
+            LeagueSummary(
+                league=league,
+                members=await self._memberships.count_members(league.id),
+            )
+            for league in found
+        ]
+        return LeaguePage(items=items, total=await self._leagues.count_all())
+
+
+class RenameLeague:
+    """Переименовать лигу (admin) — модерация недопустимых названий."""
+
+    def __init__(self, *, leagues: LeagueRepository, audit: AuditTrail) -> None:
+        self._leagues = leagues
+        self._audit = audit
+
+    async def execute(
+        self, *, actor_id: uuid.UUID, league_id: uuid.UUID, name: str
+    ) -> League:
+        before = await self._leagues.get_by_id(league_id)
+        if before is None:
+            raise LeagueNotFoundError("Лига не найдена")
+        # Снимаем прежнее имя строкой ДО правки: репозиторий вправе вернуть ту
+        # же сущность, что потом мутирует, и тогда диф аудита схлопнулся бы.
+        before_name = before.name
+        # Валидация та же, что при создании (пустое/слишком длинное имя).
+        clean = League.create(
+            name=name, owner_id=before.owner_id, invite_code=before.invite_code
+        ).name
+        renamed = await self._leagues.rename(league_id, clean)
+        await self._audit.record(
+            actor_id=actor_id,
+            actor_type=AuditActorType.ADMIN,
+            action="league.renamed",
+            entity_type="league",
+            entity_id=league_id,
+            before={"name": before_name},
+            after={"name": renamed.name},
+        )
+        return renamed
+
+
+class DeleteLeague:
+    """Удалить лигу вместе с участием (admin).
+
+    Обычное удаление, а не мягкое: лига не связана ни с прогнозами, ни с
+    призовым зачётом, ни с деньгами — стирать нечего, кроме самой группы.
+    Факт удаления остаётся в append-only аудите.
+    """
+
+    def __init__(self, *, leagues: LeagueRepository, audit: AuditTrail) -> None:
+        self._leagues = leagues
+        self._audit = audit
+
+    async def execute(
+        self, *, actor_id: uuid.UUID, league_id: uuid.UUID
+    ) -> None:
+        league = await self._leagues.get_by_id(league_id)
+        if league is None:
+            raise LeagueNotFoundError("Лига не найдена")
+        await self._leagues.delete(league_id)
+        await self._audit.record(
+            actor_id=actor_id,
+            actor_type=AuditActorType.ADMIN,
+            action="league.deleted",
+            entity_type="league",
+            entity_id=league_id,
+            before={"name": league.name, "owner_id": str(league.owner_id)},
+            after={},
+        )
+
+
 # ── Дивизионы ────────────────────────────────────────────────────────────────
 
 
@@ -218,6 +326,87 @@ class GetDivisionStandings:
             season_id=season_id,
             rows=rows,
         )
+
+
+class SeedSeasonDivisions:
+    """Первичный посев дивизионов для сезона без предшественника.
+
+    :class:`ApplyPromotionRelegation` строит расстановку из membership прошлого
+    сезона — для самого первого сезона брать неоткуда, и лестница не стартует.
+    Здесь участники раскладываются напрямую: все активные аккаунты, у которых
+    ещё нет дивизиона в этом сезоне.
+
+    Идемпотентно и неразрушительно: уже назначенных не трогаем (иначе повтор
+    затёр бы результаты промоции), если явно не передан ``overwrite=True``.
+    Порядок для ``even_split`` — по глобальному рейтингу; у кого его нет,
+    уходят в конец списка и оказываются в низших дивизионах.
+    """
+
+    def __init__(
+        self,
+        *,
+        divisions: DivisionRepository,
+        memberships: DivisionMembershipRepository,
+        standings: StandingsGateway,
+        users: UserLookup,
+    ) -> None:
+        self._divisions = divisions
+        self._memberships = memberships
+        self._standings = standings
+        self._users = users
+
+    async def execute(
+        self,
+        *,
+        season_id: uuid.UUID,
+        even_split: bool = False,
+        overwrite: bool = False,
+    ) -> int:
+        divisions = await self._divisions.list_all()
+        if not divisions:
+            return 0
+        by_level = {d.level: d for d in divisions}
+        num_levels = max(by_level)
+
+        candidates = await self._users.active_user_ids()
+        if not overwrite:
+            candidates = [
+                user_id
+                for user_id in candidates
+                if await self._memberships.get_for_user_season(user_id, season_id)
+                is None
+            ]
+        if not candidates:
+            return 0
+
+        ranked = (
+            await self._ranked_by_global(candidates) if even_split else candidates
+        )
+        placements = compute_initial_placement(
+            ranked, num_levels=num_levels, even_split=even_split
+        )
+
+        written = 0
+        for user_id, level in placements.items():
+            target = by_level.get(level)
+            if target is None:
+                continue
+            await self._memberships.upsert(
+                DivisionMembership(
+                    user_id=user_id, season_id=season_id, division_id=target.id
+                )
+            )
+            written += 1
+        return written
+
+    async def _ranked_by_global(
+        self, user_ids: list[uuid.UUID]
+    ) -> list[uuid.UUID]:
+        """Сортирует по глобальному рейтингу; безрейтинговые — в конец."""
+        rows = _rank_rows(await self._standings.global_rows(user_ids))
+        ordered = [row.user_id for row in rows]
+        seen = set(ordered)
+        return ordered + [uid for uid in user_ids if uid not in seen]
 
 
 class ApplyPromotionRelegation:

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.modules.leagues.application.use_cases import (
     DivisionStandings,
+    LeaguePage,
     LeagueStandings,
     LeagueSummary,
 )
@@ -82,6 +83,43 @@ class LeagueStandingsResponse(BaseModel):
             is_member=x.is_member,
             rows=[StandingRowResponse.from_row(r) for r in x.rows],
         )
+
+
+class LeagueRenameRequest(BaseModel):
+    """Переименование лиги админом (модерация названий)."""
+
+    name: str = Field(min_length=1, max_length=80)
+
+
+class LeagueListResponse(BaseModel):
+    """Страница списка всех лиг для админки."""
+
+    items: list[LeagueResponse]
+    total: int
+
+    @classmethod
+    def from_page(cls, page: LeaguePage) -> LeagueListResponse:
+        return cls(
+            items=[LeagueResponse.from_summary(s) for s in page.items],
+            total=page.total,
+        )
+
+
+class SeedDivisionsRequest(BaseModel):
+    """Первичный посев дивизионов для сезона без предшественника."""
+
+    season_id: uuid.UUID
+    even_split: bool = Field(
+        default=False,
+        description=(
+            "false — все в низший дивизион (холодный старт); "
+            "true — поровну по уровням в порядке глобального рейтинга"
+        ),
+    )
+    overwrite: bool = Field(
+        default=False,
+        description="Перезаписать уже назначенные дивизионы этого сезона",
+    )
 
 
 class ApplyPromotionRequest(BaseModel):
