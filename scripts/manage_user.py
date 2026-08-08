@@ -43,6 +43,7 @@ import argparse
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -50,12 +51,48 @@ import asyncpg
 _ROLES = ("user", "editor", "arbiter", "admin")
 
 
-def _dsn() -> str:
-    """DSN для asyncpg: SQLAlchemy-схему ``postgresql+asyncpg://`` не понимает."""
-    raw = os.environ.get("ALEMBIC_DATABASE_URL") or os.environ.get("DATABASE_URL")
+def _dsn(url_file: str | None = None) -> str:
+    """DSN для asyncpg: SQLAlchemy-схему ``postgresql+asyncpg://`` не понимает.
+
+    ``url_file`` — файл с адресом одной строкой; нужен при работе через
+    port-forward и держит пароль вне истории команд и списка процессов.
+    """
+    if url_file:
+        raw: str | None = Path(url_file).read_text().strip()
+    else:
+        raw = os.environ.get("ALEMBIC_DATABASE_URL") or os.environ.get("DATABASE_URL")
     if not raw:
         raise SystemExit("Не задан DATABASE_URL (или ALEMBIC_DATABASE_URL).")
     return raw.replace("postgresql+asyncpg://", "postgresql://")
+
+
+async def _create_user(
+    conn: asyncpg.Connection, *, username: str, email: str, role: str
+) -> None:
+    """Заводит аккаунт под вход по email-ссылке.
+
+    Тот же набор полей, что у ``User.register_with_email``:
+    ``identity_verified=false`` (письмо не доказывает личность) и
+    ``onboarded_at=null`` — согласия соберёт онбординг при первом входе.
+    Вход по ссылке делает find-or-create по ``email``, поэтому созданный
+    здесь аккаунт будет переиспользован, а не продублирован.
+
+    Нужен, когда админов в базе нет вообще: первый вход создал бы обычного
+    ``user``, а поднять ему роль через API уже некому.
+    """
+    await conn.execute(
+        "INSERT INTO users (id, username, display_name, email, role, status, "
+        " identity_verified, created_at) "
+        # username — citext, display_name — text. Один параметр в оба места
+        # asyncpg развести не может («inconsistent types deduced»), поэтому
+        # передаём значение дважды разными параметрами.
+        "VALUES (gen_random_uuid(), $1, $2, $3, $4::user_role, "
+        " 'active'::user_status, false, now())",
+        username,
+        username,
+        email,
+        role,
+    )
 
 
 async def _fetch_user(conn: asyncpg.Connection, username: str) -> Any:
@@ -75,10 +112,19 @@ def _describe(row: Any) -> str:
 
 
 async def _run(args: argparse.Namespace) -> int:
-    conn = await asyncpg.connect(_dsn())
+    conn = await asyncpg.connect(_dsn(args.database_url_file))
     try:
         async with conn.transaction():
             target = await _fetch_user(conn, args.username)
+            if target is None and args.create:
+                await _create_user(
+                    conn,
+                    username=args.username,
+                    email=args.create,
+                    role=args.role or "user",
+                )
+                target = await _fetch_user(conn, args.username)
+                print("Создан: " + _describe(target))
             if target is None:
                 print(f"Пользователь @{args.username} не найден.", file=sys.stderr)
                 return 1
@@ -156,9 +202,28 @@ def main() -> int:
         metavar="USERNAME",
         help="перенести реквизиты выплат с этого аккаунта",
     )
+    parser.add_argument(
+        "--create",
+        metavar="EMAIL",
+        help=(
+            "завести аккаунт с этим email, если его ещё нет "
+            "(bootstrap первого админа на пустой базе)"
+        ),
+    )
+    parser.add_argument(
+        "--database-url-file",
+        help="файл с адресом БД одной строкой (вместо DATABASE_URL в окружении)",
+    )
     args = parser.parse_args()
-    if args.role is None and args.verified is None and not args.move_payout_requisites_from:
-        parser.error("нечего делать: укажите --role, --verified/--unverified или перенос")
+    if (
+        args.role is None
+        and args.verified is None
+        and not args.move_payout_requisites_from
+        and not args.create
+    ):
+        parser.error(
+            "нечего делать: укажите --create, --role, --verified/--unverified или перенос"
+        )
     return asyncio.run(_run(args))
 
 

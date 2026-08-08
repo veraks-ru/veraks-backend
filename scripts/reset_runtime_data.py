@@ -231,6 +231,14 @@ DETAIL_QUERIES: list[tuple[str, str]] = [
         ),
     ),
     (
+        "Справочники (должны пережить сброс)",
+        (
+            "SELECT 'divisions' AS ref, count(*)::text AS n FROM divisions "
+            "UNION ALL SELECT 'ledger_accounts (базовые)', count(*)::text "
+            "FROM ledger_accounts WHERE account_code NOT LIKE 'prize:fund:%'"
+        ),
+    ),
+    (
         "Акцепты оферты",
         (
             "SELECT u.username, c.document, c.version, c.method, "
