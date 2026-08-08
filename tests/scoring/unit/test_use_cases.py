@@ -13,11 +13,13 @@ from decimal import Decimal
 
 import pytest
 
-from app.modules.scoring.application.dto import EventScoringStatus
+from app.modules.scoring.application.dto import EventScoringStatus, SeasonConfigView
 from app.modules.scoring.application.use_cases import (
     GetLeaderboard,
     GetProfileSummary,
     GetSeasonLeaderboard,
+    GetSeasonQualification,
+    GetSeasonStanding,
     GetUserCalibration,
     RecalibrateSeasonGradations,
     RecomputeRatings,
@@ -43,6 +45,9 @@ from app.modules.scoring.domain.value_objects import (
     ResolvedEvent,
     quantize_score,
 )
+from app.modules.seasons.domain.entities import SeasonStatus
+from app.modules.seasons.domain.errors import SeasonNotFoundError
+from app.modules.seasons.domain.value_objects import LeagueConfig
 from tests.scoring.conftest import FIXED_NOW, make_event
 from tests.scoring.fakes import (
     FakeCategoryDirectory,
@@ -229,6 +234,157 @@ async def test_recompute_ratings_builds_season_scope() -> None:
     season_board = await repo.leaderboard(ScopeType.SEASON, season_id)
     assert len(season_board) == 5
     assert {r.rank for r in season_board} == {1, 2, 3, 4, 5}
+
+
+async def test_season_rank_puts_qualified_above_higher_scoring_unqualified() -> None:
+    """Сезонный ранг — призовое место: неквалифицированный не встаёт над призёром.
+
+    Один удачный выстрел на сюрпризе даёт высший ``skill_score`` (усадка от
+    этого не спасает, см. scoring_system_design.md §3.2), но к призам такой
+    участник не квалифицирован — значит и первым в сезонной таблице быть не
+    должен. В global/category (``qualified`` = ``None``) порядок прежний —
+    чисто по ``skill_score``.
+    """
+    season_id = uuid.uuid4()
+    category_id = uuid.uuid4()
+    fillers = [uuid.uuid4() for _ in range(4)]
+    veteran, oneshot = uuid.uuid4(), uuid.uuid4()
+
+    # Сюрприз: толпа уверена в ДА, исход НЕТ, «выстрел» угадал один oneshot.
+    surprise, _ = make_event(
+        outcome=0,
+        probabilities=[0.9, 0.9, 0.9, 0.9, 0.1],
+        category_id=category_id,
+        season_id=season_id,
+        user_ids=[*fillers, oneshot],
+    )
+    # Два ровных события, где veteran стабильно чуть точнее толпы.
+    steady = [
+        make_event(
+            outcome=1,
+            probabilities=[0.5, 0.5, 0.5, 0.5, 0.7],
+            category_id=category_id,
+            season_id=season_id,
+            user_ids=[*fillers, veteran],
+        )[0]
+        for _ in range(2)
+    ]
+
+    # n_min=2 — единственный порог, который отсекает oneshot (у него n=1).
+    cfg = LeagueConfig(
+        gradation_map=(0.1, 0.3, 0.5, 0.7, 0.9),
+        n_min=2,
+        c_min=1,
+        w_min=0.0,
+        m_per_category=1,
+        k_shrink=6.0,
+        min_predictors=5,
+    )
+    repo = InMemoryRatingRepository()
+    uc = RecomputeRatings(
+        gateway=FakeEventScoringGateway(resolved=[surprise, *steady]),
+        ratings=repo,
+        clock=FakeClock(FIXED_NOW),
+        season_config=FakeSeasonConfigGateway(
+            configs={
+                season_id: SeasonConfigView(status=SeasonStatus.ACTIVE, config=cfg)
+            }
+        ),
+    )
+
+    await uc.execute()
+
+    season_board = {r.user_id: r for r in await repo.leaderboard(ScopeType.SEASON, season_id)}
+    # Предпосылка теста: у неквалифицированного балл действительно выше.
+    assert season_board[oneshot].skill_score > season_board[veteran].skill_score
+    assert season_board[oneshot].qualified is False
+    assert season_board[veteran].qualified is True
+    # …и всё же призовое место №1 — у квалифицированного, а oneshot — последний.
+    assert season_board[veteran].rank == 1
+    assert season_board[oneshot].rank == len(season_board)
+
+    # Глобальная область квалификации не знает — там правит только skill_score.
+    global_board = await repo.leaderboard(ScopeType.GLOBAL, None)
+    assert global_board[0].user_id == oneshot
+    assert global_board[0].qualified is None
+
+
+async def test_season_standing_returns_own_row_with_threshold_breakdown() -> None:
+    """Закреплённая строка «вы»: своё место + чего не хватает до призового зачёта."""
+    season_id = uuid.uuid4()
+    category_id = uuid.uuid4()
+    ids = [uuid.uuid4() for _ in range(5)]
+    event, _ = make_event(
+        outcome=1,
+        probabilities=[0.5, 0.5, 0.5, 0.5, 0.7],
+        category_id=category_id,
+        season_id=season_id,
+        user_ids=ids,
+    )
+    # n_min=2 не берёт никто (у всех по одному прогнозу) — удобно для разбора.
+    cfg = LeagueConfig(
+        gradation_map=(0.1, 0.3, 0.5, 0.7, 0.9),
+        n_min=2,
+        c_min=1,
+        w_min=0.0,
+        m_per_category=1,
+        k_shrink=6.0,
+        min_predictors=5,
+    )
+    gateway = FakeEventScoringGateway(resolved=[event])
+    season_config = FakeSeasonConfigGateway(
+        by_slug={"2026q3": season_id},
+        configs={season_id: SeasonConfigView(status=SeasonStatus.ACTIVE, config=cfg)},
+    )
+    repo = InMemoryRatingRepository()
+    await RecomputeRatings(
+        gateway=gateway,
+        ratings=repo,
+        clock=FakeClock(FIXED_NOW),
+        season_config=season_config,
+    ).execute()
+
+    uc = GetSeasonStanding(
+        ratings=repo,
+        season_config=season_config,
+        qualification=GetSeasonQualification(
+            gateway=gateway, season_config=season_config
+        ),
+    )
+
+    # Участник сезона: строка рейтинга есть, но объёма не хватает.
+    standing = await uc.execute(user_id=ids[-1], slug="2026q3")
+    assert standing.season_id == season_id
+    assert standing.rating is not None
+    assert standing.rating.rank >= 1
+    assert standing.qualification.qualified is False
+    assert standing.qualification.volume_ok is False
+    assert standing.qualification.n_resolved == 1
+    assert standing.qualification.n_min == 2
+    # Пороги, которые пройдены, так и отмечены — разбор пофакторный.
+    assert standing.qualification.diversity_ok is True
+    assert standing.qualification.coverage_ok is True
+
+    # Не участвовавший: рейтинга нет, но разбор порогов всё равно осмыслен.
+    outsider = await uc.execute(user_id=uuid.uuid4(), slug="2026q3")
+    assert outsider.rating is None
+    assert outsider.qualification.n_resolved == 0
+    assert outsider.qualification.qualified is False
+
+
+async def test_season_standing_rejects_unknown_season() -> None:
+    season_config = FakeSeasonConfigGateway()
+    uc = GetSeasonStanding(
+        ratings=InMemoryRatingRepository(),
+        season_config=season_config,
+        qualification=GetSeasonQualification(
+            gateway=FakeEventScoringGateway(resolved=[]),
+            season_config=season_config,
+        ),
+    )
+
+    with pytest.raises(SeasonNotFoundError):
+        await uc.execute(user_id=uuid.uuid4(), slug="нет-такого")
 
 
 def test_touched_scopes_covers_global_category_and_season() -> None:

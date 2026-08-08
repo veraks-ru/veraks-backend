@@ -14,7 +14,7 @@ from decimal import Decimal
 
 from app.modules.scoring.domain.entities import Rating
 from app.modules.seasons.domain.entities import SeasonStatus
-from app.modules.seasons.domain.value_objects import LeagueConfig
+from app.modules.seasons.domain.value_objects import LeagueConfig, QualificationResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +106,21 @@ class ProfileCategoryRating:
 
     category: CategoryRef
     rating: Rating
+
+
+@dataclass(frozen=True, slots=True)
+class SeasonStanding:
+    """Позиция пользователя в сезоне + разбор его квалификации к призам.
+
+    Для закреплённой строки «вы» под сезонной таблицей: участник может быть за
+    пределами страницы лидерборда, но обязан видеть своё место и то, каких
+    порогов ему не хватает. ``rating`` — ``None``, если разрешённых прогнозов в
+    сезоне ещё нет (тогда в ``qualification`` — нули и ``qualified=False``).
+    """
+
+    season_id: uuid.UUID
+    rating: Rating | None
+    qualification: QualificationResult
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,7 +12,11 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.scoring.application.dto import GradationRecalibration, ProfileSummary
+from app.modules.scoring.application.dto import (
+    GradationRecalibration,
+    ProfileSummary,
+    SeasonStanding,
+)
 from app.modules.scoring.domain.calibration import CalibrationReport
 from app.modules.scoring.domain.entities import Rating, ScopeType
 from app.modules.seasons.domain.value_objects import QualificationResult
@@ -247,6 +251,30 @@ class QualificationResponse(BaseModel):
             n_min=result.n_min,
             c_min=result.c_min,
             w_min=result.w_min,
+        )
+
+
+class SeasonStandingResponse(BaseModel):
+    """Своя строка в сезоне: позиция (если есть) + разбор порогов квалификации.
+
+    ``rating`` — ``null``, если рейтинговых прогнозов в сезоне ещё нет; разбор
+    порогов при этом всё равно отдаётся (показывает, сколько осталось набрать).
+    """
+
+    season_id: uuid.UUID
+    rating: RatingResponse | None
+    qualification: QualificationResponse
+
+    @classmethod
+    def from_domain(cls, standing: SeasonStanding) -> SeasonStandingResponse:
+        return cls(
+            season_id=standing.season_id,
+            rating=(
+                RatingResponse.from_domain(standing.rating)
+                if standing.rating is not None
+                else None
+            ),
+            qualification=QualificationResponse.from_domain(standing.qualification),
         )
 
 

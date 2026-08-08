@@ -470,9 +470,15 @@ _EASY_CFG = LeagueConfig(
 )
 
 
-def _season_rating(season_id: uuid.UUID, *, rank: int, qualified: bool) -> Rating:
+def _season_rating(
+    season_id: uuid.UUID,
+    *,
+    rank: int,
+    qualified: bool,
+    user_id: uuid.UUID | None = None,
+) -> Rating:
     return Rating(
-        user_id=uuid.uuid4(),
+        user_id=user_id or uuid.uuid4(),
         scope_type=ScopeType.SEASON,
         scope_id=season_id,
         mean_brier=Decimal("0.20000"),
@@ -543,6 +549,93 @@ async def test_user_season_qualification_breakdown(make_client) -> None:
     body = resp.json()
     assert body["n_resolved"] == 1
     assert body["qualified"] is True  # мягкий конфиг квалифицирует с одного события
+
+
+async def test_my_season_standing_pins_own_row_with_breakdown(make_client) -> None:
+    """Закреплённая строка «вы»: своё место отдаётся вместе с разбором порогов."""
+    season_id = uuid.uuid4()
+    me = _user()
+    ids = [uuid.uuid4() for _ in range(4)] + [me.id]
+    event, _ = make_event(
+        outcome=0,
+        probabilities=[0.9, 0.9, 0.9, 0.9, 0.3],
+        season_id=season_id,
+        user_ids=ids,
+    )
+    # Строгий конфиг: одного события не хватает по объёму — есть что разбирать.
+    strict_cfg = LeagueConfig(
+        gradation_map=(0.1, 0.3, 0.5, 0.7, 0.9),
+        n_min=5,
+        c_min=1,
+        w_min=0.0,
+        m_per_category=1,
+        k_shrink=6.0,
+        min_predictors=5,
+    )
+    season_config = FakeSeasonConfigGateway(
+        by_slug={"2026q3": season_id},
+        configs={
+            season_id: SeasonConfigView(status=SeasonStatus.ACTIVE, config=strict_cfg)
+        },
+    )
+    repo = InMemoryRatingRepository()
+    # Позиция заведомо вне первой страницы выдачи — ради неё эндпоинт и нужен.
+    await repo.upsert_many(
+        [_season_rating(season_id, rank=87, qualified=False, user_id=me.id)]
+    )
+    client, _, _, _ = make_client(
+        gateway=FakeEventScoringGateway(resolved=[event]),
+        repo=repo,
+        season_config=season_config,
+        role=None,
+    )
+    client.app.dependency_overrides[get_current_user] = lambda: me
+
+    resp = client.get("/leaderboards/seasons/2026q3/me")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["season_id"] == str(season_id)
+    assert body["rating"]["rank"] == 87
+    assert body["rating"]["qualified"] is False
+    assert body["qualification"]["qualified"] is False
+    assert body["qualification"]["volume_ok"] is False
+    assert body["qualification"]["n_resolved"] == 1
+    assert body["qualification"]["n_min"] == 5
+    assert body["qualification"]["diversity_ok"] is True
+
+
+async def test_my_season_standing_without_rating_still_explains_thresholds(
+    make_client,
+) -> None:
+    """Не участвовавший в сезоне получает ``rating: null``, но разбор порогов — да."""
+    season_id = uuid.uuid4()
+    me = _user()
+    season_config = FakeSeasonConfigGateway(
+        by_slug={"2026q3": season_id},
+        configs={
+            season_id: SeasonConfigView(status=SeasonStatus.ACTIVE, config=_EASY_CFG)
+        },
+    )
+    client, _, _, _ = make_client(season_config=season_config, role=None)
+    client.app.dependency_overrides[get_current_user] = lambda: me
+
+    resp = client.get("/leaderboards/seasons/2026q3/me")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["rating"] is None
+    assert body["qualification"]["n_resolved"] == 0
+    assert body["qualification"]["qualified"] is False
+
+
+def test_my_season_standing_requires_auth(make_client) -> None:
+    """В отличие от самого лидерборда, своя строка — только для залогиненных."""
+    season_id = uuid.uuid4()
+    season_config = FakeSeasonConfigGateway(by_slug={"2026q3": season_id})
+    client, _, _, _ = make_client(season_config=season_config, role=None)
+
+    assert client.get("/leaderboards/seasons/2026q3/me").status_code == 401
 
 
 def test_qualification_404_when_season_not_activated(make_client) -> None:

@@ -30,6 +30,7 @@ from app.modules.scoring.application.dto import (
     ProfileCategoryRating,
     ProfileSummary,
     SeasonConfigView,
+    SeasonStanding,
 )
 from app.modules.scoring.domain.calibration import CalibrationReport, calibrate
 from app.modules.scoring.domain.constants import (
@@ -203,6 +204,10 @@ class RecomputeRatings:
     превышение над толпой ``R``), ``calibration_error`` (ECE), ``n_resolved`` —
     затем проставляет ранги внутри области и идемпотентно сохраняет.
 
+    В сезонной области ранг = **призовое место**: сначала идут квалифицированные
+    к призам (``qualified is True``), затем все остальные. Порядок внутри группы
+    — по ``skill_score``.
+
     Учитываются только «рейтинговые» события (``predictor_count >=
     MIN_PREDICTORS``): на неполной толпе консенсус-бенчмарк ненадёжен.
 
@@ -327,10 +332,22 @@ class RecomputeRatings:
 
         all_ratings: list[Rating] = []
         for ratings in by_scope.values():
-            # Ранжирование «больше skill_score = лучше» (превышение над толпой);
+            # Сезонная область: сначала квалифицированные к призам, потом
+            # остальные. Ранг сезона — призовое место, поэтому неквалифицированный
+            # не может стоять выше призёра, даже если его skill_score выше
+            # (усадка не спасает от одного удачного выстрела на сюрпризе —
+            # см. scoring_system_design.md §3.2). Для global/category
+            # ``qualified`` = None, все строки в одной группе — порядок прежний.
+            # Внутри группы: «больше skill_score = лучше» (превышение над толпой);
             # тай-брейк — меньший mean_brier, затем больший n_resolved, затем id.
             ratings.sort(
-                key=lambda r: (-r.skill_score, r.mean_brier, -r.n_resolved, str(r.user_id))
+                key=lambda r: (
+                    r.qualified is False,
+                    -r.skill_score,
+                    r.mean_brier,
+                    -r.n_resolved,
+                    str(r.user_id),
+                )
             )
             for position, rating in enumerate(ratings, start=1):
                 rating.assign_rank(position, now=now)
@@ -513,8 +530,12 @@ class GetSeasonLeaderboard:
     """Сезонный лидерборд по slug: резолвит сезон и читает готовые рейтинги.
 
     Резолв slug→id — через ``SeasonConfigGateway`` (направление ``scoring →
-    seasons``). ``qualified_only`` оставляет только квалифицированных к призам;
-    неактивные аккаунты скрываются всегда (см. :func:`_visible_ratings`).
+    seasons``). Порядок — по сохранённому ``rank``, а он в сезоне уже
+    призовой: квалифицированные сверху (см. :class:`RecomputeRatings`). Поэтому
+    по умолчанию отдаём всех — неквалифицированный видит себя в таблице ниже
+    призовой зоны, а первое место всегда принадлежит призёру. ``qualified_only``
+    сжимает выдачу до одной призовой зоны; неактивные аккаунты скрываются всегда
+    (см. :func:`_visible_ratings`).
     """
 
     def __init__(
@@ -603,6 +624,44 @@ class GetSeasonQualification:
             category_count=category_count,
             total_weight=math.fsum(weights),
             cfg=cfg,
+        )
+
+
+class GetSeasonStanding:
+    """Своя позиция в сезоне + разбор квалификации (закреплённая строка «вы»).
+
+    Композиция поверх :class:`GetSeasonQualification`: тот считает пороги на
+    лету, а здесь к ним добавляется готовая строка рейтинга (место, Brier,
+    объём). Нужен, потому что лидерборд страничный — участник ниже 50-й позиции
+    иначе не увидел бы ни себя, ни причины, по которой он вне призового зачёта.
+
+    ``rating`` — ``None``, если в сезоне ещё нет рейтинговых прогнозов
+    пользователя; это не ошибка (разбор порогов при этом всё равно осмыслен —
+    показывает, сколько осталось набрать).
+    """
+
+    def __init__(
+        self,
+        *,
+        ratings: RatingRepository,
+        season_config: SeasonConfigGateway,
+        qualification: GetSeasonQualification,
+    ) -> None:
+        self._ratings = ratings
+        self._season_config = season_config
+        self._qualification = qualification
+
+    async def execute(self, *, user_id: uuid.UUID, slug: str) -> SeasonStanding:
+        """Возвращает позицию и разбор порогов; поднимает, если сезона нет."""
+        season_id = await self._season_config.resolve_slug(slug)
+        if season_id is None:
+            raise SeasonNotFoundError(f"Сезон не найден: {slug}")
+        result = await self._qualification.execute(user_id=user_id, slug=slug)
+        rating = await self._ratings.get_for_user(
+            user_id, ScopeType.SEASON, season_id
+        )
+        return SeasonStanding(
+            season_id=season_id, rating=rating, qualification=result
         )
 
 

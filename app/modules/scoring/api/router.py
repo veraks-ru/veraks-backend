@@ -13,6 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
+from app.modules.identity.api.dependencies import CurrentUser
 from app.modules.identity.domain.entities import User
 from app.modules.scoring.api.dependencies import (
     get_finalize_season,
@@ -23,6 +24,7 @@ from app.modules.scoring.api.dependencies import (
     get_score_event,
     get_season_leaderboard_uc,
     get_season_qualification_uc,
+    get_season_standing_uc,
     get_user_calibration_uc,
     require_recompute_role,
     require_scoring_role,
@@ -38,6 +40,7 @@ from app.modules.scoring.api.schemas import (
     RatingResponse,
     RecomputeRatingsResponse,
     ScoreEventResponse,
+    SeasonStandingResponse,
 )
 from app.modules.scoring.application.seasons_coordination import FinalizeSeason
 from app.modules.scoring.application.use_cases import (
@@ -45,6 +48,7 @@ from app.modules.scoring.application.use_cases import (
     GetProfileSummary,
     GetSeasonLeaderboard,
     GetSeasonQualification,
+    GetSeasonStanding,
     GetUserCalibration,
     RecalibrateSeasonGradations,
     RecomputeRatings,
@@ -140,7 +144,13 @@ async def season_leaderboard(
     offset: Annotated[int, Query(ge=0)] = 0,
     qualified_only: Annotated[bool, Query()] = False,
 ) -> LeaderboardResponse:
-    """Топ в сезоне по slug; ``qualified_only`` — только квалифицированные к призам."""
+    """Топ в сезоне по slug — в порядке призовых мест.
+
+    Сезонный ``rank`` уже призовой: квалифицированные к призам идут выше
+    остальных независимо от ``skill_score``. По умолчанию отдаём всех
+    (неквалифицированные — ниже призовой зоны, с ``qualified=false``);
+    ``qualified_only=true`` оставляет только призовую зону.
+    """
     season_id, ratings = await uc.execute(
         slug=slug, limit=limit, offset=offset, qualified_only=qualified_only
     )
@@ -149,6 +159,27 @@ async def season_leaderboard(
         scope_id=season_id,
         entries=[RatingResponse.from_domain(r) for r in ratings],
     )
+
+
+@router.get(
+    "/leaderboards/seasons/{slug}/me",
+    response_model=SeasonStandingResponse,
+    summary="Своя позиция в сезоне + разбор квалификации",
+)
+async def my_season_standing(
+    slug: str,
+    current_user: CurrentUser,
+    uc: Annotated[GetSeasonStanding, Depends(get_season_standing_uc)],
+) -> SeasonStandingResponse:
+    """Закреплённая строка «вы» под сезонной таблицей.
+
+    Лидерборд страничный, поэтому своя позиция может быть за пределами выдачи —
+    здесь она отдаётся всегда, вместе с разбором порогов (объём / разнообразие
+    категорий / охват сложности), чтобы было видно не только место, но и что
+    именно отделяет от призового зачёта.
+    """
+    standing = await uc.execute(user_id=current_user.id, slug=slug)
+    return SeasonStandingResponse.from_domain(standing)
 
 
 # ── Калибровка профиля (публичное чтение) ───────────────────────────────────

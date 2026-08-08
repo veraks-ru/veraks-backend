@@ -40,6 +40,7 @@ from app.modules.scoring.application.use_cases import (
     GetProfileSummary,
     GetSeasonLeaderboard,
     GetSeasonQualification,
+    GetSeasonStanding,
     GetUserCalibration,
     RecalibrateSeasonGradations,
     RecomputeRatings,
@@ -248,6 +249,19 @@ def get_season_leaderboard_uc(
     """Use-case сезонного лидерборда по slug (с фильтром квалификации)."""
     return GetSeasonLeaderboard(
         ratings=ratings, season_config=season_config, users=users
+    )
+
+
+def get_season_standing_uc(
+    ratings: RatingRepoDep,
+    season_config: SeasonConfigDep,
+    qualification: Annotated[
+        GetSeasonQualification, Depends(get_season_qualification_uc)
+    ],
+) -> GetSeasonStanding:
+    """Use-case своей позиции в сезоне (закреплённая строка «вы» + пороги)."""
+    return GetSeasonStanding(
+        ratings=ratings, season_config=season_config, qualification=qualification
     )
 
 
