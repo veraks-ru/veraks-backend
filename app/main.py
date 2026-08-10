@@ -136,6 +136,7 @@ from app.modules.seasons.domain.errors import (
     SeasonFinalizationBlockedError,
     SeasonNotFoundError,
     SeasonPermissionError,
+    SeasonRulesLockedError,
     SeasonSlugTakenError,
 )
 from app.modules.social.api.router import router as social_router
@@ -212,6 +213,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     SeasonSlugTakenError: status.HTTP_409_CONFLICT,
     InvalidSeasonTransitionError: status.HTTP_409_CONFLICT,
     SeasonFinalizationBlockedError: status.HTTP_409_CONFLICT,
+    SeasonRulesLockedError: status.HTTP_409_CONFLICT,
     SeasonPermissionError: status.HTTP_403_FORBIDDEN,
     InvalidSeasonDataError: status.HTTP_400_BAD_REQUEST,
     # resolutions

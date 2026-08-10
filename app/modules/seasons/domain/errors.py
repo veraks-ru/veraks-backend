@@ -39,3 +39,11 @@ class SeasonFinalizationBlockedError(SeasonError):
     Финализация на нефинальных исходах = расчёт призов по исходам, которые ещё
     могут измениться. См. дизайн §6.4 и порт ``DisputeGuard``.
     """
+
+
+class SeasonRulesLockedError(SeasonError):
+    """Правила сезона уже нельзя менять: по нему есть прогнозы.
+
+    Отдельная ошибка, а не ``InvalidSeasonTransitionError``: причина здесь не
+    в статусе сезона, а в появившихся участниках (ст. 1058 ГК, PRD §7).
+    """

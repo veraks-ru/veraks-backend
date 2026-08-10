@@ -97,6 +97,12 @@ class FakeAuditTrail:
                 "action": action,
                 "entity_type": entity_type,
                 "entity_id": entity_id,
+                # Диф и метаданные нужны тестам, которые проверяют не сам факт
+                # записи, а её содержимое (например, что правка правил сезона
+                # сохранила прежние пороги).
+                "before": before,
+                "after": after,
+                "metadata": metadata,
             }
         )
         return AuditEntry(
@@ -124,3 +130,15 @@ class FakeDisputeGuard:
     async def has_open_disputes(self, season_id: uuid.UUID) -> bool:
         self.calls += 1
         return self._has_open
+
+
+class FakePredictionGuard:
+    """Управляемая заглушка проверки прогнозов по сезону."""
+
+    def __init__(self, *, has: bool = False) -> None:
+        self._has = has
+        self.calls = 0
+
+    async def has_predictions(self, season_id: uuid.UUID) -> bool:
+        self.calls += 1
+        return self._has

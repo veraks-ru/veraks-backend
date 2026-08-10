@@ -19,3 +19,14 @@ class DisputeGuard(Protocol):
     async def has_open_disputes(self, season_id: uuid.UUID) -> bool:
         """``True``, если по событиям сезона есть незакрытые споры."""
         ...
+
+
+@runtime_checkable
+class PredictionGuard(Protocol):
+    """Есть ли по сезону хоть один прогноз (интеграционный шов к predictions).
+
+    Нужен исправлению правил активного сезона: пока прогнозов нет, полагаться
+    на объявленные условия некому, и пороги ещё можно поправить.
+    """
+
+    async def has_predictions(self, season_id: uuid.UUID) -> bool: ...

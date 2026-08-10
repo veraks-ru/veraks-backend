@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from app.modules.seasons.domain import lifecycle
+from app.modules.seasons.domain.errors import InvalidSeasonTransitionError
 from app.modules.seasons.domain.value_objects import LeagueConfig
 
 
@@ -65,6 +66,33 @@ class Season:
         self.league_config = config
         self.updated_at = now or _utcnow()
         return True
+
+    def repair_rules(
+        self, config: LeagueConfig, *, now: datetime | None = None
+    ) -> None:
+        """Заменяет замороженные правила активного сезона.
+
+        Обычно правила неизменны: участники полагаются на объявленные условия
+        (ст. 1058 ГК, PRD §7). Но сезон может активироваться автоматически —
+        воркер поднимает ``upcoming`` сезон, у которого наступил ``starts_at``,
+        и замораживает конфигурацию по умолчанию. Если ``starts_at`` был задан
+        в прошлом, это происходит через минуты после создания, и человек
+        физически не успевает выбрать пороги.
+
+        Пока по сезону нет ни одного прогноза, полагаться на его условия
+        некому: конкурс объявлен, но не начался. Тогда исправить неудачно
+        замороженные пороги — честнее, чем оставить сезон, в котором к призам
+        не может пройти никто.
+
+        **Проверку отсутствия прогнозов делает вызывающий слой** (``application``):
+        домену неоткуда узнать о прогнозах, они в другом контексте.
+        """
+        if self.status is not SeasonStatus.ACTIVE:
+            raise InvalidSeasonTransitionError(
+                "Исправление правил возможно только для активного сезона"
+            )
+        self.league_config = config
+        self.updated_at = now or _utcnow()
 
     def finalize(self, *, now: datetime | None = None) -> bool:
         """Переводит ``active → finished``.

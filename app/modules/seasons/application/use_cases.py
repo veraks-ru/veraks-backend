@@ -27,6 +27,7 @@ from app.modules.seasons.domain.errors import (
     InvalidSeasonDataError,
     InvalidSeasonTransitionError,
     SeasonNotFoundError,
+    SeasonRulesLockedError,
     SeasonSlugTakenError,
 )
 from app.modules.seasons.domain.policies import (
@@ -35,6 +36,7 @@ from app.modules.seasons.domain.policies import (
 )
 from app.modules.seasons.domain.value_objects import LeagueConfig
 from app.modules.seasons.ports.clock import Clock
+from app.modules.seasons.ports.gateways import PredictionGuard
 from app.modules.seasons.ports.repositories import SeasonRepository
 from app.shared.audit.domain.entities import AuditActorType
 from app.shared.audit.ports.audit_trail import AuditTrail
@@ -180,6 +182,66 @@ class ActivateSeason:
                 entity_id=season.id,
                 after={"status": season.status.value},
             )
+        return season
+
+
+class RepairSeasonRules:
+    """Исправляет замороженные правила активного сезона, пока нет прогнозов.
+
+    Нужно из-за автоактивации: воркер поднимает ``upcoming`` сезон, у которого
+    наступил ``starts_at``, и замораживает конфигурацию по умолчанию. Сезон,
+    созданный с датой старта в прошлом, активируется через минуты — выбрать
+    пороги человек не успевает, а боевые дефолты на старте платформы означают
+    сезон, где к призам не проходит никто.
+
+    Гарантия безопасности здесь одна и жёсткая: **ни одного прогноза по
+    сезону**. Есть прогноз — значит кто-то уже принял решение, глядя на
+    объявленные условия, и менять их нельзя (ст. 1058 ГК, PRD §7).
+    """
+
+    def __init__(
+        self,
+        *,
+        repo: SeasonRepository,
+        predictions: PredictionGuard,
+        clock: Clock,
+        audit: AuditTrail,
+    ) -> None:
+        self._repo = repo
+        self._predictions = predictions
+        self._clock = clock
+        self._audit = audit
+
+    async def execute(
+        self,
+        *,
+        season_id: uuid.UUID,
+        config: LeagueConfig,
+        actor_id: uuid.UUID,
+        actor_role: UserRole,
+    ) -> Season:
+        ensure_can_transition(actor_role)
+        season = await self._repo.get_by_id(season_id)
+        if season is None:
+            raise SeasonNotFoundError("Сезон не найден")
+        if await self._predictions.has_predictions(season_id):
+            raise SeasonRulesLockedError(
+                "По сезону уже есть прогнозы — условия объявленного конкурса "
+                "менять нельзя"
+            )
+
+        before = season.league_config
+        season.repair_rules(config, now=self._clock.now())
+        await self._repo.update(season)
+        await self._audit.record(
+            actor_id=actor_id,
+            actor_type=_actor_type(actor_role),
+            action="season.rules_repaired",
+            entity_type="season",
+            entity_id=season.id,
+            before={"league_config": before.to_dict() if before else None},
+            after={"league_config": config.to_dict()},
+        )
         return season
 
 

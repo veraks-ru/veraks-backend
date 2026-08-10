@@ -16,6 +16,9 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
+from app.modules.predictions.adapters.season_prediction_guard import (
+    SeasonPredictionGuard,
+)
 from app.modules.seasons.adapters.clock import SystemClock
 from app.modules.seasons.adapters.season_repository import SqlAlchemySeasonRepository
 from app.modules.seasons.application.use_cases import (
@@ -23,6 +26,7 @@ from app.modules.seasons.application.use_cases import (
     CreateSeason,
     GetSeason,
     ListSeasons,
+    RepairSeasonRules,
     UpdateSeason,
 )
 from app.modules.seasons.ports.clock import Clock
@@ -69,6 +73,18 @@ def get_activate_season(
     repo: SeasonRepoDep, clock: ClockDep, audit: AuditDep
 ) -> ActivateSeason:
     return ActivateSeason(repo=repo, clock=clock, audit=audit)
+
+
+def get_repair_season_rules(
+    session: SessionDep, repo: SeasonRepoDep, clock: ClockDep, audit: AuditDep
+) -> RepairSeasonRules:
+    """Use-case исправления правил активного сезона (пока нет прогнозов)."""
+    return RepairSeasonRules(
+        repo=repo,
+        predictions=SeasonPredictionGuard(session),
+        clock=clock,
+        audit=audit,
+    )
 
 
 def get_list_seasons(repo: SeasonRepoDep) -> ListSeasons:

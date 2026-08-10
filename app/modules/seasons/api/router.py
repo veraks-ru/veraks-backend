@@ -19,11 +19,13 @@ from app.modules.seasons.api.dependencies import (
     get_create_season,
     get_get_season,
     get_list_seasons,
+    get_repair_season_rules,
     get_update_season,
 )
 from app.modules.seasons.api.schemas import (
     ActivateSeasonRequest,
     CreateSeasonRequest,
+    RepairSeasonRulesRequest,
     SeasonListResponse,
     SeasonResponse,
     UpdateSeasonRequest,
@@ -33,6 +35,7 @@ from app.modules.seasons.application.use_cases import (
     CreateSeason,
     GetSeason,
     ListSeasons,
+    RepairSeasonRules,
     UpdateSeason,
 )
 from app.modules.seasons.domain.entities import SeasonStatus
@@ -108,6 +111,36 @@ async def update_season(
         slug=body.slug,
         starts_at=body.starts_at,
         ends_at=body.ends_at,
+    )
+    return SeasonResponse.from_domain(season)
+
+
+@router.patch(
+    "/admin/seasons/{season_id}/rules",
+    response_model=SeasonResponse,
+    summary="Исправить правила активного сезона, пока нет прогнозов (admin)",
+)
+async def repair_season_rules(
+    season_id: uuid.UUID,
+    body: RepairSeasonRulesRequest,
+    current_user: CurrentUser,
+    uc: Annotated[RepairSeasonRules, Depends(get_repair_season_rules)],
+) -> SeasonResponse:
+    """Заменяет замороженный ``LeagueConfig`` уже активного сезона.
+
+    Обычно правила неизменны (ст. 1058 ГК), но сезон может активироваться
+    автоматически: воркер поднимает ``upcoming`` сезон с наступившим
+    ``starts_at`` и замораживает дефолты. Если ``starts_at`` был в прошлом,
+    человек не успевает выбрать пороги.
+
+    Пока по сезону нет ни одного прогноза, полагаться на условия некому —
+    правка допустима. Первый же прогноз запирает правила: ``409``.
+    """
+    season = await uc.execute(
+        season_id=season_id,
+        config=body.league_config.to_domain(),
+        actor_id=current_user.id,
+        actor_role=current_user.role,
     )
     return SeasonResponse.from_domain(season)
 

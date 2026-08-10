@@ -13,6 +13,7 @@ from app.modules.seasons.application.use_cases import (
     CreateSeason,
     GetSeason,
     ListSeasons,
+    RepairSeasonRules,
     UpdateSeason,
 )
 from app.modules.seasons.domain.entities import SeasonStatus
@@ -21,10 +22,16 @@ from app.modules.seasons.domain.errors import (
     InvalidSeasonTransitionError,
     SeasonNotFoundError,
     SeasonPermissionError,
+    SeasonRulesLockedError,
     SeasonSlugTakenError,
 )
 from app.modules.seasons.domain.value_objects import LeagueConfig
-from tests.seasons.fakes import FakeAuditTrail, FakeClock, InMemorySeasonRepository
+from tests.seasons.fakes import (
+    FakeAuditTrail,
+    FakeClock,
+    FakePredictionGuard,
+    InMemorySeasonRepository,
+)
 
 NOW = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
 STARTS = datetime(2026, 7, 1, tzinfo=UTC)
@@ -218,3 +225,136 @@ async def test_get_season_by_slug_or_not_found() -> None:
     assert found.slug == "2026q3"
     with pytest.raises(SeasonNotFoundError):
         await GetSeason(repo=repo).execute(slug="missing")
+
+
+# ── Исправление правил активного сезона ─────────────────────────────────────
+#
+# Нужно из-за автоактивации: воркер поднимает сезон с наступившим starts_at и
+# замораживает дефолты, поэтому сезон с датой старта в прошлом активируется
+# раньше, чем человек успевает выбрать пороги.
+
+LAUNCH_CFG = LeagueConfig(
+    gradation_map=(0.1, 0.3, 0.5, 0.7, 0.9),
+    n_min=12,
+    c_min=3,
+    w_min=2.0,
+    m_per_category=1,
+    k_shrink=3.0,
+    min_predictors=3,
+)
+
+
+async def _active_season(repo, audit=None):
+    season = await _make_season(repo)
+    await ActivateSeason(
+        repo=repo, clock=_clock(), audit=audit or FakeAuditTrail()
+    ).execute(
+        season_id=season.id,
+        config=LeagueConfig.default(),
+        actor_id=ACTOR_ID,
+        actor_role=UserRole.ADMIN,
+    )
+    return season
+
+
+async def test_repair_rules_replaces_frozen_config_when_no_predictions() -> None:
+    repo = _repo()
+    season = await _active_season(repo)
+    audit = FakeAuditTrail()
+
+    repaired = await RepairSeasonRules(
+        repo=repo,
+        predictions=FakePredictionGuard(has=False),
+        clock=_clock(),
+        audit=audit,
+    ).execute(
+        season_id=season.id,
+        config=LAUNCH_CFG,
+        actor_id=ACTOR_ID,
+        actor_role=UserRole.ADMIN,
+    )
+
+    assert repaired.league_config == LAUNCH_CFG
+    assert repaired.status is SeasonStatus.ACTIVE  # статус не трогаем
+    assert audit.actions() == ["season.rules_repaired"]
+    # Диф хранит и прежние правила: понадобится, если правку будут разбирать.
+    assert audit.records[0]["before"]["league_config"]["n_min"] == 30
+    assert audit.records[0]["after"]["league_config"]["n_min"] == 12
+
+
+async def test_repair_rules_locked_once_a_prediction_exists() -> None:
+    """Первый же прогноз запирает условия — на них уже кто-то полагался."""
+    repo = _repo()
+    season = await _active_season(repo)
+    audit = FakeAuditTrail()
+
+    with pytest.raises(SeasonRulesLockedError):
+        await RepairSeasonRules(
+            repo=repo,
+            predictions=FakePredictionGuard(has=True),
+            clock=_clock(),
+            audit=audit,
+        ).execute(
+            season_id=season.id,
+            config=LAUNCH_CFG,
+            actor_id=ACTOR_ID,
+            actor_role=UserRole.ADMIN,
+        )
+
+    # Отказ до записи: правила и аудит не тронуты.
+    stored = await repo.get_by_id(season.id)
+    assert stored is not None
+    assert stored.league_config == LeagueConfig.default()
+    assert audit.records == []
+
+
+async def test_repair_rules_rejects_upcoming_season() -> None:
+    """Неактивированный сезон правится обычным UpdateSeason/активацией."""
+    repo = _repo()
+    season = await _make_season(repo)
+
+    with pytest.raises(InvalidSeasonTransitionError):
+        await RepairSeasonRules(
+            repo=repo,
+            predictions=FakePredictionGuard(has=False),
+            clock=_clock(),
+            audit=FakeAuditTrail(),
+        ).execute(
+            season_id=season.id,
+            config=LAUNCH_CFG,
+            actor_id=ACTOR_ID,
+            actor_role=UserRole.ADMIN,
+        )
+
+
+async def test_repair_rules_requires_admin() -> None:
+    repo = _repo()
+    season = await _active_season(repo)
+    guard = FakePredictionGuard(has=False)
+
+    with pytest.raises(SeasonPermissionError):
+        await RepairSeasonRules(
+            repo=repo, predictions=guard, clock=_clock(), audit=FakeAuditTrail()
+        ).execute(
+            season_id=season.id,
+            config=LAUNCH_CFG,
+            actor_id=ACTOR_ID,
+            actor_role=UserRole.EDITOR,
+        )
+    # Права проверяются до обращения к прогнозам.
+    assert guard.calls == 0
+
+
+async def test_repair_rules_unknown_season() -> None:
+    with pytest.raises(SeasonNotFoundError):
+        await RepairSeasonRules(
+            repo=_repo(),
+            predictions=FakePredictionGuard(has=False),
+            clock=_clock(),
+            audit=FakeAuditTrail(),
+        ).execute(
+            season_id=uuid.uuid4(),
+            config=LAUNCH_CFG,
+            actor_id=ACTOR_ID,
+            actor_role=UserRole.ADMIN,
+        )

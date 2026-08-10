@@ -111,3 +111,13 @@ class ActivateSeasonRequest(BaseModel):
     """
 
     league_config: LeagueConfigSchema | None = None
+
+
+class RepairSeasonRulesRequest(BaseModel):
+    """Тело исправления правил активного сезона.
+
+    В отличие от активации, конфиг обязателен: смысл операции — заменить
+    неудачно замороженный снапшот на конкретный, а не откатиться к дефолту.
+    """
+
+    league_config: LeagueConfigSchema
