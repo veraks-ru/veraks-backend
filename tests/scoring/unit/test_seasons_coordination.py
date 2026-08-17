@@ -483,3 +483,61 @@ async def test_roll_activates_with_provider_config() -> None:
     assert activated is not None and activated.status is SeasonStatus.ACTIVE
     assert activated.league_config is not None
     assert activated.league_config.gradation_map != DEFAULT_GRADATIONS
+
+
+PLANNED_CFG = LeagueConfig(
+    gradation_map=DEFAULT_GRADATIONS,
+    n_min=12,
+    c_min=3,
+    w_min=2.0,
+    m_per_category=1,
+    k_shrink=3.0,
+    min_predictors=3,
+)
+
+
+async def test_provider_uses_planned_config_instead_of_defaults() -> None:
+    """Автоактивация обязана уважать пороги, выбранные заранее.
+
+    Без этого сезон, наступивший по таймеру (а так активируются все заведённые
+    вперёд), морозил бы боевые дефолты — которых администратор не выбирал и
+    поменять уже не смог бы.
+    """
+    season = _upcoming(uuid.uuid4())
+    season.planned_league_config = PLANNED_CFG
+    provider = _provider(season_repo=InMemorySeasonRepository(), season_entries={})
+
+    config = await provider.config_for(season)
+
+    assert config.n_min == 12
+    assert config.min_predictors == 3
+
+
+async def test_provider_keeps_recalibrated_grid_over_planned_thresholds() -> None:
+    """Сетка градаций — про популяцию, пороги — про намерение администратора.
+
+    Рекалибровка меняет первую и не должна отменять вторую.
+    """
+    season_repo = InMemorySeasonRepository()
+    prev_id = uuid.uuid4()
+    await season_repo.add(
+        _finished_season(prev_id, ends_at=datetime(2026, 5, 1, tzinfo=UTC))
+    )
+    season = _upcoming(uuid.uuid4())
+    season.planned_league_config = PLANNED_CFG
+
+    provider = _provider(
+        season_repo=season_repo,
+        season_entries={
+            prev_id: _entries(
+                (0.1, 1, 9), (0.3, 3, 7), (0.5, 5, 5), (0.7, 8, 2), (0.9, 19, 1)
+            )
+        },
+    )
+    config = await provider.config_for(season)
+
+    # Пороги остались планируемыми…
+    assert config.n_min == 12
+    assert config.k_shrink == 3.0
+    # …а сетка пересчитана по фактическим частотам, а не взята из плана.
+    assert config.gradation_map != DEFAULT_GRADATIONS

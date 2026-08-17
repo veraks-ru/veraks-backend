@@ -77,8 +77,15 @@ class CreateSeason:
         ends_at: datetime,
         actor_id: uuid.UUID,
         actor_role: UserRole,
+        planned_league_config: LeagueConfig | None = None,
     ) -> Season:
-        """Создаёт сезон; поднимает при отсутствии прав/занятом slug/окне."""
+        """Создаёт сезон; поднимает при отсутствии прав/занятом slug/окне.
+
+        ``planned_league_config`` — пороги, которые заморозит активация, в том
+        числе автоматическая из воркера. Без него сезон, наступивший по
+        таймеру, получит боевые дефолты, и выбрать что-то другое будет уже
+        поздно.
+        """
         ensure_can_manage_seasons(actor_role)
         _ensure_window(starts_at, ends_at)
         if await self._repo.get_by_slug(slug) is not None:
@@ -90,6 +97,7 @@ class CreateSeason:
             starts_at=starts_at,
             ends_at=ends_at,
             status=SeasonStatus.UPCOMING,
+            planned_league_config=planned_league_config,
             created_at=now,
             updated_at=now,
         )
@@ -121,6 +129,7 @@ class UpdateSeason:
         slug: str | None = None,
         starts_at: datetime | None = None,
         ends_at: datetime | None = None,
+        planned_league_config: LeagueConfig | None = None,
     ) -> Season:
         """Обновляет поля сезона в статусе ``upcoming``."""
         ensure_can_manage_seasons(actor_role)
@@ -142,6 +151,8 @@ class UpdateSeason:
         _ensure_window(new_starts, new_ends)
         season.starts_at = new_starts
         season.ends_at = new_ends
+        if planned_league_config is not None:
+            season.planned_league_config = planned_league_config
         season.updated_at = self._clock.now()
         await self._repo.update(season)
         return season

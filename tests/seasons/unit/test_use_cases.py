@@ -358,3 +358,70 @@ async def test_repair_rules_unknown_season() -> None:
             actor_id=ACTOR_ID,
             actor_role=UserRole.ADMIN,
         )
+
+
+# ── Планируемые правила (задаются до активации) ─────────────────────────────
+
+
+async def test_create_season_stores_planned_config() -> None:
+    repo = _repo()
+    season = await CreateSeason(
+        repo=repo, clock=_clock(), audit=FakeAuditTrail()
+    ).execute(
+        slug="2027-q1",
+        title="Сезон 2027 · I квартал",
+        starts_at=STARTS,
+        ends_at=ENDS,
+        actor_id=ACTOR_ID,
+        actor_role=UserRole.ADMIN,
+        planned_league_config=LAUNCH_CFG,
+    )
+
+    assert season.planned_league_config == LAUNCH_CFG
+    # Замороженных правил ещё нет: сезон не активирован.
+    assert season.league_config is None
+
+
+async def test_activation_freezes_planned_config_not_defaults() -> None:
+    """Ради этого всё и делалось: автоактивация не должна брать дефолты."""
+    repo = _repo()
+    season = await CreateSeason(
+        repo=repo, clock=_clock(), audit=FakeAuditTrail()
+    ).execute(
+        slug="2027-q2",
+        title="Сезон 2027 · II квартал",
+        starts_at=STARTS,
+        ends_at=ENDS,
+        actor_id=ACTOR_ID,
+        actor_role=UserRole.ADMIN,
+        planned_league_config=LAUNCH_CFG,
+    )
+
+    # Провайдер конфига активации живёт в scoring; здесь проверяем контракт,
+    # на который он опирается: планируемые правила доступны в сущности.
+    stored = await repo.get_by_id(season.id)
+    assert stored is not None
+    assert (stored.planned_league_config or LeagueConfig.default()) == LAUNCH_CFG
+
+
+async def test_update_season_can_change_planned_config() -> None:
+    repo = _repo()
+    season = await CreateSeason(
+        repo=repo, clock=_clock(), audit=FakeAuditTrail()
+    ).execute(
+        slug="2027-q3",
+        title="Сезон 2027 · III квартал",
+        starts_at=STARTS,
+        ends_at=ENDS,
+        actor_id=ACTOR_ID,
+        actor_role=UserRole.ADMIN,
+    )
+    assert season.planned_league_config is None
+
+    updated = await UpdateSeason(repo=repo, clock=_clock()).execute(
+        season_id=season.id,
+        actor_role=UserRole.ADMIN,
+        planned_league_config=LAUNCH_CFG,
+    )
+
+    assert updated.planned_league_config == LAUNCH_CFG

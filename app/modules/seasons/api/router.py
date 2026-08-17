@@ -89,6 +89,11 @@ async def create_season(
         ends_at=body.ends_at,
         actor_id=current_user.id,
         actor_role=current_user.role,
+        planned_league_config=(
+            body.planned_league_config.to_domain()
+            if body.planned_league_config is not None
+            else None
+        ),
     )
     return SeasonResponse.from_domain(season)
 
@@ -111,6 +116,11 @@ async def update_season(
         slug=body.slug,
         starts_at=body.starts_at,
         ends_at=body.ends_at,
+        planned_league_config=(
+            body.planned_league_config.to_domain()
+            if body.planned_league_config is not None
+            else None
+        ),
     )
     return SeasonResponse.from_domain(season)
 

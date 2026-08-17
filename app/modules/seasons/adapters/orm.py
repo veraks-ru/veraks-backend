@@ -52,6 +52,11 @@ class SeasonORM(Base):
     )
     # Снапшот LeagueConfig; NULL пока сезон не активирован.
     league_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Правила, которые заморозит активация — в том числе автоматическая, из
+    # воркера. NULL — взять дефолты scoring (прежнее поведение).
+    planned_league_config: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
@@ -73,6 +78,11 @@ class SeasonORM(Base):
                 if self.league_config is not None
                 else None
             ),
+            planned_league_config=(
+                LeagueConfig.from_dict(self.planned_league_config)
+                if self.planned_league_config is not None
+                else None
+            ),
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -90,6 +100,11 @@ class SeasonORM(Base):
             league_config=(
                 season.league_config.to_dict()
                 if season.league_config is not None
+                else None
+            ),
+            planned_league_config=(
+                season.planned_league_config.to_dict()
+                if season.planned_league_config is not None
                 else None
             ),
             created_at=season.created_at,

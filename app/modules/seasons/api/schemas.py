@@ -57,6 +57,9 @@ class SeasonResponse(BaseModel):
     ends_at: datetime
     status: SeasonStatus
     league_config: LeagueConfigSchema | None
+    # Пороги, выбранные заранее: их заморозит активация, включая автоматическую.
+    # После активации теряют смысл — истина в ``league_config``.
+    planned_league_config: LeagueConfigSchema | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -72,6 +75,11 @@ class SeasonResponse(BaseModel):
             league_config=(
                 LeagueConfigSchema.from_domain(season.league_config)
                 if season.league_config is not None
+                else None
+            ),
+            planned_league_config=(
+                LeagueConfigSchema.from_domain(season.planned_league_config)
+                if season.planned_league_config is not None
                 else None
             ),
             created_at=season.created_at,
@@ -92,6 +100,9 @@ class CreateSeasonRequest(BaseModel):
     title: str = Field(min_length=1)
     starts_at: datetime
     ends_at: datetime
+    # Задать пороги сразу — единственный способ не получить боевые дефолты у
+    # сезона, который активируется по таймеру, а не руками.
+    planned_league_config: LeagueConfigSchema | None = None
 
 
 class UpdateSeasonRequest(BaseModel):
@@ -101,6 +112,7 @@ class UpdateSeasonRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1)
     starts_at: datetime | None = None
     ends_at: datetime | None = None
+    planned_league_config: LeagueConfigSchema | None = None
 
 
 class ActivateSeasonRequest(BaseModel):

@@ -182,7 +182,7 @@ class DefaultLeagueConfigProvider:
     """
 
     async def config_for(self, season: Season) -> LeagueConfig:
-        return LeagueConfig.default()
+        return season.planned_league_config or LeagueConfig.default()
 
 
 class RecalibratingLeagueConfigProvider:
@@ -209,7 +209,12 @@ class RecalibratingLeagueConfigProvider:
         self._recalibrate = recalibrate
 
     async def config_for(self, season: Season) -> LeagueConfig:
-        base = LeagueConfig.default()
+        # Пороги, выбранные заранее, важнее дефолтов: активация бывает
+        # автоматической, и без этого сезон, наступивший по таймеру, замораживал
+        # бы боевые значения, которых человек не выбирал. Рекалиброванную сетку
+        # градаций всё равно накладываем — она про популяцию, а не про пороги,
+        # и от намерения администратора не зависит.
+        base = season.planned_league_config or LeagueConfig.default()
         prev = await self._latest_finished(before=season)
         if prev is None:
             return base

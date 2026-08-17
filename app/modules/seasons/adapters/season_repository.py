@@ -66,6 +66,11 @@ class SqlAlchemySeasonRepository:
         orm.league_config = (
             season.league_config.to_dict() if season.league_config is not None else None
         )
+        orm.planned_league_config = (
+            season.planned_league_config.to_dict()
+            if season.planned_league_config is not None
+            else None
+        )
         orm.updated_at = season.updated_at
         await self._session.flush()
 

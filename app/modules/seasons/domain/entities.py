@@ -48,6 +48,10 @@ class Season:
     ends_at: datetime
     status: SeasonStatus = SeasonStatus.UPCOMING
     league_config: LeagueConfig | None = None
+    # Правила, выбранные заранее: их заморозит активация, включая
+    # автоматическую. Правятся свободно, пока сезон ``upcoming``; после
+    # активации смысл теряют — источником истины становится ``league_config``.
+    planned_league_config: LeagueConfig | None = None
     id: uuid.UUID = field(default_factory=uuid.uuid4)
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)
