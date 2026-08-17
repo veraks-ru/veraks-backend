@@ -20,13 +20,14 @@
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0031"
-down_revision = "0030"
-branch_labels = None
-depends_on = None
+from alembic import op
+
+revision: str = "0031_season_planned_config"
+down_revision: str | None = "0030_email_login"
+branch_labels: str | None = None
+depends_on: str | None = None
 
 
 def upgrade() -> None:
