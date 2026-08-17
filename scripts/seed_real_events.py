@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -80,10 +81,10 @@ class Draft:
     resolves: datetime
     source: str
     criteria: str
-    # Событие, разрешающееся за окном сезона, привязывать к нему нельзя: сезон
-    # финализируется в ends_at, и прогноз не попадёт в зачёт вообще. Такое
-    # событие живёт вне сезона — в глобальном рейтинге и рейтинге категории.
-    in_season: bool = True
+    # Сезон события: по умолчанию тот, что передан аргументом. Событие,
+    # разрешающееся за окном своего сезона, в зачёт не попадёт — сезон
+    # финализируется в ends_at, — поэтому для таких указывается другой slug.
+    season_slug: str | None = None
 
 
 AUG = 8
@@ -566,7 +567,7 @@ DRAFTS: list[Draft] = [
         "ДА — если хотя бы один из двух заявленных концертов (10 или 11 "
         "октября) фактически состоялся. НЕТ — если оба не состоялись в "
         "заявленные даты: отменены или перенесены.",
-        in_season=False,
+        season_slug="2026-q4",
     ),
 ]
 
@@ -769,6 +770,15 @@ async def main() -> int:
             "(правит окно и тексты уже созданных событий)"
         ),
     )
+    parser.add_argument(
+        "--recreate",
+        metavar="ПОДСТРОКА",
+        help=(
+            "отменить события с этой подстрокой в заголовке и завести заново "
+            "из DRAFTS. Нужно, когда меняется сезон или окно: после публикации "
+            "домен их править запрещает"
+        ),
+    )
     parser.add_argument("--apply", action="store_true", help="записать в БД")
     args = parser.parse_args()
 
@@ -814,6 +824,41 @@ async def main() -> int:
             for row in (await session.execute(text("SELECT title FROM events"))).all()
         }
 
+        if args.recreate:
+            doomed = (
+                await session.execute(
+                    select(EventORM).where(EventORM.title.contains(args.recreate))
+                )
+            ).scalars().all()
+            with_predictions = {
+                row[0]
+                for row in (
+                    await session.execute(
+                        text(
+                            "SELECT DISTINCT event_id FROM predictions "
+                            "WHERE event_id = ANY(:ids)"
+                        ),
+                        {"ids": [e.id for e in doomed]},
+                    )
+                ).all()
+            }
+            print(f"\nК пересозданию по «{args.recreate}»: {len(doomed)}")
+            for e in doomed:
+                mark = " ! есть прогнозы — пропуск" if e.id in with_predictions else ""
+                print(f"  · [{e.status.value}] {e.title[:60]}{mark}")
+            movable = [e for e in doomed if e.id not in with_predictions]
+            if args.apply:
+                cancel = CancelEvent(
+                    events=SqlAlchemyEventRepository(session),
+                    clock=SystemClock(),
+                    audit=SqlAlchemyAuditTrail(session),
+                )
+                for e in movable:
+                    if e.status.value not in {"cancelled", "annulled"}:
+                        await cancel.execute(actor=actor, event_id=e.id)
+                # Освобождаем заголовки, чтобы они не считались дублями ниже.
+                existing -= {e.title for e in movable}
+
         planned = [dr for dr in DRAFTS if dr.title not in existing]
         skipped = len(DRAFTS) - len(planned)
 
@@ -830,6 +875,23 @@ async def main() -> int:
         if not args.apply:
             print("\nСухой прогон — ничего не записано. Для записи добавьте --apply.")
             return 0
+
+        # Карта slug → id: события могут ссылаться на разные сезоны, если их
+        # исход приходится за окном основного.
+        needed = {dr.season_slug for dr in planned if dr.season_slug} | {
+            args.season_slug
+        }
+        season_ids: dict[str, uuid.UUID] = {}
+        for slug in sorted(needed):
+            row = (
+                await session.execute(
+                    select(SeasonORM).where(SeasonORM.slug == slug)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                print(f"ОТКАЗ: сезон «{slug}» не найден", file=sys.stderr)
+                return 2
+            season_ids[slug] = row.id
 
         create = CreateEvent(
             events=SqlAlchemyEventRepository(session),
@@ -852,7 +914,7 @@ async def main() -> int:
                     title=dr.title,
                     description=dr.description,
                     category_id=by_slug[dr.category].id,
-                    season_id=season.id if dr.in_season else None,
+                    season_id=season_ids[dr.season_slug or args.season_slug],
                     # Приём открыт с момента заведения: события уже в повестке.
                     opens_at=now,
                     closes_at=dr.closes,
