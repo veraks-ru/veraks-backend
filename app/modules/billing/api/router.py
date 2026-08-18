@@ -37,6 +37,7 @@ from app.modules.billing.api.dependencies import (
     get_refund_subscription_payment,
     get_revoke_invite,
     get_season_prize_fund,
+    get_set_auto_renew,
     get_start_subscription,
     get_upsert_my_payout_requisites,
     verified_tbank_payload,
@@ -57,6 +58,7 @@ from app.modules.billing.api.schemas import (
     RecordDepositRequest,
     RedeemInviteRequest,
     SeasonPrizeFundResponse,
+    SetAutoRenewRequest,
     SponsorFundDetailResponse,
     StartSubscriptionRequest,
     StartSubscriptionResponse,
@@ -84,6 +86,7 @@ from app.modules.billing.application.use_cases import (
     RefundLatestSubscriptionPayment,
     RefundSubscriptionPayment,
     RevokeInvite,
+    SetAutoRenew,
     StartSubscription,
     UpsertMyPayoutRequisites,
 )
@@ -207,6 +210,24 @@ async def read_my_subscription(
 
 
 @router.post(
+    "/billing/subscriptions/{subscription_id}/auto-renew",
+    response_model=SubscriptionResponse,
+    summary="Включить или выключить автопродление",
+)
+async def set_auto_renew(
+    subscription_id: uuid.UUID,
+    payload: SetAutoRenewRequest,
+    actor: ActorDep,
+    uc: Annotated[SetAutoRenew, Depends(get_set_auto_renew)],
+) -> SubscriptionResponse:
+    """Отключение оставляет доступ до конца оплаченного периода."""
+    subscription = await uc.execute(
+        subscription_id=subscription_id, actor=actor, enabled=payload.enabled
+    )
+    return SubscriptionResponse.from_domain(subscription)
+
+
+@router.post(
     "/billing/subscriptions/{subscription_id}/cancel",
     response_model=SubscriptionResponse,
     summary="Отменить подписку",
@@ -240,13 +261,26 @@ async def tbank_payment_webhook(
         "CONFIRMED",
         "AUTHORIZED",
     }:
+        rebill = payload.get("RebillId")
         await uc.execute(
             provider=PaymentProvider.TBANK,
             provider_payment_id=str(payload["PaymentId"]),
             amount_kopecks=int(str(payload["Amount"])),
-            subscription_id=uuid.UUID(str(payload["OrderId"])),
+            subscription_id=_subscription_from_order(str(payload["OrderId"])),
+            # Приходит только с родительского платежа — это и есть согласие
+            # человека на периодические списания, выданное на стороне банка.
+            rebill_id=str(rebill) if rebill else None,
         )
     return PlainTextResponse("OK")
+
+
+def _subscription_from_order(order_id: str) -> uuid.UUID:
+    """Достать id подписки из ``OrderId``.
+
+    У автосписаний заказ уникален для каждой попытки (``<id>:<суффикс>``) —
+    иначе банк отклонил бы повтор как дубль. У первой оплаты суффикса нет.
+    """
+    return uuid.UUID(order_id.split(":", 1)[0])
 
 
 @router.post(

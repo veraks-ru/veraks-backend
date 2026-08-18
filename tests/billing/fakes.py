@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from app.modules.billing.domain.entities import (
@@ -152,6 +152,18 @@ class InMemorySubscriptionRepository:
     async def update(self, subscription: Subscription) -> Subscription:
         self.items[subscription.id] = subscription
         return subscription
+
+    async def list_due_for_renewal(
+        self, *, now: datetime, lead: timedelta
+    ) -> list[Subscription]:
+        return [
+            s
+            for s in self.items.values()
+            if s.auto_renew
+            and s.rebill_id is not None
+            and s.current_period_end is not None
+            and s.current_period_end <= now + lead
+        ]
 
 
 class InMemoryPaymentRepository:
@@ -313,15 +325,51 @@ class InMemoryPayoutRequisiteRepository:
 
 
 class FakeCheckoutGateway:
-    """Шлюз оплаты подписок: отдаёт детерминированный intent."""
+    """Шлюз оплаты подписок: отдаёт детерминированный intent.
+
+    ``fail_charge`` заставляет автосписание падать — так проверяется поведение
+    при отказе банка.
+    """
+
+    def __init__(self, *, fail_charge: bool = False) -> None:
+        self.fail_charge = fail_charge
+        self.charges: list[dict[str, Any]] = []
+        self.customer_keys: list[str | None] = []
 
     async def create_checkout(
-        self, *, subscription_id: uuid.UUID, amount_kopecks: int, description: str
+        self,
+        *,
+        subscription_id: uuid.UUID,
+        amount_kopecks: int,
+        description: str,
+        customer_key: str | None = None,
     ) -> CheckoutIntent:
+        self.customer_keys.append(customer_key)
         return CheckoutIntent(
             confirmation_url=f"https://pay.example/{subscription_id}",
             provider_subscription_id=f"sub-{subscription_id}",
         )
+
+    async def charge_recurrent(
+        self,
+        *,
+        subscription_id: uuid.UUID,
+        amount_kopecks: int,
+        description: str,
+        rebill_id: str,
+        customer_key: str,
+    ) -> str:
+        if self.fail_charge:
+            raise PaymentGatewayError("банк отклонил списание")
+        self.charges.append(
+            {
+                "subscription_id": subscription_id,
+                "amount_kopecks": amount_kopecks,
+                "rebill_id": rebill_id,
+                "customer_key": customer_key,
+            }
+        )
+        return f"charge-{len(self.charges)}"
 
 
 class FakePayoutGateway:

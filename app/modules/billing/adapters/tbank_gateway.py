@@ -57,9 +57,20 @@ class TBankGateway:
         return data
 
     async def create_checkout(
-        self, *, subscription_id: uuid.UUID, amount_kopecks: int, description: str
+        self,
+        *,
+        subscription_id: uuid.UUID,
+        amount_kopecks: int,
+        description: str,
+        customer_key: str | None = None,
     ) -> CheckoutIntent:
-        """Init: создать платёж и вернуть URL платёжной формы банка."""
+        """Init: создать платёж и вернуть URL платёжной формы банка.
+
+        ``customer_key`` включает рекуррент: пара ``Recurrent=Y`` +
+        ``CustomerKey`` делает этот платёж родительским, и в уведомлении о нём
+        банк присылает ``RebillId`` — токен для последующих списаний.
+        Карточные данные при этом по-прежнему остаются у банка.
+        """
         payload: dict[str, object] = {
             "TerminalKey": self._s.terminal_key,
             "Amount": amount_kopecks,
@@ -70,6 +81,9 @@ class TBankGateway:
             "SuccessURL": self._success_url,
             "FailURL": self._fail_url,
         }
+        if customer_key:
+            payload["Recurrent"] = "Y"
+            payload["CustomerKey"] = customer_key
         # Чек 54-ФЗ прихода (Тест 7) — если задан e-mail для чека.
         if self._s.receipt_email:
             payload["Receipt"] = build_receipt(
@@ -84,6 +98,54 @@ class TBankGateway:
             confirmation_url=str(data["PaymentURL"]),
             provider_subscription_id=str(data["PaymentId"]),
         )
+
+    async def charge_recurrent(
+        self,
+        *,
+        subscription_id: uuid.UUID,
+        amount_kopecks: int,
+        description: str,
+        rebill_id: str,
+        customer_key: str,
+    ) -> str:
+        """Списать по сохранённому токену: Init + Charge. Возвращает PaymentId.
+
+        Двухшагово по требованию API: сначала обычный Init (без ``Recurrent`` —
+        родительским он уже не является), затем Charge с ``RebillId``. Чек
+        нужен и здесь: списание — такой же приход по 54-ФЗ.
+
+        ``OrderId`` уникален для каждой попытки, иначе банк отклонит повтор
+        как дубль заказа.
+        """
+        order_id = f"{subscription_id}:{uuid.uuid4().hex[:8]}"
+        payload: dict[str, object] = {
+            "TerminalKey": self._s.terminal_key,
+            "Amount": amount_kopecks,
+            "OrderId": order_id,
+            "Description": description[:140],
+            "CustomerKey": customer_key,
+            "NotificationURL": self._notification_url,
+        }
+        if self._s.receipt_email:
+            payload["Receipt"] = build_receipt(
+                description=description,
+                amount_kopecks=amount_kopecks,
+                taxation=self._s.taxation,
+                email=self._s.receipt_email,
+                phone=None,
+            )
+        init = await self._post("Init", payload)
+        payment_id = str(init["PaymentId"])
+
+        await self._post(
+            "Charge",
+            {
+                "TerminalKey": self._s.terminal_key,
+                "PaymentId": payment_id,
+                "RebillId": rebill_id,
+            },
+        )
+        return payment_id
 
     async def cancel_payment(
         self,

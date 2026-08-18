@@ -65,8 +65,29 @@ class SubscriptionCheckoutGateway(Protocol):
         subscription_id: uuid.UUID,
         amount_kopecks: int,
         description: str,
+        customer_key: str | None = None,
     ) -> CheckoutIntent:
-        """Создать платёжную сессию и вернуть URL подтверждения."""
+        """Создать платёжную сессию и вернуть URL подтверждения.
+
+        ``customer_key`` — просьба сделать платёж родительским для будущих
+        автосписаний; провайдер вернёт токен в уведомлении об оплате.
+        """
+        ...
+
+    async def charge_recurrent(
+        self,
+        *,
+        subscription_id: uuid.UUID,
+        amount_kopecks: int,
+        description: str,
+        rebill_id: str,
+        customer_key: str,
+    ) -> str:
+        """Списать по сохранённому токену без участия человека.
+
+        Возвращает идентификатор платежа у провайдера. Деньги проводятся не
+        здесь: подтверждение приходит тем же вебхуком, что и обычная оплата.
+        """
         ...
 
 

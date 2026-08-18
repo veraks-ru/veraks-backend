@@ -15,7 +15,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass as _sponsor_dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from app.modules.billing.application.dto import (
     Actor,
@@ -46,11 +46,13 @@ from app.modules.billing.domain.errors import (
     InvalidPaymentError,
     InviteNotFoundError,
     LedgerAccountNotFoundError,
+    PaymentGatewayError,
     PaymentNotFoundError,
     PayoutAlreadyDecidedError,
     PayoutNotFoundError,
     PayoutRequisitesMissingError,
     PrizeFundNotFoundError,
+    RecurrentNotEnabledError,
     SeasonNotFoundError,
     SubscriptionNotFoundError,
 )
@@ -180,10 +182,13 @@ class StartSubscription:
             )
         )
 
+        # CustomerKey привязывает платёж к человеку и делает его родительским:
+        # только так провайдер вернёт токен для последующих списаний.
         intent = await self._checkout.create_checkout(
             subscription_id=saved.id,
             amount_kopecks=price,
             description=f"Подписка {plan.value}",
+            customer_key=str(user_id),
         )
         saved.provider_subscription_id = intent.provider_subscription_id
         if self._instant_activate:
@@ -277,8 +282,14 @@ class RecordSubscriptionPayment:
         provider_payment_id: str,
         amount_kopecks: int,
         subscription_id: uuid.UUID | None = None,
+        rebill_id: str | None = None,
     ) -> Payment:
-        """Записать платёж и провести его в операционной кассе."""
+        """Записать платёж, провести его и продлить оплаченный период.
+
+        ``rebill_id`` приходит с уведомлением о родительском платеже — это
+        согласие человека на периодические списания, выданное на стороне
+        банка. Сохраняем его и включаем автопродление.
+        """
         existing = await self._payments.get_by_provider_ref(
             provider=provider.value, provider_payment_id=provider_payment_id
         )
@@ -317,10 +328,21 @@ class RecordSubscriptionPayment:
         saved_txn = await self._ledger_repo.add_transaction(transaction)
 
         if subscription is not None:
+            # Продлеваем от конца оплаченного периода, если он ещё не истёк:
+            # списание идёт заранее, и отсчёт от «сейчас» отбирал бы у
+            # человека оплаченные дни.
+            base = (
+                subscription.current_period_end
+                if subscription.current_period_end is not None
+                and subscription.current_period_end > now
+                else now
+            )
             subscription.activate(
                 period_start=now,
-                period_end=now + _PLAN_PERIOD[subscription.plan],
+                period_end=base + _PLAN_PERIOD[subscription.plan],
             )
+            if rebill_id:
+                subscription.enable_auto_renew(rebill_id=rebill_id)
             await self._subscriptions.update(subscription)
 
         payment = Payment(
@@ -1432,3 +1454,163 @@ class RedeemInvite:
             after={"expires_at": saved.expires_at.isoformat() if saved.expires_at else None},
         )
         return saved
+
+
+# ── Автопродление подписки ────────────────────────────────────────────────
+
+#: За сколько до конца периода пытаемся списать. Сутки дают запас: неудачную
+#: попытку можно повторить, а человек не теряет доступ на стыке периодов.
+RENEWAL_LEAD = timedelta(hours=24)
+
+#: Сколько раз подряд пробуем списать, прежде чем сдаться. Отказ банка часто
+#: временный (нет денег на карте), но бесконечно дёргать карту нельзя.
+MAX_RENEWAL_ATTEMPTS = 3
+
+
+class SetAutoRenew:
+    """Включить или выключить автопродление (владелец или admin).
+
+    Включить можно только то, для чего есть токен: без него списывать нечем,
+    и обещать продление было бы враньём.
+    """
+
+    def __init__(
+        self,
+        *,
+        subscriptions: SubscriptionRepository,
+        audit: AuditTrail,
+    ) -> None:
+        self._subscriptions = subscriptions
+        self._audit = audit
+
+    async def execute(
+        self, *, subscription_id: uuid.UUID, actor: Actor, enabled: bool
+    ) -> Subscription:
+        subscription = await self._subscriptions.get_by_id(subscription_id)
+        if subscription is None:
+            raise SubscriptionNotFoundError(str(subscription_id))
+        if subscription.user_id != actor.user_id and actor.role is not UserRole.ADMIN:
+            raise BillingPermissionError("Управлять можно только своей подпиской")
+
+        if enabled:
+            if not subscription.rebill_id:
+                raise RecurrentNotEnabledError(
+                    "Автопродление недоступно: нет сохранённого способа оплаты"
+                )
+            subscription.auto_renew = True
+            subscription.renewal_attempts = 0
+        else:
+            subscription.stop_auto_renew()
+
+        saved = await self._subscriptions.update(subscription)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=_actor_type(actor.role),
+            action="subscription.auto_renew_changed",
+            entity_type="subscription",
+            entity_id=saved.id,
+            after={"auto_renew": saved.auto_renew},
+        )
+        return saved
+
+
+class ChargeRenewal:
+    """Списать очередной период по сохранённому токену.
+
+    Деньги здесь не проводятся: подтверждение придёт вебхуком провайдера, и
+    период продлит :class:`RecordSubscriptionPayment` — тот же путь, что у
+    обычной оплаты. Здесь только инициируем списание и ведём счёт неудач.
+    """
+
+    def __init__(
+        self,
+        *,
+        subscriptions: SubscriptionRepository,
+        checkout: SubscriptionCheckoutGateway,
+        audit: AuditTrail,
+        notifier: Notifier | None = None,
+        max_attempts: int = MAX_RENEWAL_ATTEMPTS,
+    ) -> None:
+        self._subscriptions = subscriptions
+        self._checkout = checkout
+        self._audit = audit
+        self._notifier = notifier
+        self._max_attempts = max_attempts
+
+    async def execute(self, *, subscription_id: uuid.UUID) -> str | None:
+        """Идентификатор платежа у провайдера либо ``None``, если списывать нечего."""
+        subscription = await self._subscriptions.get_by_id(subscription_id)
+        if subscription is None:
+            raise SubscriptionNotFoundError(str(subscription_id))
+        if not subscription.auto_renew or not subscription.rebill_id:
+            return None
+
+        try:
+            payment_id = await self._checkout.charge_recurrent(
+                subscription_id=subscription.id,
+                amount_kopecks=subscription.price_kopecks,
+                description=f"Продление подписки {subscription.plan.value}",
+                rebill_id=subscription.rebill_id,
+                customer_key=str(subscription.user_id),
+            )
+        except PaymentGatewayError as exc:
+            subscription.note_renewal_failure(max_attempts=self._max_attempts)
+            gave_up = not subscription.auto_renew
+            await self._subscriptions.update(subscription)
+            await self._audit.record(
+                actor_id=None,
+                actor_type=AuditActorType.SYSTEM,
+                action="subscription.renewal_failed",
+                entity_type="subscription",
+                entity_id=subscription.id,
+                metadata={
+                    "attempt": subscription.renewal_attempts,
+                    "gave_up": gave_up,
+                    "reason": str(exc)[:200],
+                },
+            )
+            if gave_up and self._notifier is not None:
+                await self._notifier.emit(
+                    user_id=subscription.user_id,
+                    kind="subscription.renewal_failed",
+                    title="Не удалось продлить подписку",
+                    body=(
+                        "Банк отклонил списание. Доступ сохранится до конца "
+                        "оплаченного периода — продлить можно вручную на «Тарифах»."
+                    ),
+                    entity_type="subscription",
+                    entity_id=subscription.id,
+                )
+            raise
+
+        await self._audit.record(
+            actor_id=None,
+            actor_type=AuditActorType.SYSTEM,
+            action="subscription.renewal_charged",
+            entity_type="subscription",
+            entity_id=subscription.id,
+            metadata={"provider_payment_id": payment_id},
+        )
+        return payment_id
+
+
+class ListRenewableSubscriptions:
+    """Идентификаторы подписок, которые пора продлить."""
+
+    def __init__(self, *, subscriptions: SubscriptionRepository) -> None:
+        self._subscriptions = subscriptions
+
+    async def execute(
+        self,
+        *,
+        now: datetime,
+        lead: timedelta = RENEWAL_LEAD,
+        max_attempts: int = MAX_RENEWAL_ATTEMPTS,
+    ) -> list[uuid.UUID]:
+        due = await self._subscriptions.list_due_for_renewal(now=now, lead=lead)
+        return [
+            s.id
+            for s in due
+            if s.is_due_for_renewal(now=now, lead=lead)
+            and s.renewal_attempts < max_attempts
+        ]

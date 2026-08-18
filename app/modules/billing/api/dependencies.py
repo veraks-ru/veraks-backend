@@ -58,6 +58,7 @@ from app.modules.billing.application.use_cases import (
     RefundLatestSubscriptionPayment,
     RefundSubscriptionPayment,
     RevokeInvite,
+    SetAutoRenew,
     StartSubscription,
     UpsertMyPayoutRequisites,
 )
@@ -503,6 +504,11 @@ async def verified_tbank_payload(
             detail="Неверный Token вебхука",
         )
     return payload
+
+
+def get_set_auto_renew(subscriptions: SubscriptionRepoDep, audit: AuditDep) -> SetAutoRenew:
+    """Use-case управления автопродлением."""
+    return SetAutoRenew(subscriptions=subscriptions, audit=audit)
 
 
 def get_create_invite(

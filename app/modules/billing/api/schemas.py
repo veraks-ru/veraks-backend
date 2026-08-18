@@ -63,6 +63,10 @@ class SubscriptionResponse(BaseModel):
     provider: PaymentProvider
     status: SubscriptionStatus
     current_period_end: datetime | None
+    #: Спишется ли следующий период автоматически.
+    auto_renew: bool
+    #: Сохранён ли способ оплаты — без него автопродление включить нельзя.
+    has_payment_method: bool
 
     @classmethod
     def from_domain(cls, sub: Subscription) -> SubscriptionResponse:
@@ -74,6 +78,8 @@ class SubscriptionResponse(BaseModel):
             provider=sub.provider,
             status=sub.status,
             current_period_end=sub.current_period_end,
+            auto_renew=sub.auto_renew,
+            has_payment_method=sub.rebill_id is not None,
         )
 
 
@@ -347,3 +353,9 @@ class AccessGrantResponse(BaseModel):
         return cls(
             id=grant.id, expires_at=grant.expires_at, granted_at=grant.granted_at
         )
+
+
+class SetAutoRenewRequest(BaseModel):
+    """Включить или выключить автопродление подписки."""
+
+    enabled: bool

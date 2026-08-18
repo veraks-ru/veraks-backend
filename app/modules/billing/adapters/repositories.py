@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +36,7 @@ from app.modules.billing.domain.entities import (
     PayoutStatus,
     PrizeFund,
     Subscription,
+    SubscriptionStatus,
 )
 from app.modules.billing.domain.errors import InviteNotFoundError
 from app.modules.billing.domain.ledger import (
@@ -188,8 +190,27 @@ class SqlAlchemySubscriptionRepository:
         orm.current_period_start = subscription.current_period_start
         orm.current_period_end = subscription.current_period_end
         orm.canceled_at = subscription.canceled_at
+        orm.rebill_id = subscription.rebill_id
+        orm.auto_renew = subscription.auto_renew
+        orm.renewal_attempts = subscription.renewal_attempts
         await self._session.flush()
         return orm.to_domain()
+
+    async def list_due_for_renewal(
+        self, *, now: datetime, lead: timedelta
+    ) -> list[Subscription]:
+        """Кандидаты на автосписание: активные, с токеном, период на исходе."""
+        stmt = select(SubscriptionORM).where(
+            SubscriptionORM.auto_renew.is_(True),
+            SubscriptionORM.rebill_id.is_not(None),
+            SubscriptionORM.status.in_(
+                (SubscriptionStatus.ACTIVE, SubscriptionStatus.PAST_DUE)
+            ),
+            SubscriptionORM.current_period_end.is_not(None),
+            SubscriptionORM.current_period_end <= now + lead,
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]
 
 
 class SqlAlchemyPaymentRepository:

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 from app.modules.billing.domain.entities import (
@@ -77,6 +78,12 @@ class SubscriptionRepository(Protocol):
 
     async def update(self, subscription: Subscription) -> Subscription:
         """Синхронизировать изменяемые поля (статус, период, отмена)."""
+        ...
+
+    async def list_due_for_renewal(
+        self, *, now: datetime, lead: timedelta
+    ) -> list[Subscription]:
+        """Подписки с автопродлением, у которых период кончается в пределах ``lead``."""
         ...
 
 

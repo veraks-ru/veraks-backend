@@ -49,6 +49,14 @@ class LedgerAccountNotFoundError(LedgerError):
 # ── Подписки и платежи (операционная касса) ───────────────────────────────
 
 
+class InvalidRecurrentError(BillingError):
+    """Автопродление невозможно: провайдер не дал токен списания."""
+
+
+class RecurrentNotEnabledError(BillingError):
+    """Списание запрошено для подписки без включённого автопродления."""
+
+
 class SubscriptionNotFoundError(BillingError):
     """Подписка не найдена."""
 

@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from app.modules.billing.domain.errors import (
     InvalidAmountError,
     InvalidInviteError,
+    InvalidRecurrentError,
     InvalidRequisiteError,
     InviteAlreadyRedeemedError,
     InviteRevokedError,
@@ -89,6 +90,14 @@ class Subscription:
     current_period_end: datetime | None = None
     created_at: datetime = field(default_factory=_utcnow)
     canceled_at: datetime | None = None
+    # Токен провайдера для списаний без участия человека (ТБанк: RebillId).
+    # Появляется из уведомления о первом — родительском — платеже.
+    rebill_id: str | None = None
+    # Продлевать ли автоматически. Включается вместе с rebill_id: без токена
+    # списывать нечем, поэтому одно без другого бессмысленно.
+    auto_renew: bool = False
+    # Подряд идущие неудачные попытки списания. Сбрасывается успешной оплатой.
+    renewal_attempts: int = 0
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     def __post_init__(self) -> None:
@@ -102,13 +111,69 @@ class Subscription:
         self.status = SubscriptionStatus.ACTIVE
         self.current_period_start = period_start
         self.current_period_end = period_end
+        # Удачное списание закрывает череду неудачных: следующий цикл
+        # начинается с чистого счётчика.
+        self.renewal_attempts = 0
 
     def cancel(self, *, now: datetime) -> None:
-        """Отменить подписку (идемпотентно для уже отменённой)."""
+        """Отменить подписку (идемпотентно для уже отменённой).
+
+        Автопродление выключается вместе с отменой: списать с карты человека,
+        который отказался от услуги, нельзя ни при каких обстоятельствах.
+        Оплаченный период при этом не отбирается — доступ живёт до
+        ``current_period_end`` (так же обещает оферта).
+        """
+        self.auto_renew = False
         if self.status is SubscriptionStatus.CANCELED:
             return
         self.status = SubscriptionStatus.CANCELED
         self.canceled_at = now
+
+    # ── Автопродление ──────────────────────────────────────────────────────
+
+    def enable_auto_renew(self, *, rebill_id: str) -> None:
+        """Запомнить токен провайдера и включить автосписание."""
+        if not rebill_id:
+            raise InvalidRecurrentError("Провайдер не вернул токен списания")
+        self.rebill_id = rebill_id
+        self.auto_renew = True
+        self.renewal_attempts = 0
+
+    def stop_auto_renew(self) -> None:
+        """Больше не продлевать; оплаченный период остаётся за человеком.
+
+        Токен списания стираем, а не просто снимаем флаг: хранить средство
+        платежа без основания незачем, а вернуть автопродление всё равно можно
+        только новой оплатой.
+        """
+        self.auto_renew = False
+        self.rebill_id = None
+
+    def is_due_for_renewal(self, *, now: datetime, lead: timedelta) -> bool:
+        """Пора ли списывать: период кончается в пределах ``lead``."""
+        if not self.auto_renew or not self.rebill_id:
+            return False
+        if self.status not in (
+            SubscriptionStatus.ACTIVE,
+            SubscriptionStatus.PAST_DUE,
+        ):
+            return False
+        if self.current_period_end is None:
+            return False
+        return self.current_period_end <= now + lead
+
+    def note_renewal_failure(self, *, max_attempts: int) -> None:
+        """Учесть неудачное списание; после лимита — прекратить попытки.
+
+        Банк отклоняет по разным причинам (нет денег, карта истекла), и часть
+        из них проходит сама. Поэтому не сдаёмся с первого раза, но и не
+        долбим карту бесконечно: после ``max_attempts`` человек продлевает
+        руками.
+        """
+        self.renewal_attempts += 1
+        self.status = SubscriptionStatus.PAST_DUE
+        if self.renewal_attempts >= max_attempts:
+            self.auto_renew = False
 
 
 @dataclass(slots=True)

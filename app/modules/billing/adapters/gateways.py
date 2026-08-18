@@ -33,12 +33,29 @@ class LocalSubscriptionCheckoutGateway:
     """
 
     async def create_checkout(
-        self, *, subscription_id: uuid.UUID, amount_kopecks: int, description: str
+        self,
+        *,
+        subscription_id: uuid.UUID,
+        amount_kopecks: int,
+        description: str,
+        customer_key: str | None = None,
     ) -> CheckoutIntent:
         return CheckoutIntent(
             provider_subscription_id=f"local-{subscription_id}",
             confirmation_url=f"local://subscription/{subscription_id}",
         )
+
+    async def charge_recurrent(
+        self,
+        *,
+        subscription_id: uuid.UUID,
+        amount_kopecks: int,
+        description: str,
+        rebill_id: str,
+        customer_key: str,
+    ) -> str:
+        """Локально списывать нечего — возвращаем правдоподобный идентификатор."""
+        return f"local-charge-{subscription_id}"
 
 
 class ManualPayoutGateway:

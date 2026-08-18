@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 import httpx
@@ -31,10 +32,14 @@ from app.modules.billing.adapters.repositories import (
     SqlAlchemyLedgerRepository,
     SqlAlchemyPayoutRepository,
     SqlAlchemyPayoutRequisiteRepository,
+    SqlAlchemySubscriptionRepository,
 )
+from app.modules.billing.adapters.tbank_gateway import TBankGateway
 from app.modules.billing.application.use_cases import (
+    ChargeRenewal,
     DispatchApprovedPayouts,
     DispatchPayout,
+    ListRenewableSubscriptions,
     PollPayoutStatuses,
     ReconcileLedger,
     RecordPayoutResult,
@@ -402,6 +407,64 @@ async def dispatch_approved_payouts(_ctx: dict[Any, Any]) -> int:
     return dispatched
 
 
+async def charge_due_subscriptions(_ctx: dict[Any, Any]) -> int:
+    """Автосписание за подписки, у которых период на исходе.
+
+    Списываем за сутки до конца оплаченного периода: остаётся запас на
+    повторную попытку, а человек не теряет доступ на стыке периодов. Деньги
+    проводит не эта задача — подтверждение придёт вебхуком провайдера, тем же
+    путём, что и обычная оплата.
+
+    Каждая подписка — в своей транзакции: отказ банка по одной карте не должен
+    ронять остальные. Отказ считается в ``renewal_attempts``; после лимита
+    попытки прекращаются, и человек продлевает вручную.
+
+    No-op на локальном провайдере: списывать там нечего.
+    """
+    settings = get_settings()
+    if settings.billing.checkout_provider != "tbank":
+        return 0
+
+    now = datetime.now(UTC)
+    async with session_scope() as session:
+        due_ids = await ListRenewableSubscriptions(
+            subscriptions=SqlAlchemySubscriptionRepository(session)
+        ).execute(now=now)
+    if not due_ids:
+        return 0
+
+    charged = 0
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        gateway = TBankGateway(
+            settings.tbank,
+            client,
+            notification_url=f"{settings.public_api_base}/webhooks/payments/tbank",
+            success_url=f"{settings.public_web_base}/account?paid=1",
+            fail_url=f"{settings.public_web_base}/account?paid=0",
+        )
+        for subscription_id in due_ids:
+            try:
+                async with session_scope() as session:
+                    await ChargeRenewal(
+                        subscriptions=SqlAlchemySubscriptionRepository(session),
+                        checkout=gateway,
+                        audit=SqlAlchemyAuditTrail(session),
+                        notifier=PushingNotificationEmitter(
+                            SqlAlchemyNotificationRepository(session),
+                            GoctopusPusher(settings.realtime),
+                        ),
+                    ).execute(subscription_id=subscription_id)
+                charged += 1
+            except (PaymentGatewayError, BillingError) as exc:
+                # Отказ банка уже учтён в счётчике попыток внутри use-case
+                # (своей транзакцией), здесь только пишем в журнал.
+                logger.warning("charge subscription %s: %s", subscription_id, exc)
+    logger.info(
+        "charge_due_subscriptions: %d/%d списано", charged, len(due_ids)
+    )
+    return charged
+
+
 async def poll_jump_payouts(_ctx: dict[Any, Any]) -> int:
     """Опрос статусов выплат Jump до ``is_final`` (вебхуков у Jump нет).
 
@@ -449,6 +512,7 @@ class WorkerSettings:
         reconcile,
         dispatch_approved_payouts,
         poll_jump_payouts,
+        charge_due_subscriptions,
         verify_audit_chain,
     ]
     cron_jobs: ClassVar[list[Any]] = [
@@ -473,6 +537,9 @@ class WorkerSettings:
         # Опрос статусов выплат Jump — каждые 2 минуты (Jump просит опрашивать
         # не чаще раза в минуту; вебхуков у Jump нет).
         cron(poll_jump_payouts, minute=set(range(0, 60, 2))),  # type: ignore[arg-type]
+        # Автосписание за продление подписок — раз в час. Чаще незачем:
+        # окно попытки — сутки до конца периода.
+        cron(charge_due_subscriptions, minute=23),  # type: ignore[arg-type]
         # Ночная верификация хеш-цепочки аудита (после ночного пересчёта рейтингов).
         cron(verify_audit_chain, hour=4, minute=0),  # type: ignore[arg-type]
     ]

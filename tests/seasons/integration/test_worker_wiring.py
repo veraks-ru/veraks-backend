@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.worker import (
     WorkerSettings,
+    charge_due_subscriptions,
     close_dispute_windows,
     close_expired_events,
     dispatch_approved_payouts,
@@ -31,11 +32,13 @@ def test_worker_registers_all_tasks() -> None:
         dispatch_approved_payouts,
         poll_jump_payouts,
         verify_audit_chain,
+        charge_due_subscriptions,
     }
 
 
 def test_worker_has_cron_schedule() -> None:
     # Ночной пересчёт + roll сезонов + закрытие окон оспаривания + авто-закрытие
     # приёма по дедлайну + почасовая сверка журнала + авто-отправка выплат Jump
-    # + опрос статусов выплат Jump + ночная верификация цепочки аудита.
-    assert len(WorkerSettings.cron_jobs) == 8
+    # + опрос статусов выплат Jump + автосписание за продление подписок
+    # + ночная верификация цепочки аудита.
+    assert len(WorkerSettings.cron_jobs) == 9

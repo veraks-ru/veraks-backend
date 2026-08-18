@@ -64,6 +64,7 @@ class Stand:
     funds: InMemoryPrizeFundRepository
     payouts: InMemoryPayoutRepository
     audit: FakeAuditTrail
+    checkout: FakeCheckoutGateway
     start_subscription: StartSubscription
     cancel_subscription: CancelSubscription
     record_payment: RecordSubscriptionPayment
@@ -95,6 +96,7 @@ def stand() -> Stand:
 
     return Stand(
         clock=clock,
+        checkout=checkout,
         ledger=ledger,
         subscriptions=subscriptions,
         payments=payments,
@@ -160,3 +162,14 @@ def admin2() -> Actor:
 def user() -> Actor:
     """Обычный пользователь."""
     return Actor(user_id=uuid.uuid4(), role=UserRole.USER)
+
+
+@pytest.fixture
+def subscriptions_repo() -> InMemorySubscriptionRepository:
+    """Отдельное хранилище подписок для тестов автопродления."""
+    return InMemorySubscriptionRepository()
+
+
+@pytest.fixture
+def audit() -> FakeAuditTrail:
+    return FakeAuditTrail()

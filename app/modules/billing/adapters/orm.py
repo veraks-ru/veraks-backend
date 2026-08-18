@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, Text
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -198,6 +198,14 @@ class SubscriptionORM(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
+    # Токен провайдера для автосписаний (ТБанк: RebillId).
+    rebill_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auto_renew: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    renewal_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     canceled_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -215,6 +223,9 @@ class SubscriptionORM(Base):
             current_period_end=self.current_period_end,
             created_at=self.created_at,
             canceled_at=self.canceled_at,
+            rebill_id=self.rebill_id,
+            auto_renew=self.auto_renew,
+            renewal_attempts=self.renewal_attempts,
         )
 
     @classmethod
@@ -231,6 +242,9 @@ class SubscriptionORM(Base):
             current_period_end=sub.current_period_end,
             created_at=sub.created_at,
             canceled_at=sub.canceled_at,
+            rebill_id=sub.rebill_id,
+            auto_renew=sub.auto_renew,
+            renewal_attempts=sub.renewal_attempts,
         )
 
 
