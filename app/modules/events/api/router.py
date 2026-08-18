@@ -147,14 +147,21 @@ async def list_events(
     return [EventResponse.from_domain(e) for e in events]
 
 
-@router.get("/events/{event_id}", response_model=EventResponse, summary="Детали события")
+@router.get(
+    "/events/{event_ref}", response_model=EventResponse, summary="Детали события"
+)
 async def get_event(
-    event_id: uuid.UUID,
+    event_ref: str,
     uc: Annotated[GetEvent, Depends(get_get_event)],
     viewer: OptionalActorDep,
 ) -> EventResponse:
-    """Возвращает событие по id (404, если не найдено или недоступно зрителю)."""
-    event = await uc.execute(event_id=event_id, viewer=viewer)
+    """Возвращает событие по короткому коду или UUID.
+
+    Параметр строковый, а не ``uuid.UUID``: ссылки, которыми делятся, содержат
+    публичный код. Нераспознанная ссылка любой формы — 404, как и «нет такого
+    события»: подсказывать, что именно не так с идентификатором, незачем.
+    """
+    event = await uc.execute(ref=event_ref, viewer=viewer)
     return EventResponse.from_domain(event)
 
 

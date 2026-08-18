@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import timedelta
 
@@ -24,6 +25,7 @@ from app.modules.events.application.use_cases import (
     CloseExpiredEvents,
     CreateCategory,
     CreateEvent,
+    GetEvent,
     ProposeEvent,
     PublishEvent,
     UpdateCategory,
@@ -568,3 +570,46 @@ async def test_propose_event_restricted_category_rejected(
             actor=user_actor, data=_new_event_input(restricted_category.id)
         )
     assert audit.actions() == []
+
+
+# ── Ссылка на событие: короткий код и UUID ────────────────────────────────
+
+
+async def test_public_code_is_short_and_url_safe(
+    events, categories, clock, audit, editor_actor, category
+) -> None:
+    """Код в ссылке — 11 символов base64url, как у YouTube, и уникален."""
+    uc = CreateEvent(events=events, categories=categories, clock=clock, audit=audit)
+    first = await uc.execute(actor=editor_actor, data=_new_event_input(category.id))
+    second = await uc.execute(actor=editor_actor, data=_new_event_input(category.id))
+
+    assert len(first.public_code) == 11
+    assert re.fullmatch(r"[A-Za-z0-9_-]{11}", first.public_code)
+    assert first.public_code != second.public_code
+
+
+async def test_get_event_by_public_code_and_by_uuid(
+    events, categories, clock, audit, editor_actor, category
+) -> None:
+    """Обе формы ссылки ведут на одно событие: короткая и полная."""
+    created = await CreateEvent(
+        events=events, categories=categories, clock=clock, audit=audit
+    ).execute(actor=editor_actor, data=_new_event_input(category.id))
+    await PublishEvent(events=events, clock=clock, audit=audit).execute(
+        actor=editor_actor, event_id=created.id
+    )
+
+    uc = GetEvent(events=events)
+    by_code = await uc.execute(ref=created.public_code)
+    by_uuid = await uc.execute(ref=str(created.id))
+
+    assert by_code.id == created.id
+    assert by_uuid.id == created.id
+
+
+async def test_get_event_rejects_unknown_reference(events) -> None:
+    """Несуществующий код и мусор вместо ссылки одинаково дают «не найдено»."""
+    uc = GetEvent(events=events)
+    for ref in ("NbwcfCWJIIc", "не-ссылка", str(uuid.uuid4())):
+        with pytest.raises(EventNotFoundError):
+            await uc.execute(ref=ref)

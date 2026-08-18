@@ -53,6 +53,12 @@ class InMemoryEventRepository:
         # ради совместимости с портом.
         return self._clone(self._by_id.get(event_id))
 
+    async def get_by_public_code(self, code: str) -> Event | None:
+        return next(
+            (self._clone(e) for e in self._by_id.values() if e.public_code == code),
+            None,
+        )
+
     async def add(self, event: Event) -> Event:
         self._by_id[event.id] = self._clone(event)
         return self._clone(event)
@@ -98,6 +104,7 @@ class InMemoryEventRepository:
             return None
         return Event(
             id=event.id,
+            public_code=event.public_code,
             title=event.title,
             description=event.description,
             category_id=event.category_id,

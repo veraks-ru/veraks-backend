@@ -76,6 +76,10 @@ class EventORM(Base):
     __tablename__ = "events"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    # Публичный код для коротких ссылок — уникален, в связях не участвует.
+    public_code: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True, index=True
+    )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     category_id: Mapped[uuid.UUID] = mapped_column(
@@ -120,6 +124,7 @@ class EventORM(Base):
         """ORM → доменная сущность (с восстановлением окна-VO)."""
         return Event(
             id=self.id,
+            public_code=self.public_code,
             title=self.title,
             description=self.description,
             category_id=self.category_id,
@@ -145,6 +150,7 @@ class EventORM(Base):
         """Доменная сущность → новая ORM-строка (окно разворачивается в колонки)."""
         return cls(
             id=event.id,
+            public_code=event.public_code,
             title=event.title,
             description=event.description,
             category_id=event.category_id,

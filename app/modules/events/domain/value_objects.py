@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+import secrets
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -17,6 +18,30 @@ from app.modules.events.domain.errors import (
 )
 
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+# Публичный код события — то, что человек видит в ссылке вместо UUID.
+#
+# Восемь случайных байт в base64url дают ровно 11 символов без выравнивания —
+# тот же формат, что у ссылок YouTube. Код именно случайный, а не производный
+# от заголовка: заголовок правят (событие уже переезжало с «приедет ли в
+# Россию» на «концерт в Петербурге»), и ссылка, разосланная подписчикам, от
+# этого не должна ломаться.
+#
+# 64 бита — вероятность совпадения ничтожна даже на миллионах событий, но
+# UNIQUE в БД всё равно стоит: при столкновении лучше отказ, чем подмена
+# чужого события.
+PUBLIC_CODE_LENGTH = 11
+_PUBLIC_CODE_RE = re.compile(rf"^[A-Za-z0-9_-]{{{PUBLIC_CODE_LENGTH}}}$")
+
+
+def new_public_code() -> str:
+    """Свежий публичный код события (11 символов base64url)."""
+    return secrets.token_urlsafe(8)
+
+
+def is_public_code(raw: str) -> bool:
+    """Похожа ли строка на публичный код — в отличие от UUID или мусора."""
+    return bool(_PUBLIC_CODE_RE.match(raw))
 
 
 @dataclass(frozen=True, slots=True)

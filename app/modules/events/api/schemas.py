@@ -99,6 +99,8 @@ class EventResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    #: Короткий код для публичных ссылок (``/events/{public_code}``).
+    public_code: str
     title: str
     description: str
     category_id: uuid.UUID
@@ -121,6 +123,7 @@ class EventResponse(BaseModel):
         """Маппинг доменной сущности в ответ (окно-VO разворачивается)."""
         return cls(
             id=event.id,
+            public_code=event.public_code,
             title=event.title,
             description=event.description,
             category_id=event.category_id,

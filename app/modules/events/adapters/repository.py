@@ -39,6 +39,15 @@ class SqlAlchemyEventRepository:
         )
         return orm.to_domain() if orm else None
 
+    async def get_by_public_code(self, code: str) -> Event | None:
+        """Событие по публичному коду (колонка под UNIQUE-индексом)."""
+        orm = (
+            await self._session.execute(
+                select(EventORM).where(EventORM.public_code == code)
+            )
+        ).scalar_one_or_none()
+        return orm.to_domain() if orm else None
+
     async def add(self, event: Event) -> Event:
         """Вставляет новое событие."""
         orm = EventORM.from_domain(event)

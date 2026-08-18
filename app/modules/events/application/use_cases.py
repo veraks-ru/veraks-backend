@@ -32,7 +32,7 @@ from app.modules.events.domain.policies import (
     ensure_can_annul_event,
     ensure_can_manage_events,
 )
-from app.modules.events.domain.value_objects import EventWindow
+from app.modules.events.domain.value_objects import EventWindow, is_public_code
 from app.modules.events.ports.clock import Clock
 from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.repositories import (
@@ -583,20 +583,35 @@ class GetEvent:
     def __init__(self, *, events: EventRepository) -> None:
         self._events = events
 
-    async def execute(
-        self, *, event_id: uuid.UUID, viewer: Actor | None = None
-    ) -> Event:
-        """Возвращает событие или :class:`EventNotFoundError`.
+    async def execute(self, *, ref: str, viewer: Actor | None = None) -> Event:
+        """Возвращает событие по ссылке или :class:`EventNotFoundError`.
+
+        ``ref`` — то, что стоит в URL: короткий публичный код либо полный UUID.
+        Обе формы ведут на одно событие; короткая нужна для ссылок, которыми
+        делятся, полная осталась у всех, кто её уже сохранил.
 
         Черновик/предложение на модерации видны только редакции и автору; всем
         остальным (включая анонимов) отдаём 404, не раскрывая факт существования.
         """
-        event = await _require_event(self._events, event_id)
+        event = await self._resolve(ref)
+        if event is None:
+            raise EventNotFoundError("Событие не найдено")
         if event.status in _UNLISTED_STATUSES and not _can_see_unlisted(viewer):
             is_author = viewer is not None and viewer.user_id == event.created_by
             if not is_author:
-                raise EventNotFoundError(str(event_id))
+                raise EventNotFoundError(ref)
         return event
+
+    async def _resolve(self, ref: str) -> Event | None:
+        """Ищет событие по короткому коду, иначе по UUID."""
+        if is_public_code(ref):
+            return await self._events.get_by_public_code(ref)
+        try:
+            event_id = uuid.UUID(ref)
+        except ValueError:
+            # Не код и не UUID — для читателя это просто «нет такого события».
+            return None
+        return await self._events.get_by_id(event_id)
 
 
 class ListEvents:

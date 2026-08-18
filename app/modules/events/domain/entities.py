@@ -22,6 +22,7 @@ from app.modules.events.domain.errors import (
 )
 from app.modules.events.domain.value_objects import (
     EventWindow,
+    new_public_code,
     require_text,
     validate_slug,
 )
@@ -179,6 +180,10 @@ class Event:
     resolved_at: datetime | None = None
     dispute_window_ends_at: datetime | None = None
     id: uuid.UUID = field(default_factory=uuid.uuid4)
+    # Короткий код для публичных ссылок; id остаётся ключом во всех связях и
+    # в API записи. Один раз выданный код не меняется — на него ссылаются
+    # снаружи, и превью в мессенджерах кэшируются именно по нему.
+    public_code: str = field(default_factory=new_public_code)
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)
 

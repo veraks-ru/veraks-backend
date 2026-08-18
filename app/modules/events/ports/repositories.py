@@ -41,6 +41,10 @@ class EventRepository(Protocol):
         """
         ...
 
+    async def get_by_public_code(self, code: str) -> Event | None:
+        """Событие по публичному коду из короткой ссылки или ``None``."""
+        ...
+
     async def add(self, event: Event) -> Event:
         """Сохраняет новое событие."""
         ...
