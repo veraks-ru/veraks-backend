@@ -39,10 +39,6 @@ class ProfileUserNotFoundError(PredictionError):
     """Пользователь с таким хэндлом не найден (публичный трек-рекорд)."""
 
 
-class PredictionSummaryHiddenError(PredictionError):
-    """Агрегат прогнозов запрошен в недопустимый момент (зарезервировано)."""
-
-
 class PredictionSubscriptionRequiredError(PredictionError):
     """Постановка прогноза без активной подписки.
 

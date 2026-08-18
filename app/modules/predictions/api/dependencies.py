@@ -105,12 +105,10 @@ def get_my_prediction(predictions: PredictionRepoDep) -> GetMyPrediction:
 
 
 def get_event_prediction_summary(
-    predictions: PredictionRepoDep, events: EventGatewayDep, clock: ClockDep
+    predictions: PredictionRepoDep, events: EventGatewayDep
 ) -> GetEventPredictionSummary:
     """Use-case агрегированного «сигнала толпы» по событию."""
-    return GetEventPredictionSummary(
-        predictions=predictions, events=events, clock=clock
-    )
+    return GetEventPredictionSummary(predictions=predictions, events=events)
 
 
 def get_event_top_predictions(

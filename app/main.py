@@ -105,7 +105,6 @@ from app.modules.predictions.domain.errors import (
     PredictionNotFoundError,
     PredictionsClosedError,
     PredictionSubscriptionRequiredError,
-    PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
     ProfileUserNotFoundError,
 )
@@ -203,7 +202,6 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     PredictionNotFoundError: status.HTTP_404_NOT_FOUND,
     PredictionsClosedError: status.HTTP_409_CONFLICT,
     PredictionLockedError: status.HTTP_409_CONFLICT,
-    PredictionSummaryHiddenError: status.HTTP_409_CONFLICT,
     PredictionSubscriptionRequiredError: status.HTTP_402_PAYMENT_REQUIRED,
     EventTopPredictionsUnavailableError: status.HTTP_409_CONFLICT,
     # scoring

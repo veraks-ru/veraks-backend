@@ -29,7 +29,6 @@ from app.modules.predictions.domain.entities import ConfidenceGrade, Prediction
 from app.modules.predictions.domain.errors import (
     EventTopPredictionsUnavailableError,
     PredictionNotFoundError,
-    PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
     ProfileUserNotFoundError,
 )
@@ -156,39 +155,30 @@ class GetMyPrediction:
 class GetEventPredictionSummary:
     """Агрегированный «сигнал толпы» по событию (распределение + консенсус).
 
-    Скрыт, пока приём открыт: средний прогноз ``c_e`` — это бенчмарк
-    leave-one-out скоринга, и показ его до закрытия позволил бы якориться и
-    списывать (тайминг-фриролл). Прогнозы редактируемы до ``closes_at``, поэтому
-    безопасный рубеж — именно закрытие приёма (scoring_system_design.md §5, PRD §4.2).
+    Виден всем и всегда, включая открытый приём и незалогиненных читателей.
+    Это продуктовое решение: публичный индикатор «во что верят люди» ценен сам
+    по себе, ради него на площадку заходят и те, кто не прогнозирует, — и
+    именно он делает её живой.
+
+    Прежде сводка пряталась до закрытия приёма (анти-якорение): средний
+    прогноз ``c_e`` — бенчмарк leave-one-out скоринга, и раньше времени он
+    позволял бы к нему подстраиваться. Плата за раскрытие осознанная: голоса
+    перестают быть независимыми, а поздний участник видит больше раннего.
+    Компенсировать это должен скоринг — сравнивать человека с консенсусом на
+    момент ЕГО прогноза, а не с итоговым (см. scoring_system_design.md §5).
     """
 
     def __init__(
-        self,
-        *,
-        predictions: PredictionRepository,
-        events: EventGateway,
-        clock: Clock,
+        self, *, predictions: PredictionRepository, events: EventGateway
     ) -> None:
         self._predictions = predictions
         self._events = events
-        self._clock = clock
 
     async def execute(self, *, event_id: uuid.UUID) -> PredictionSummary:
-        """Считает распределение по градациям и средний прогноз (``c_e``).
-
-        Пока приём открыт — :class:`PredictionSummaryHiddenError` (409): сводка
-        толпы раскрывается только после закрытия приёма (анти-якорение).
-        """
+        """Считает распределение по градациям и средний прогноз (``c_e``)."""
         snapshot = await self._events.get_snapshot(event_id)
         if snapshot is None:
             raise PredictionTargetEventNotFoundError("Событие не найдено")
-        # Пока приём открыт (в окне) — прячем: после закрытия по времени
-        # прогнозы уже не меняются, так что раскрытие безопасно.
-        if snapshot.is_accepting_at(self._clock.now()):
-            raise PredictionSummaryHiddenError(
-                "Сводка толпы скрыта, пока открыт приём прогнозов "
-                "(раскроется после закрытия — защита от якорения)"
-            )
 
         votes = await self._predictions.list_for_event(event_id)
         distribution = {grade: 0 for grade in ConfidenceGrade}

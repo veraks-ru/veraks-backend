@@ -26,7 +26,6 @@ from app.modules.predictions.domain.errors import (
     EventTopPredictionsUnavailableError,
     PredictionNotFoundError,
     PredictionsClosedError,
-    PredictionSummaryHiddenError,
     PredictionTargetEventNotFoundError,
     ProfileUserNotFoundError,
 )
@@ -205,15 +204,14 @@ async def test_get_my_prediction_missing_raises(predictions, user_id, event_id) 
         )
 
 
-def _summary_uc(predictions, events, clock) -> GetEventPredictionSummary:
-    return GetEventPredictionSummary(predictions=predictions, events=events, clock=clock)
+def _summary_uc(predictions, events) -> GetEventPredictionSummary:
+    return GetEventPredictionSummary(predictions=predictions, events=events)
 
 
 async def test_summary_aggregates_distribution_after_close(
     predictions, clock, audit, closed_snapshot, event_id
 ) -> None:
-    # Сигнал толпы виден только после закрытия приёма (анти-якорение, §5).
-    # Кладём прогнозы напрямую (окно уже закрыто) и агрегируем.
+    # Распределение по градациям и консенсус c_e по закрытому событию.
     from app.modules.predictions.domain.entities import Prediction
 
     grades = [
@@ -228,7 +226,7 @@ async def test_summary_aggregates_distribution_after_close(
         )
     events = FakeEventGateway([closed_snapshot])
 
-    summary = await _summary_uc(predictions, events, clock).execute(event_id=event_id)
+    summary = await _summary_uc(predictions, events).execute(event_id=event_id)
 
     assert summary.total_count == 4
     assert summary.distribution[ConfidenceGrade.DEFINITELY_YES] == 2
@@ -239,12 +237,13 @@ async def test_summary_aggregates_distribution_after_close(
     assert summary.mean_probability == Decimal("0.65")
 
 
-async def test_summary_hidden_while_event_open(
+async def test_summary_visible_while_event_open(
     predictions, clock, open_snapshot, event_id
 ) -> None:
-    # Пока приём открыт, сводка толпы скрыта (анти-якорение, H-ANCHOR): средний
-    # прогноз — бенчмарк LOO-скоринга, его раскрытие до закрытия позволяло бы
-    # якориться. Прогнозы редактируемы до закрытия → рубеж = закрытие приёма.
+    # Сводка видна и при открытом приёме: публичный индикатор «во что верят
+    # люди» — то, ради чего на площадку заходят и те, кто не прогнозирует.
+    # Прежде она пряталась до закрытия (анти-якорение); плата за раскрытие —
+    # в скоринге, а не в сокрытии данных (scoring_system_design.md §5).
     from app.modules.predictions.domain.entities import Prediction
 
     for grade in (ConfidenceGrade.DEFINITELY_YES, ConfidenceGrade.PROBABLY_NO):
@@ -253,15 +252,20 @@ async def test_summary_hidden_while_event_open(
         )
     events = FakeEventGateway([open_snapshot])
 
-    with pytest.raises(PredictionSummaryHiddenError):
-        await _summary_uc(predictions, events, clock).execute(event_id=event_id)
+    summary = await _summary_uc(predictions, events).execute(event_id=event_id)
+
+    assert summary.total_count == 2
+    assert summary.distribution[ConfidenceGrade.DEFINITELY_YES] == 1
+    assert summary.distribution[ConfidenceGrade.PROBABLY_NO] == 1
+    # c_e = (0.9 + 0.3) / 2
+    assert summary.mean_probability == Decimal("0.60")
 
 
 async def test_summary_empty_after_close(
     predictions, clock, closed_snapshot, event_id
 ) -> None:
     events = FakeEventGateway([closed_snapshot])
-    summary = await _summary_uc(predictions, events, clock).execute(event_id=event_id)
+    summary = await _summary_uc(predictions, events).execute(event_id=event_id)
     assert summary.total_count == 0
     assert summary.mean_probability is None
 
@@ -269,7 +273,7 @@ async def test_summary_empty_after_close(
 async def test_summary_unknown_event_raises(predictions, clock, event_id) -> None:
     events = FakeEventGateway([])
     with pytest.raises(PredictionTargetEventNotFoundError):
-        await _summary_uc(predictions, events, clock).execute(event_id=event_id)
+        await _summary_uc(predictions, events).execute(event_id=event_id)
 
 
 async def test_lock_event_predictions_locks_all(

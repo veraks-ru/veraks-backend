@@ -235,12 +235,16 @@ def test_put_prediction_invalid_grade_422(make_client, open_snapshot) -> None:
     assert resp.status_code == 422
 
 
-def test_predictions_summary_hidden_while_open(make_client, open_snapshot) -> None:
-    """До закрытия приёма сигнал толпы скрыт → 409 (анти-якорение)."""
+def test_predictions_summary_public_while_open(make_client, open_snapshot) -> None:
+    """Сигнал толпы доступен и при открытом приёме, и без авторизации.
+
+    Публичный индикатор «во что верят люди» — то, ради чего на площадку
+    заходят и те, кто сам не прогнозирует.
+    """
     client, _, _, _ = make_client()
     resp = client.get(f"/events/{open_snapshot.event_id}/predictions/summary")
-    assert resp.status_code == 409
-    assert resp.json()["error"] == "PredictionSummaryHiddenError"
+    assert resp.status_code == 200
+    assert resp.json()["event_id"] == str(open_snapshot.event_id)
 
 
 def test_predictions_summary_after_close(make_client, closed_snapshot) -> None:
