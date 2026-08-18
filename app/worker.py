@@ -20,7 +20,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-import httpx
 from arq import cron
 from arq.connections import ArqRedis, RedisSettings
 
@@ -102,6 +101,7 @@ from app.modules.seasons.domain.entities import SeasonStatus
 from app.shared.audit.adapters.reader import SqlAlchemyAuditLogReader
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from app.shared.audit.application.verify_chain import VerifyAuditChain
+from app.shared.http import http_client
 
 logger = logging.getLogger(__name__)
 
@@ -383,7 +383,7 @@ async def dispatch_approved_payouts(_ctx: dict[Any, Any]) -> int:
         return 0
 
     dispatched = 0
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with http_client(timeout=15.0) as client:
         gateway = JumpGateway(settings.jump, client)
         for payout_id in candidate_ids:
             try:
@@ -434,7 +434,7 @@ async def charge_due_subscriptions(_ctx: dict[Any, Any]) -> int:
         return 0
 
     charged = 0
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with http_client(timeout=15.0) as client:
         gateway = TBankGateway(
             settings.tbank,
             client,
@@ -474,7 +474,7 @@ async def poll_jump_payouts(_ctx: dict[Any, Any]) -> int:
     settings = get_settings()
     if not settings.jump.enabled:
         return 0
-    async with httpx.AsyncClient(timeout=15.0) as client, session_scope() as session:
+    async with http_client(timeout=15.0) as client, session_scope() as session:
         payouts = SqlAlchemyPayoutRepository(session)
         clock = BillingClock()
         uc = PollPayoutStatuses(

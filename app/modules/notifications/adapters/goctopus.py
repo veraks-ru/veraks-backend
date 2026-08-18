@@ -10,9 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
-
 from app.config import RealtimeSettings
+from app.shared.http import http_client
 
 _LOG = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class GoctopusPusher:
         if not self._settings.url:
             return
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with http_client(timeout=3.0) as client:
                 await client.post(
                     self._settings.url,
                     json={"key": key, "value": value},

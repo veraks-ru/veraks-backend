@@ -12,6 +12,11 @@ COPY pyproject.toml ./
 COPY app ./app
 RUN pip install --upgrade pip && pip install -e .
 
+# Корни НУЦ Минцифры: эквайринг ТБанка отдаёт сертификат, выпущенный ими, а в
+# certifi и системном хранилище их нет — без этого оплата падает на проверке
+# сертификата (см. app/shared/http.py).
+COPY certs ./certs
+
 # Остальное (alembic, конфиги, сид, bootstrap-скрипты) — отдельным слоем.
 COPY alembic ./alembic
 COPY alembic.ini ./

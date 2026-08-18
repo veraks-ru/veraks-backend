@@ -92,6 +92,7 @@ from app.modules.notifications.adapters.repository import (
 )
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 from app.shared.audit.ports.audit_trail import AuditTrail
+from app.shared.http import http_client
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -156,7 +157,7 @@ def get_payout_requisite_repository(
 
 async def get_http_client() -> AsyncIterator[httpx.AsyncClient]:
     """HTTP-клиент для внешних платёжных вызовов (ТБанк)."""
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with http_client(timeout=15.0) as client:
         yield client
 
 

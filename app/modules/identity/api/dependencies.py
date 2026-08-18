@@ -96,6 +96,7 @@ from app.shared.audit.adapters.trail import (
     SqlAlchemyAuditTrail,
 )
 from app.shared.audit.ports.audit_trail import AuditTrail
+from app.shared.http import http_client
 from app.shared.mail.adapters.factory import build_email_sender
 from app.shared.mail.ports.sender import EmailSender
 
@@ -140,7 +141,7 @@ RedisDep = Annotated[Redis, Depends(get_redis_client)]
 
 async def get_http_client() -> AsyncIterator[httpx.AsyncClient]:
     """HTTP-клиент для запросов к шлюзу ЕСИА (на запрос)."""
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with http_client(timeout=10.0) as client:
         yield client
 
 
