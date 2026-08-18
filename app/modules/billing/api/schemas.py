@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from app.modules.billing.application.dto import PrizeFundView, SeasonPrizeFundView
 from app.modules.billing.application.use_cases import SponsorFundDetail
 from app.modules.billing.domain.entities import (
+    AccessGrant,
+    Invite,
     Payment,
     PaymentProvider,
     PaymentStatus,
@@ -283,4 +285,65 @@ class SponsorFundDetailResponse(BaseModel):
             ),
             available_kopecks=detail.available_kopecks,
             payouts=[PayoutResponse.from_domain(p) for p in detail.payouts],
+        )
+
+
+# ── Пригласительные ссылки ────────────────────────────────────────────────
+
+
+class CreateInviteRequest(BaseModel):
+    """Параметры новой пригласительной ссылки."""
+
+    duration_days: int | None = Field(
+        default=None,
+        gt=0,
+        le=3650,
+        description="Срок доступа от активации; null — бессрочно.",
+    )
+    note: str = Field(default="", max_length=200, description="Для кого приглашение.")
+
+
+class InviteResponse(BaseModel):
+    """Проекция приглашения для админки."""
+
+    id: uuid.UUID
+    code: str
+    duration_days: int | None
+    note: str
+    created_at: datetime
+    redeemed_by: uuid.UUID | None
+    redeemed_at: datetime | None
+    revoked_at: datetime | None
+
+    @classmethod
+    def from_domain(cls, invite: Invite) -> InviteResponse:
+        return cls(
+            id=invite.id,
+            code=invite.code,
+            duration_days=invite.duration_days,
+            note=invite.note,
+            created_at=invite.created_at,
+            redeemed_by=invite.redeemed_by,
+            redeemed_at=invite.redeemed_at,
+            revoked_at=invite.revoked_at,
+        )
+
+
+class RedeemInviteRequest(BaseModel):
+    """Код приглашения, предъявляемый вошедшим пользователем."""
+
+    code: str = Field(min_length=1, max_length=64)
+
+
+class AccessGrantResponse(BaseModel):
+    """Выданный доступ: до какого момента действует."""
+
+    id: uuid.UUID
+    expires_at: datetime | None
+    granted_at: datetime
+
+    @classmethod
+    def from_domain(cls, grant: AccessGrant) -> AccessGrantResponse:
+        return cls(
+            id=grant.id, expires_at=grant.expires_at, granted_at=grant.granted_at
         )

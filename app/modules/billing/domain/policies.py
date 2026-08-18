@@ -75,3 +75,16 @@ def ensure_distinct_approver(
         raise SelfApprovalError(
             "Подтверждающий выплату должен отличаться от инициатора (maker-checker)"
         )
+
+
+def ensure_can_manage_invites(*, role: UserRole) -> None:
+    """Раздавать бесплатный доступ может только админ.
+
+    Приглашение — это отказ от выручки, поэтому право уже, чем у обычной
+    редакционной работы: editor заводит события, но не решает, кому платить
+    не нужно.
+    """
+    if role is not UserRole.ADMIN:
+        raise BillingPermissionError(
+            "Приглашения доступны только администратору"
+        )

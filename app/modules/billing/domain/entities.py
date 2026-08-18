@@ -9,13 +9,17 @@
 from __future__ import annotations
 
 import enum
+import secrets
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.modules.billing.domain.errors import (
     InvalidAmountError,
+    InvalidInviteError,
     InvalidRequisiteError,
+    InviteAlreadyRedeemedError,
+    InviteRevokedError,
     PayoutAlreadyDecidedError,
 )
 
@@ -313,3 +317,105 @@ class PayoutRequisites:
             raise InvalidRequisiteError("Не указан банк СБП")
         if not self.last_name or not self.first_name:
             raise InvalidRequisiteError("Фамилия и имя обязательны")
+
+
+# ── Пригласительный доступ (без денег) ────────────────────────────────────
+#
+# Голосовать можно с активной подпиской. Приглашение открывает ту же
+# возможность, но без оплаты: платформе на старте нужны участники, а первым
+# из них платить не за что — прогнозов ещё нет, рейтинга тоже.
+#
+# Намеренно НЕ подписка с нулевой ценой: подписка — платёжная сущность, у неё
+# цена всегда положительная (см. ``Subscription.__post_init__``), и каждое
+# списание отражается проводкой в кассе OPERATIONS. У выданного доступа нет
+# ни платежа, ни проводки, и заводить ради него фиктивную запись в денежном
+# контуре нельзя — это исказило бы отчётность по кассе.
+
+
+def new_invite_code() -> str:
+    """Код приглашения: 11 символов base64url, как в публичных ссылках."""
+    return secrets.token_urlsafe(8)
+
+
+@dataclass(slots=True)
+class Invite:
+    """Одноразовая пригласительная ссылка, дающая доступ без оплаты.
+
+    ``duration_days is None`` — доступ бессрочный; иначе он истекает через
+    указанное число дней после активации. Срок отсчитывается от активации, а
+    не от создания: иначе приглашение, пролежавшее неделю в переписке,
+    досталось бы человеку наполовину истёкшим.
+    """
+
+    created_by: uuid.UUID
+    duration_days: int | None = None
+    note: str = ""
+    code: str = field(default_factory=new_invite_code)
+    redeemed_by: uuid.UUID | None = None
+    redeemed_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime = field(default_factory=_utcnow)
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
+
+    def __post_init__(self) -> None:
+        if self.duration_days is not None and self.duration_days <= 0:
+            raise InvalidInviteError("Срок доступа должен быть больше нуля дней")
+
+    @property
+    def is_redeemed(self) -> bool:
+        return self.redeemed_by is not None
+
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+    def redeem(self, *, user_id: uuid.UUID, now: datetime) -> AccessGrant:
+        """Погасить приглашение и выдать доступ.
+
+        Проверки здесь, а не в use-case: одноразовость — свойство самого
+        приглашения. Гонку двух одновременных активаций ловит уникальный
+        индекс в БД, а не эта проверка.
+        """
+        if self.is_revoked:
+            raise InviteRevokedError("Приглашение отозвано")
+        if self.is_redeemed:
+            raise InviteAlreadyRedeemedError("Приглашение уже использовано")
+
+        self.redeemed_by = user_id
+        self.redeemed_at = now
+        expires_at = (
+            None
+            if self.duration_days is None
+            else now + timedelta(days=self.duration_days)
+        )
+        return AccessGrant(
+            user_id=user_id, invite_id=self.id, expires_at=expires_at, granted_at=now
+        )
+
+    def revoke(self, *, now: datetime) -> None:
+        """Отозвать неиспользованное приглашение (для использованного — поздно)."""
+        if self.is_redeemed:
+            raise InviteAlreadyRedeemedError(
+                "Приглашение уже использовано — доступ отзывается отдельно"
+            )
+        if self.is_revoked:
+            return
+        self.revoked_at = now
+
+
+@dataclass(slots=True)
+class AccessGrant:
+    """Право голосовать, выданное по приглашению (без оплаты).
+
+    ``expires_at is None`` — бессрочно. Когда срок выйдет, доступ придётся
+    продлевать уже подпиской за деньги.
+    """
+
+    user_id: uuid.UUID
+    invite_id: uuid.UUID
+    expires_at: datetime | None = None
+    granted_at: datetime = field(default_factory=_utcnow)
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
+
+    def is_active(self, now: datetime) -> bool:
+        return self.expires_at is None or self.expires_at > now

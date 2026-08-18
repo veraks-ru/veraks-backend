@@ -48,6 +48,10 @@ class FakeClock:
     def now(self) -> datetime:
         return self._now
 
+    def move_to(self, moment: datetime) -> None:
+        """Перевести часы — для сценариев, где между шагами проходит время."""
+        self._now = moment
+
 
 class FakeNotifier:
     """Нотификатор-заглушка: копит эмиссии, ничего не пишет в БД/сеть."""

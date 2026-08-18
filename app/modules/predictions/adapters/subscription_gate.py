@@ -1,8 +1,10 @@
-"""Адаптер подписочного гейта поверх таблицы подписок billing.
+"""Адаптер подписочного гейта поверх таблиц billing.
 
 Интеграционный шов predictions → billing (как ``user_gateway`` читает
-``UserORM`` домена identity). Активной считается подписка со статусом
-``active`` и непросроченным ``current_period_end``.
+``UserORM`` домена identity). Голосовать можно при активной подписке
+(статус ``active`` и непросроченный ``current_period_end``) либо при
+действующем доступе по приглашению — это второй, неоплаченный путь к тому же
+праву, поэтому проверять надо оба.
 """
 
 from __future__ import annotations
@@ -10,10 +12,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.billing.adapters.orm import SubscriptionORM
+from app.modules.billing.adapters.orm import AccessGrantORM, SubscriptionORM
 from app.modules.billing.domain.entities import SubscriptionStatus
 
 
@@ -26,7 +28,7 @@ class SqlAlchemySubscriptionGate:
     async def has_active_subscription(
         self, user_id: uuid.UUID, now: datetime
     ) -> bool:
-        stmt = (
+        paid = (
             select(SubscriptionORM.id)
             .where(
                 SubscriptionORM.user_id == user_id,
@@ -36,4 +38,19 @@ class SqlAlchemySubscriptionGate:
             )
             .limit(1)
         )
-        return (await self._session.execute(stmt)).first() is not None
+        if (await self._session.execute(paid)).first() is not None:
+            return True
+
+        # Доступ по приглашению: NULL в expires_at — бессрочный.
+        granted = (
+            select(AccessGrantORM.id)
+            .where(
+                AccessGrantORM.user_id == user_id,
+                or_(
+                    AccessGrantORM.expires_at.is_(None),
+                    AccessGrantORM.expires_at > now,
+                ),
+            )
+            .limit(1)
+        )
+        return (await self._session.execute(granted)).first() is not None

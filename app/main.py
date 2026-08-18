@@ -28,7 +28,11 @@ from app.modules.billing.domain.errors import (
     CrossLedgerEntryError,
     InsufficientPrizeFundError,
     InvalidAmountError,
+    InvalidInviteError,
     InvalidRequisiteError,
+    InviteAlreadyRedeemedError,
+    InviteNotFoundError,
+    InviteRevokedError,
     LedgerAccountNotFoundError,
     ManualPayoutDispatchError,
     PaymentGatewayError,
@@ -237,6 +241,12 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     SubscriptionPermissionError: status.HTTP_403_FORBIDDEN,
     SelfApprovalError: status.HTTP_403_FORBIDDEN,
     PayoutAlreadyDecidedError: status.HTTP_409_CONFLICT,
+    InviteNotFoundError: status.HTTP_404_NOT_FOUND,
+    # Ссылку уже использовали или отозвали: состояние конфликтует с
+    # запросом, а не является ошибкой ввода.
+    InviteAlreadyRedeemedError: status.HTTP_409_CONFLICT,
+    InviteRevokedError: status.HTTP_409_CONFLICT,
+    InvalidInviteError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InsufficientPrizeFundError: status.HTTP_409_CONFLICT,
     # Выплату нельзя отправить, пока получатель не заполнил реквизиты СБП.
     PayoutRequisitesMissingError: status.HTTP_409_CONFLICT,

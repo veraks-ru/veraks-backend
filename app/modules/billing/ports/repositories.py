@@ -11,6 +11,8 @@ import uuid
 from typing import Protocol, runtime_checkable
 
 from app.modules.billing.domain.entities import (
+    AccessGrant,
+    Invite,
     Payment,
     PaymentProvider,
     Payout,
@@ -203,4 +205,42 @@ class PayoutRequisiteRepository(Protocol):
 
     async def upsert(self, requisites: PayoutRequisites) -> PayoutRequisites:
         """Создать или заменить реквизиты пользователя (``UNIQUE(user_id)``)."""
+        ...
+
+
+@runtime_checkable
+class InviteRepository(Protocol):
+    """Хранилище пригласительных ссылок."""
+
+    async def add(self, invite: Invite) -> Invite:
+        """Создать приглашение."""
+        ...
+
+    async def get_by_code(self, code: str) -> Invite | None:
+        """Приглашение по коду из ссылки или ``None``."""
+        ...
+
+    async def get_by_id(self, invite_id: uuid.UUID) -> Invite | None:
+        """Приглашение по идентификатору или ``None``."""
+        ...
+
+    async def update(self, invite: Invite) -> Invite:
+        """Синхронизировать изменяемые поля (гашение, отзыв)."""
+        ...
+
+    async def list_recent(self, limit: int = 100) -> list[Invite]:
+        """Приглашения, новые первыми."""
+        ...
+
+
+@runtime_checkable
+class AccessGrantRepository(Protocol):
+    """Хранилище доступа, выданного по приглашениям."""
+
+    async def add(self, grant: AccessGrant) -> AccessGrant:
+        """Записать выданный доступ."""
+        ...
+
+    async def list_by_user(self, user_id: uuid.UUID) -> list[AccessGrant]:
+        """Весь доступ пользователя, новый первым."""
         ...

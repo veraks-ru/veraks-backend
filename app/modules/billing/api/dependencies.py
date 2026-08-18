@@ -24,6 +24,8 @@ from app.modules.billing.adapters.gateways import (
 )
 from app.modules.billing.adapters.jump_gateway import JumpGateway
 from app.modules.billing.adapters.repositories import (
+    SqlAlchemyAccessGrantRepository,
+    SqlAlchemyInviteRepository,
     SqlAlchemyLedgerRepository,
     SqlAlchemyPaymentRepository,
     SqlAlchemyPayoutRepository,
@@ -38,6 +40,7 @@ from app.modules.billing.application.use_cases import (
     AnnouncePrizeFund,
     ApprovePayout,
     CancelSubscription,
+    CreateInvite,
     CreatePayout,
     DispatchPayout,
     GetMyPayoutRequisites,
@@ -45,13 +48,16 @@ from app.modules.billing.application.use_cases import (
     GetMySubscription,
     GetPrizeFund,
     GetSeasonPrizeFund,
+    ListInvites,
     ListMyPayouts,
     ListMySponsorFunds,
     ListPayouts,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
+    RedeemInvite,
     RefundLatestSubscriptionPayment,
     RefundSubscriptionPayment,
+    RevokeInvite,
     StartSubscription,
     UpsertMyPayoutRequisites,
 )
@@ -67,6 +73,8 @@ from app.modules.billing.ports.gateways import (
 )
 from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.ports.repositories import (
+    AccessGrantRepository,
+    InviteRepository,
     LedgerRepository,
     PaymentRepository,
     PayoutRepository,
@@ -113,6 +121,16 @@ def get_payment_repository(session: SessionDep) -> PaymentRepository:
 def get_prize_fund_repository(session: SessionDep) -> PrizeFundRepository:
     """Репозиторий призовых фондов."""
     return SqlAlchemyPrizeFundRepository(session)
+
+
+def get_invite_repository(session: SessionDep) -> InviteRepository:
+    """Репозиторий пригласительных ссылок."""
+    return SqlAlchemyInviteRepository(session)
+
+
+def get_access_grant_repository(session: SessionDep) -> AccessGrantRepository:
+    """Репозиторий доступа, выданного по приглашениям."""
+    return SqlAlchemyAccessGrantRepository(session)
 
 
 def get_payout_repository(session: SessionDep) -> PayoutRepository:
@@ -207,6 +225,10 @@ SubscriptionRepoDep = Annotated[
 PaymentRepoDep = Annotated[PaymentRepository, Depends(get_payment_repository)]
 PrizeFundRepoDep = Annotated[PrizeFundRepository, Depends(get_prize_fund_repository)]
 PayoutRepoDep = Annotated[PayoutRepository, Depends(get_payout_repository)]
+InviteRepoDep = Annotated[InviteRepository, Depends(get_invite_repository)]
+AccessGrantRepoDep = Annotated[
+    AccessGrantRepository, Depends(get_access_grant_repository)
+]
 PayoutRequisiteRepoDep = Annotated[
     PayoutRequisiteRepository, Depends(get_payout_requisite_repository)
 ]
@@ -481,3 +503,32 @@ async def verified_tbank_payload(
             detail="Неверный Token вебхука",
         )
     return payload
+
+
+def get_create_invite(
+    invites: InviteRepoDep, audit: AuditDep, clock: ClockDep
+) -> CreateInvite:
+    """Use-case создания пригласительной ссылки."""
+    return CreateInvite(invites=invites, audit=audit, clock=clock)
+
+
+def get_list_invites(invites: InviteRepoDep) -> ListInvites:
+    """Use-case списка приглашений."""
+    return ListInvites(invites=invites)
+
+
+def get_revoke_invite(
+    invites: InviteRepoDep, audit: AuditDep, clock: ClockDep
+) -> RevokeInvite:
+    """Use-case отзыва приглашения."""
+    return RevokeInvite(invites=invites, audit=audit, clock=clock)
+
+
+def get_redeem_invite(
+    invites: InviteRepoDep,
+    grants: AccessGrantRepoDep,
+    audit: AuditDep,
+    clock: ClockDep,
+) -> RedeemInvite:
+    """Use-case активации приглашения вошедшим пользователем."""
+    return RedeemInvite(invites=invites, grants=grants, audit=audit, clock=clock)

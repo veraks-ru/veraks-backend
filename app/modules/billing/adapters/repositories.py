@@ -13,6 +13,8 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.billing.adapters.orm import (
+    AccessGrantORM,
+    InviteORM,
     LedgerAccountORM,
     LedgerEntryORM,
     LedgerTransactionORM,
@@ -23,6 +25,8 @@ from app.modules.billing.adapters.orm import (
     SubscriptionORM,
 )
 from app.modules.billing.domain.entities import (
+    AccessGrant,
+    Invite,
     Payment,
     PaymentProvider,
     PaymentStatus,
@@ -32,6 +36,7 @@ from app.modules.billing.domain.entities import (
     PrizeFund,
     Subscription,
 )
+from app.modules.billing.domain.errors import InviteNotFoundError
 from app.modules.billing.domain.ledger import (
     EntryDirection,
     LedgerAccount,
@@ -440,3 +445,65 @@ class SqlAlchemyPayoutRequisiteRepository:
         orm.updated_at = requisites.updated_at
         await self._session.flush()
         return self._to_domain(orm)
+
+
+class SqlAlchemyInviteRepository:
+    """Хранилище пригласительных ссылок."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, invite: Invite) -> Invite:
+        orm = InviteORM.from_domain(invite)
+        self._session.add(orm)
+        await self._session.flush()
+        return orm.to_domain()
+
+    async def get_by_code(self, code: str) -> Invite | None:
+        stmt = select(InviteORM).where(InviteORM.code == code)
+        orm = (await self._session.execute(stmt)).scalar_one_or_none()
+        return orm.to_domain() if orm else None
+
+    async def get_by_id(self, invite_id: uuid.UUID) -> Invite | None:
+        orm = await self._session.get(InviteORM, invite_id)
+        return orm.to_domain() if orm else None
+
+    async def update(self, invite: Invite) -> Invite:
+        orm = await self._session.get(InviteORM, invite.id)
+        if orm is None:  # pragma: no cover — вызывается для существующих
+            raise InviteNotFoundError(str(invite.id))
+        orm.note = invite.note
+        orm.redeemed_by = invite.redeemed_by
+        orm.redeemed_at = invite.redeemed_at
+        orm.revoked_at = invite.revoked_at
+        await self._session.flush()
+        return orm.to_domain()
+
+    async def list_recent(self, limit: int = 100) -> list[Invite]:
+        stmt = (
+            select(InviteORM).order_by(InviteORM.created_at.desc()).limit(limit)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]
+
+
+class SqlAlchemyAccessGrantRepository:
+    """Хранилище доступа, выданного по приглашениям."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, grant: AccessGrant) -> AccessGrant:
+        orm = AccessGrantORM.from_domain(grant)
+        self._session.add(orm)
+        await self._session.flush()
+        return orm.to_domain()
+
+    async def list_by_user(self, user_id: uuid.UUID) -> list[AccessGrant]:
+        stmt = (
+            select(AccessGrantORM)
+            .where(AccessGrantORM.user_id == user_id)
+            .order_by(AccessGrantORM.granted_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [row.to_domain() for row in rows]

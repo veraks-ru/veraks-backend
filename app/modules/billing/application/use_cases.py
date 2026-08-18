@@ -25,6 +25,8 @@ from app.modules.billing.application.dto import (
 )
 from app.modules.billing.domain import chart
 from app.modules.billing.domain.entities import (
+    AccessGrant,
+    Invite,
     Payment,
     PaymentProvider,
     PaymentPurpose,
@@ -42,6 +44,7 @@ from app.modules.billing.domain.errors import (
     InsufficientPrizeFundError,
     InvalidAmountError,
     InvalidPaymentError,
+    InviteNotFoundError,
     LedgerAccountNotFoundError,
     PaymentNotFoundError,
     PayoutAlreadyDecidedError,
@@ -65,6 +68,7 @@ from app.modules.billing.domain.policies import (
     ensure_can_approve_payout,
     ensure_can_create_payout,
     ensure_can_deposit_to_fund,
+    ensure_can_manage_invites,
     ensure_can_manage_prize_funds,
     ensure_distinct_approver,
 )
@@ -80,6 +84,8 @@ from app.modules.billing.ports.gateways import (
 )
 from app.modules.billing.ports.notifications import Notifier
 from app.modules.billing.ports.repositories import (
+    AccessGrantRepository,
+    InviteRepository,
     LedgerRepository,
     PaymentRepository,
     PayoutRepository,
@@ -1286,3 +1292,143 @@ class GetMySponsorFund:
         return SponsorFundDetail(
             fund=fund, available_kopecks=-balance, payouts=payouts
         )
+
+
+# ── Пригласительный доступ ────────────────────────────────────────────────
+
+
+class CreateInvite:
+    """Завести одноразовую пригласительную ссылку (admin)."""
+
+    def __init__(
+        self,
+        *,
+        invites: InviteRepository,
+        audit: AuditTrail,
+        clock: Clock,
+    ) -> None:
+        self._invites = invites
+        self._audit = audit
+        self._clock = clock
+
+    async def execute(
+        self,
+        *,
+        actor: Actor,
+        duration_days: int | None = None,
+        note: str = "",
+    ) -> Invite:
+        """Создаёт приглашение; ``duration_days=None`` — бессрочный доступ."""
+        ensure_can_manage_invites(role=actor.role)
+        invite = Invite(
+            created_by=actor.user_id,
+            duration_days=duration_days,
+            note=note.strip(),
+            created_at=self._clock.now(),
+        )
+        created = await self._invites.add(invite)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=AuditActorType.ADMIN,
+            action="billing.invite_created",
+            entity_type="invite",
+            entity_id=created.id,
+            after={"duration_days": duration_days, "note": created.note},
+        )
+        return created
+
+
+class ListInvites:
+    """Выданные приглашения, новые первыми (admin)."""
+
+    def __init__(self, *, invites: InviteRepository) -> None:
+        self._invites = invites
+
+    async def execute(self, *, actor: Actor, limit: int = 100) -> list[Invite]:
+        ensure_can_manage_invites(role=actor.role)
+        return await self._invites.list_recent(limit=limit)
+
+
+class RevokeInvite:
+    """Отозвать ещё не использованное приглашение (admin)."""
+
+    def __init__(
+        self,
+        *,
+        invites: InviteRepository,
+        audit: AuditTrail,
+        clock: Clock,
+    ) -> None:
+        self._invites = invites
+        self._audit = audit
+        self._clock = clock
+
+    async def execute(self, *, actor: Actor, invite_id: uuid.UUID) -> Invite:
+        ensure_can_manage_invites(role=actor.role)
+        invite = await self._invites.get_by_id(invite_id)
+        if invite is None:
+            raise InviteNotFoundError(str(invite_id))
+
+        invite.revoke(now=self._clock.now())
+        updated = await self._invites.update(invite)
+        await self._audit.record(
+            actor_id=actor.user_id,
+            actor_type=AuditActorType.ADMIN,
+            action="billing.invite_revoked",
+            entity_type="invite",
+            entity_id=updated.id,
+        )
+        return updated
+
+
+class RedeemInvite:
+    """Активировать приглашение вошедшим пользователем.
+
+    Отдельный шаг после входа, а не часть регистрации: identity не знает про
+    подписки и не должен. Фронтенд помнит код из ссылки и предъявляет его,
+    когда сессия уже есть.
+
+    Повторная активация тем же человеком возвращает выданный ранее доступ, а
+    не ошибку: ссылку легко открыть дважды, и это не повод пугать человека.
+    """
+
+    def __init__(
+        self,
+        *,
+        invites: InviteRepository,
+        grants: AccessGrantRepository,
+        audit: AuditTrail,
+        clock: Clock,
+    ) -> None:
+        self._invites = invites
+        self._grants = grants
+        self._audit = audit
+        self._clock = clock
+
+    async def execute(self, *, user_id: uuid.UUID, code: str) -> AccessGrant:
+        invite = await self._invites.get_by_code(code.strip())
+        if invite is None:
+            raise InviteNotFoundError("Приглашение не найдено")
+
+        if invite.redeemed_by == user_id:
+            existing = [
+                grant
+                for grant in await self._grants.list_by_user(user_id)
+                if grant.invite_id == invite.id
+            ]
+            if existing:
+                return existing[0]
+
+        now = self._clock.now()
+        grant = invite.redeem(user_id=user_id, now=now)
+        await self._invites.update(invite)
+        saved = await self._grants.add(grant)
+        await self._audit.record(
+            actor_id=user_id,
+            actor_type=AuditActorType.USER,
+            action="billing.invite_redeemed",
+            entity_type="invite",
+            entity_id=invite.id,
+            after={"expires_at": saved.expires_at.isoformat() if saved.expires_at else None},
+        )
+        return saved

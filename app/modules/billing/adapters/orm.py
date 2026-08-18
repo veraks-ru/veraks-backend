@@ -11,13 +11,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Text
+from sqlalchemy import BigInteger, ForeignKey, Integer, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.modules.billing.domain.entities import (
+    AccessGrant,
+    Invite,
     Payment,
     PaymentProvider,
     PaymentPurpose,
@@ -470,3 +472,101 @@ class PayoutRequisitesORM(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
+
+
+class InviteORM(Base):
+    """Таблица ``invites`` — одноразовые пригласительные ссылки."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    code: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    # NULL — доступ бессрочный.
+    duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    redeemed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    redeemed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    def to_domain(self) -> Invite:
+        """ORM → доменная сущность."""
+        return Invite(
+            id=self.id,
+            code=self.code,
+            created_by=self.created_by,
+            duration_days=self.duration_days,
+            note=self.note,
+            redeemed_by=self.redeemed_by,
+            redeemed_at=self.redeemed_at,
+            revoked_at=self.revoked_at,
+            created_at=self.created_at,
+        )
+
+    @classmethod
+    def from_domain(cls, invite: Invite) -> InviteORM:
+        """Доменная сущность → новая ORM-строка."""
+        return cls(
+            id=invite.id,
+            code=invite.code,
+            created_by=invite.created_by,
+            duration_days=invite.duration_days,
+            note=invite.note,
+            redeemed_by=invite.redeemed_by,
+            redeemed_at=invite.redeemed_at,
+            revoked_at=invite.revoked_at,
+            created_at=invite.created_at,
+        )
+
+
+class AccessGrantORM(Base):
+    """Таблица ``access_grants`` — доступ, выданный по приглашению."""
+
+    __tablename__ = "access_grants"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    invite_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invites.id"), nullable=False, unique=True
+    )
+    # NULL — бессрочно.
+    expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    granted_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    def to_domain(self) -> AccessGrant:
+        """ORM → доменная сущность."""
+        return AccessGrant(
+            id=self.id,
+            user_id=self.user_id,
+            invite_id=self.invite_id,
+            expires_at=self.expires_at,
+            granted_at=self.granted_at,
+        )
+
+    @classmethod
+    def from_domain(cls, grant: AccessGrant) -> AccessGrantORM:
+        """Доменная сущность → новая ORM-строка."""
+        return cls(
+            id=grant.id,
+            user_id=grant.user_id,
+            invite_id=grant.invite_id,
+            expires_at=grant.expires_at,
+            granted_at=grant.granted_at,
+        )

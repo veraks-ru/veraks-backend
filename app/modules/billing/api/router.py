@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 
 from app.modules.billing.api.dependencies import (
@@ -19,8 +19,10 @@ from app.modules.billing.api.dependencies import (
     get_announce_prize_fund,
     get_approve_payout,
     get_cancel_subscription,
+    get_create_invite,
     get_create_payout,
     get_dispatch_payout,
+    get_list_invites,
     get_list_my_payouts,
     get_list_my_sponsor_funds,
     get_list_payouts,
@@ -30,16 +32,21 @@ from app.modules.billing.api.dependencies import (
     get_prize_fund,
     get_record_sponsor_deposit,
     get_record_subscription_payment,
+    get_redeem_invite,
     get_refund_latest_subscription_payment,
     get_refund_subscription_payment,
+    get_revoke_invite,
     get_season_prize_fund,
     get_start_subscription,
     get_upsert_my_payout_requisites,
     verified_tbank_payload,
 )
 from app.modules.billing.api.schemas import (
+    AccessGrantResponse,
     AnnouncePrizeFundRequest,
+    CreateInviteRequest,
     CreatePayoutRequest,
+    InviteResponse,
     PaymentResponse,
     PayoutRequisitesRequest,
     PayoutRequisitesResponse,
@@ -48,6 +55,7 @@ from app.modules.billing.api.schemas import (
     PlansResponse,
     PrizeFundResponse,
     RecordDepositRequest,
+    RedeemInviteRequest,
     SeasonPrizeFundResponse,
     SponsorFundDetailResponse,
     StartSubscriptionRequest,
@@ -58,6 +66,7 @@ from app.modules.billing.application.use_cases import (
     AnnouncePrizeFund,
     ApprovePayout,
     CancelSubscription,
+    CreateInvite,
     CreatePayout,
     DispatchPayout,
     GetMyPayoutRequisites,
@@ -65,17 +74,21 @@ from app.modules.billing.application.use_cases import (
     GetMySubscription,
     GetPrizeFund,
     GetSeasonPrizeFund,
+    ListInvites,
     ListMyPayouts,
     ListMySponsorFunds,
     ListPayouts,
     RecordSponsorDeposit,
     RecordSubscriptionPayment,
+    RedeemInvite,
     RefundLatestSubscriptionPayment,
     RefundSubscriptionPayment,
+    RevokeInvite,
     StartSubscription,
     UpsertMyPayoutRequisites,
 )
 from app.modules.billing.domain.entities import PaymentProvider
+from app.modules.identity.api.dependencies import CurrentUser
 
 router = APIRouter(tags=["billing"])
 
@@ -495,3 +508,69 @@ async def dispatch_payout(
     """Отправляет выплату провайдеру (``approved → processing``)."""
     payout = await uc.execute(actor=actor, payout_id=payout_id)
     return PayoutResponse.from_domain(payout)
+
+
+# ── Пригласительные ссылки ────────────────────────────────────────────────
+
+
+@router.post(
+    "/admin/invites",
+    response_model=InviteResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать пригласительную ссылку (admin)",
+)
+async def create_invite(
+    payload: CreateInviteRequest,
+    actor: ActorDep,
+    uc: Annotated[CreateInvite, Depends(get_create_invite)],
+) -> InviteResponse:
+    """Одноразовая ссылка, дающая доступ без оплаты."""
+    invite = await uc.execute(
+        actor=actor, duration_days=payload.duration_days, note=payload.note
+    )
+    return InviteResponse.from_domain(invite)
+
+
+@router.get(
+    "/admin/invites",
+    response_model=list[InviteResponse],
+    summary="Выданные приглашения (admin)",
+)
+async def list_invites(
+    actor: ActorDep,
+    uc: Annotated[ListInvites, Depends(get_list_invites)],
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[InviteResponse]:
+    """Приглашения, новые первыми."""
+    invites = await uc.execute(actor=actor, limit=limit)
+    return [InviteResponse.from_domain(invite) for invite in invites]
+
+
+@router.post(
+    "/admin/invites/{invite_id}/revoke",
+    response_model=InviteResponse,
+    summary="Отозвать приглашение (admin)",
+)
+async def revoke_invite(
+    invite_id: uuid.UUID,
+    actor: ActorDep,
+    uc: Annotated[RevokeInvite, Depends(get_revoke_invite)],
+) -> InviteResponse:
+    """Погасить ещё не использованную ссылку."""
+    invite = await uc.execute(actor=actor, invite_id=invite_id)
+    return InviteResponse.from_domain(invite)
+
+
+@router.post(
+    "/invites/redeem",
+    response_model=AccessGrantResponse,
+    summary="Активировать приглашение",
+)
+async def redeem_invite(
+    payload: RedeemInviteRequest,
+    current_user: CurrentUser,
+    uc: Annotated[RedeemInvite, Depends(get_redeem_invite)],
+) -> AccessGrantResponse:
+    """Обменять код из ссылки на доступ (нужна активная сессия)."""
+    grant = await uc.execute(user_id=current_user.id, code=payload.code)
+    return AccessGrantResponse.from_domain(grant)
