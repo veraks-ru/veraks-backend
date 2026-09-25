@@ -56,3 +56,7 @@ class EventPermissionError(EventError):
 
 class EventSubscriptionRequiredError(EventError):
     """Предложить событие можно только с активной подпиской."""
+
+
+class InvalidFeedCursorError(EventError):
+    """Курсор страницы ленты повреждён (не base64, не наш формат, чужой UUID)."""

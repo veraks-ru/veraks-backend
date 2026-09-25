@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from app.modules.events.domain.entities import Category, Event, EventStatus
@@ -17,8 +18,16 @@ from app.modules.events.domain.errors import (
     CategoryNotFoundError,
     CategorySlugTakenError,
 )
+from app.modules.events.ports.feed import (
+    EventFeedItem,
+    FeedCategoryRef,
+    FeedCrowd,
+    FeedQuery,
+)
 from app.modules.events.ports.repositories import EventFilter
+from app.modules.predictions.domain.entities import ConfidenceGrade
 from app.shared.audit.domain.entities import AuditActorType, AuditEntry
+from tests.predictions.fakes import InMemoryPredictionRepository
 
 
 class FakeClock:
@@ -166,6 +175,88 @@ class InMemoryCategoryRepository:
 
     async def list_all(self) -> list[Category]:
         return sorted(self._by_id.values(), key=lambda c: c.slug)
+
+
+class InMemoryEventFeedReader:
+    """Фейк ленты: считает страницу в памяти по тем же правилам, что SQL-адаптер.
+
+    ``events.list()`` здесь лишь перечисляет все события — статус, окно,
+    категорию, анти-джойн по прогнозам зрителя, keyset-сравнение с курсором,
+    сортировку и срез страницы фейк применяет сам, в Python, не полагаясь на
+    встроенные фильтры ``EventFilter`` (status/category_id): так он остаётся
+    независимой проверкой правил, а не зеркалом SQL-реализации.
+    """
+
+    def __init__(
+        self,
+        events: InMemoryEventRepository,
+        categories: InMemoryCategoryRepository,
+        predictions: InMemoryPredictionRepository,
+    ) -> None:
+        self._events = events
+        self._categories = categories
+        self._predictions = predictions
+
+    async def page(self, query: FeedQuery) -> list[EventFeedItem]:
+        # ``EventFilter`` без фильтров — весь набор событий, статус и окно
+        # проверяем сами (как SQL-адаптер проверяет их в WHERE).
+        all_events = await self._events.list(EventFilter(limit=1_000_000))
+        candidates = [
+            e
+            for e in all_events
+            if e.status is EventStatus.OPEN and e.window.is_accepting_at(query.now)
+        ]
+        if query.category_id is not None:
+            candidates = [e for e in candidates if e.category_id == query.category_id]
+
+        if query.exclude_predicted_by is not None:
+            kept = []
+            for event in candidates:
+                predicted = await self._predictions.get_for_user_event(
+                    query.exclude_predicted_by, event.id
+                )
+                if predicted is None:
+                    kept.append(event)
+            candidates = kept
+
+        candidates.sort(key=lambda e: (e.window.closes_at, e.id))
+
+        if query.after is not None:
+            boundary = (query.after.closes_at, query.after.event_id)
+            candidates = [
+                e for e in candidates if (e.window.closes_at, e.id) > boundary
+            ]
+
+        page = candidates[: query.limit]
+
+        items: list[EventFeedItem] = []
+        for event in page:
+            category = await self._categories.get_by_id(event.category_id)
+            assert category is not None  # FK гарантирует существование категории
+            items.append(
+                EventFeedItem(
+                    event=event,
+                    category=FeedCategoryRef(
+                        id=category.id, slug=category.slug, title=category.title
+                    ),
+                    crowd=await self._crowd_for(event.id),
+                )
+            )
+        return items
+
+    async def _crowd_for(self, event_id: uuid.UUID) -> FeedCrowd:
+        """Сводка толпы по фейковым прогнозам события (все пять грейдов)."""
+        votes = await self._predictions.list_for_event(event_id)
+        distribution = {grade.value: 0 for grade in ConfidenceGrade}
+        for vote in votes:
+            distribution[vote.confidence_grade.value] += 1
+        total = len(votes)
+        mean = (
+            sum((v.probability for v in votes), Decimal(0)) / total
+            if total
+            else None
+        )
+        return FeedCrowd(total_count=total, distribution=distribution, mean_probability=mean)
 
 
 class FakeSubscriptionGate:

@@ -17,6 +17,7 @@ from app.modules.events.application.dto import (
     Actor,
     CategoryPatchInput,
     EventPatchInput,
+    FeedPage,
     NewCategoryInput,
     NewEventInput,
 )
@@ -32,8 +33,9 @@ from app.modules.events.domain.policies import (
     ensure_can_annul_event,
     ensure_can_manage_events,
 )
-from app.modules.events.domain.value_objects import EventWindow, is_public_code
+from app.modules.events.domain.value_objects import EventWindow, FeedCursor, is_public_code
 from app.modules.events.ports.clock import Clock
+from app.modules.events.ports.feed import EventFeedReader, FeedQuery
 from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.repositories import (
     CategoryRepository,
@@ -631,6 +633,53 @@ class ListEvents:
         return await self._events.list(
             criteria, include_unlisted=_can_see_unlisted(viewer)
         )
+
+
+class ListEventFeed:
+    """Лента открытых событий для свайпа (главный экран — дизайн-спека §3).
+
+    Публичный use-case: гость видит все события в окне приёма, вошедший — без
+    тех, что уже предсказал (анти-джойн — забота реализации порта). Страница
+    keyset-пагинирована по ``(closes_at, id)`` — устойчиво к вставкам и
+    закрытиям событий между запросами соседних страниц.
+    """
+
+    def __init__(self, *, feed: EventFeedReader, clock: Clock) -> None:
+        self._feed = feed
+        self._clock = clock
+
+    async def execute(
+        self,
+        *,
+        viewer: Actor | None,
+        limit: int,
+        category_id: uuid.UUID | None,
+        cursor: str | None,
+    ) -> FeedPage:
+        """Запрашивает ``limit + 1``, чтобы узнать о следующей странице, и режет.
+
+        Курсор декодируется здесь же: :class:`InvalidFeedCursorError` из
+        :meth:`FeedCursor.decode` поднимается наружу и маппится в 400
+        централизованно в ``app/main.py``.
+        """
+        after = FeedCursor.decode(cursor) if cursor is not None else None
+        query = FeedQuery(
+            now=self._clock.now(),
+            limit=limit + 1,
+            category_id=category_id,
+            after=after,
+            exclude_predicted_by=viewer.user_id if viewer is not None else None,
+        )
+        fetched = await self._feed.page(query)
+
+        page_items = fetched[:limit]
+        next_cursor = None
+        if len(fetched) > limit and page_items:
+            last = page_items[-1].event
+            next_cursor = FeedCursor(
+                closes_at=last.window.closes_at, event_id=last.id
+            ).encode()
+        return FeedPage(items=page_items, next_cursor=next_cursor)
 
 
 class CreateCategory:

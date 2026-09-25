@@ -60,6 +60,7 @@ from app.modules.events.domain.errors import (
     InvalidEventDataError,
     InvalidEventTransitionError,
     InvalidEventWindowError,
+    InvalidFeedCursorError,
     RestrictedCategoryError,
 )
 from app.modules.identity.api.admin_router import router as identity_admin_router
@@ -196,6 +197,7 @@ _ERROR_STATUS: dict[type[Exception], int] = {
     InvalidEventWindowError: status.HTTP_400_BAD_REQUEST,
     InvalidEventDataError: status.HTTP_400_BAD_REQUEST,
     RestrictedCategoryError: status.HTTP_422_UNPROCESSABLE_ENTITY,
+    InvalidFeedCursorError: status.HTTP_400_BAD_REQUEST,
     # predictions
     PredictionTargetEventNotFoundError: status.HTTP_404_NOT_FOUND,
     ProfileUserNotFoundError: status.HTTP_404_NOT_FOUND,

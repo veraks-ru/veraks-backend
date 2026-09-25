@@ -25,6 +25,7 @@ from app.modules.events.api.dependencies import (
     get_create_event,
     get_get_event,
     get_list_categories,
+    get_list_event_feed,
     get_list_events,
     get_lock_event_predictions,
     get_propose_event,
@@ -41,6 +42,7 @@ from app.modules.events.api.schemas import (
     CreateCategoryRequest,
     CreateEventRequest,
     EventResponse,
+    FeedPageResponse,
     RejectEventRequest,
     UpdateCategoryRequest,
     UpdateEventRequest,
@@ -54,6 +56,7 @@ from app.modules.events.application.use_cases import (
     CreateEvent,
     GetEvent,
     ListCategories,
+    ListEventFeed,
     ListEvents,
     ProposeEvent,
     PublishEvent,
@@ -145,6 +148,32 @@ async def list_events(
     )
     events = await uc.execute(criteria=criteria, viewer=viewer)
     return [EventResponse.from_domain(e) for e in events]
+
+
+@router.get(
+    "/events/feed",
+    response_model=FeedPageResponse,
+    summary="Лента открытых событий (свайп)",
+)
+async def get_event_feed(
+    uc: Annotated[ListEventFeed, Depends(get_list_event_feed)],
+    viewer: OptionalActorDep,
+    category_id: uuid.UUID | None = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    cursor: Annotated[str | None, Query(max_length=128)] = None,
+) -> FeedPageResponse:
+    """Главный экран: карточки открытых событий для свайпа (дизайн-спека §3).
+
+    Гость видит все события в окне приёма; у вошедшего исключены уже
+    предсказанные им. Объявлен ДО ``GET /events/{event_ref}`` намеренно: тот
+    принимает произвольную строку как публичный код события, и при обратном
+    порядке маршрутов ``/events/feed`` перехватился бы им как
+    ``event_ref="feed"`` (несуществующий код → 404) вместо ленты.
+    """
+    page = await uc.execute(
+        viewer=viewer, limit=limit, category_id=category_id, cursor=cursor
+    )
+    return FeedPageResponse.from_page(page)
 
 
 @router.get(

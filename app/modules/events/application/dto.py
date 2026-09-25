@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.modules.events.ports.feed import EventFeedItem
 from app.modules.identity.domain.entities import UserRole
 
 
@@ -68,6 +69,18 @@ class NewCategoryInput:
     description: str = ""
     parent_id: uuid.UUID | None = None
     is_restricted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FeedPage:
+    """Страница ленты: карточки текущей страницы + курсор следующей.
+
+    ``next_cursor is None`` — страница последняя (получено не больше запрошенного
+    ``limit``).
+    """
+
+    items: list[EventFeedItem]
+    next_cursor: str | None
 
 
 @dataclass(frozen=True, slots=True)

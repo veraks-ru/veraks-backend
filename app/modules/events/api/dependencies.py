@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import SettingsDep
 from app.db.session import get_session
 from app.modules.events.adapters.clock import SystemClock
+from app.modules.events.adapters.feed_reader import SqlAlchemyEventFeedReader
 from app.modules.events.adapters.repository import (
     SqlAlchemyCategoryRepository,
     SqlAlchemyEventRepository,
@@ -30,6 +31,7 @@ from app.modules.events.application.use_cases import (
     CreateEvent,
     GetEvent,
     ListCategories,
+    ListEventFeed,
     ListEvents,
     ProposeEvent,
     PublishEvent,
@@ -38,6 +40,7 @@ from app.modules.events.application.use_cases import (
     UpdateEvent,
 )
 from app.modules.events.ports.clock import Clock
+from app.modules.events.ports.feed import EventFeedReader
 from app.modules.events.ports.notifications import Notifier
 from app.modules.events.ports.repositories import CategoryRepository, EventRepository
 from app.modules.events.ports.subscriptions import SubscriptionGate
@@ -100,10 +103,16 @@ def get_audit_trail(session: SessionDep) -> AuditTrail:
     return SqlAlchemyAuditTrail(session)
 
 
+def get_event_feed_reader(session: SessionDep) -> EventFeedReader:
+    """Read-model ленты для свайпа (см. ``get_list_event_feed``)."""
+    return SqlAlchemyEventFeedReader(session)
+
+
 EventRepoDep = Annotated[EventRepository, Depends(get_event_repository)]
 CategoryRepoDep = Annotated[CategoryRepository, Depends(get_category_repository)]
 ClockDep = Annotated[Clock, Depends(get_clock)]
 AuditDep = Annotated[AuditTrail, Depends(get_audit_trail)]
+EventFeedReaderDep = Annotated[EventFeedReader, Depends(get_event_feed_reader)]
 
 
 # ── Актор (RBAC) ──────────────────────────────────────────────────────────
@@ -285,6 +294,18 @@ def get_get_event(events: EventRepoDep) -> GetEvent:
 def get_list_events(events: EventRepoDep) -> ListEvents:
     """Use-case списка событий."""
     return ListEvents(events=events)
+
+
+def get_list_event_feed(feed: EventFeedReaderDep, clock: ClockDep) -> ListEventFeed:
+    """Use-case ленты для свайпа (главный экран — дизайн-спека §3).
+
+    Третье (после ``LockEventPredictions`` в :func:`get_lock_event_predictions`
+    и ``RecomputeRatings`` в :func:`get_recompute_ratings`) место, где
+    events-API читает соседний домен: read-model ленты сам читает таблицу
+    ``predictions`` напрямую (см. ``adapters/feed_reader.py``) ради одного
+    SQL-агрегата сводки толпы на страницу вместо N+1 запросов.
+    """
+    return ListEventFeed(feed=feed, clock=clock)
 
 
 def get_create_category(categories: CategoryRepoDep) -> CreateCategory:

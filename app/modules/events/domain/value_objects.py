@@ -7,14 +7,17 @@
 
 from __future__ import annotations
 
+import base64
 import re
 import secrets
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
 from app.modules.events.domain.errors import (
     InvalidEventDataError,
     InvalidEventWindowError,
+    InvalidFeedCursorError,
 )
 
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -94,6 +97,59 @@ def validate_slug(raw: str) -> str:
             "slug допускает только латиницу, цифры и дефис (kebab-case)"
         )
     return slug
+
+
+@dataclass(frozen=True, slots=True)
+class FeedCursor:
+    """Keyset-курсор страницы ленты: последняя выданная пара ``(closes_at, id)``.
+
+    Самодостаточен — не хранит смещение, поэтому вставки и закрытия событий
+    между запросами страниц не сбивают порядок (см. §6 дизайн-спеки ленты).
+    Непрозрачен снаружи: клиент лишь передаёт его обратно как есть.
+    """
+
+    closes_at: datetime
+    event_id: uuid.UUID
+
+    def encode(self) -> str:
+        """Base64url без паддинга от ``"<isoformat>|<uuid>"``."""
+        raw = f"{self.closes_at.isoformat()}|{self.event_id}"
+        token = base64.urlsafe_b64encode(raw.encode("utf-8"))
+        return token.decode("ascii").rstrip("=")
+
+    @classmethod
+    def decode(cls, raw: str) -> FeedCursor:
+        """Разбирает курсор; любой мусор — :class:`InvalidFeedCursorError`.
+
+        «Мусор» — это невалидный base64/UTF-8, не ровно две части при
+        разбиении по ``|``, наивная (без таймзоны) дата или нераспознаваемый
+        UUID. Курсор приходит от клиента непрозрачным, поэтому ошибка здесь
+        не должна протекать наружу как внутренний сбой (500).
+        """
+        padded = raw + "=" * (-len(raw) % 4)
+        try:
+            decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        except ValueError as exc:
+            raise InvalidFeedCursorError("Курсор страницы повреждён") from exc
+
+        parts = decoded.split("|")
+        if len(parts) != 2:
+            raise InvalidFeedCursorError("Курсор страницы повреждён")
+        closes_at_raw, event_id_raw = parts
+
+        try:
+            closes_at = datetime.fromisoformat(closes_at_raw)
+        except ValueError as exc:
+            raise InvalidFeedCursorError("Курсор страницы повреждён") from exc
+        if closes_at.tzinfo is None:
+            raise InvalidFeedCursorError("Курсор страницы повреждён")
+
+        try:
+            event_id = uuid.UUID(event_id_raw)
+        except ValueError as exc:
+            raise InvalidFeedCursorError("Курсор страницы повреждён") from exc
+
+        return cls(closes_at=closes_at, event_id=event_id)
 
 
 def require_text(raw: str, *, field: str, max_length: int = 10_000) -> str:

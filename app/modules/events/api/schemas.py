@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.events.application.dto import (
     CategoryPatchInput,
     EventPatchInput,
+    FeedPage,
     NewCategoryInput,
     NewEventInput,
 )
 from app.modules.events.domain.entities import Category, Event, EventStatus
+from app.modules.events.ports.feed import EventFeedItem, FeedCategoryRef, FeedCrowd
 
 
 class RejectEventRequest(BaseModel):
@@ -140,6 +143,68 @@ class EventResponse(BaseModel):
             dispute_window_ends_at=event.dispute_window_ends_at,
             created_at=event.created_at,
             updated_at=event.updated_at,
+        )
+
+
+class FeedCategoryResponse(BaseModel):
+    """Категория события в карточке ленты (дизайн-спека §3.1)."""
+
+    id: uuid.UUID
+    slug: str
+    title: str
+
+    @classmethod
+    def from_domain(cls, category: FeedCategoryRef) -> FeedCategoryResponse:
+        """Маппинг read-model категории в ответ."""
+        return cls(id=category.id, slug=category.slug, title=category.title)
+
+
+class FeedCrowdResponse(BaseModel):
+    """Сводка толпы в карточке ленты: те же поля, что у ``PredictionSummaryResponse``."""
+
+    total_count: int
+    distribution: dict[str, int]
+    mean_probability: Decimal | None
+
+    @classmethod
+    def from_domain(cls, crowd: FeedCrowd) -> FeedCrowdResponse:
+        """Маппинг read-model сводки толпы в ответ."""
+        return cls(
+            total_count=crowd.total_count,
+            distribution=dict(crowd.distribution),
+            mean_probability=crowd.mean_probability,
+        )
+
+
+class FeedItemResponse(EventResponse):
+    """Карточка ленты: все поля события + категория + сводка толпы."""
+
+    category: FeedCategoryResponse
+    crowd: FeedCrowdResponse
+
+    @classmethod
+    def from_feed_item(cls, item: EventFeedItem) -> FeedItemResponse:
+        """Переиспользует ``EventResponse.from_domain``, довешивая категорию и толпу."""
+        base = EventResponse.from_domain(item.event)
+        return cls(
+            **base.model_dump(),
+            category=FeedCategoryResponse.from_domain(item.category),
+            crowd=FeedCrowdResponse.from_domain(item.crowd),
+        )
+
+
+class FeedPageResponse(BaseModel):
+    """Страница ленты для свайпа: карточки + курсор следующей страницы."""
+
+    items: list[FeedItemResponse]
+    next_cursor: str | None
+
+    @classmethod
+    def from_page(cls, page: FeedPage) -> FeedPageResponse:
+        """Маппинг прикладной страницы ленты в ответ."""
+        return cls(
+            items=[FeedItemResponse.from_feed_item(i) for i in page.items],
+            next_cursor=page.next_cursor,
         )
 
 
