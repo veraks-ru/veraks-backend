@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from app.config import get_settings
 from app.modules.identity.adapters.id_token import pkce_code_challenge
@@ -188,8 +189,22 @@ class FakeEmailSender:
         raise AssertionError("В письме нет ссылки со ссылочным токеном")
 
     def last_token(self) -> str:
-        """Одноразовый токен из последнего письма."""
-        return self.last_link().split("token=", 1)[1]
+        """Одноразовый токен из последнего письма.
+
+        Ссылка может нести и другие параметры (``next``) — токен достаётся
+        разбором query-string (``urlsplit`` + ``parse_qs``), а не срезом по
+        ``"token="``: срез ловил бы «token=XXX&next=...» целиком, если после
+        токена в строке есть что-то ещё.
+        """
+        values = parse_qs(urlsplit(self.last_link()).query).get("token")
+        if not values:
+            raise AssertionError("В ссылке нет параметра token=")
+        return values[0]
+
+    def last_next(self) -> str | None:
+        """Значение ``next`` из ссылки последнего письма (None, если его не было)."""
+        values = parse_qs(urlsplit(self.last_link()).query).get("next")
+        return values[0] if values else None
 
 
 class InMemoryConsentRepository:

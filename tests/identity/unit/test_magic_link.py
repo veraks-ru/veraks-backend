@@ -26,6 +26,7 @@ from app.modules.identity.domain.magic_link import (
     MAX_LETTERS_PER_EMAIL,
     generate_magic_link_token,
     hash_magic_link_token,
+    safe_return_path,
 )
 from tests.identity.fakes import (
     FakeAuditTrail,
@@ -433,3 +434,53 @@ def test_register_with_email_has_no_state_identity() -> None:
     assert user.real_name_enc is None
     assert user.role is UserRole.USER
     assert user.onboarded_at is None
+
+
+# ── Безопасный путь возврата после входа (`next`) ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("/", "/"),
+        ("/events/abc?x=1", "/events/abc?x=1"),
+        ("https://evil.example", None),
+        ("//evil.example", None),
+        ("/\\evil", None),
+        ("javascript:alert(1)", None),
+        ("events", None),  # без ведущего слэша
+        ("/a b", None),  # пробел
+        (None, None),
+        ("", None),
+    ],
+)
+def test_safe_return_path_examples(raw: str | None, expected: str | None) -> None:
+    assert safe_return_path(raw) == expected
+
+
+def test_safe_return_path_allows_exactly_512_chars() -> None:
+    raw = "/" + "a" * 511
+    assert len(raw) == 512
+    assert safe_return_path(raw) == raw
+
+
+def test_safe_return_path_rejects_513_chars() -> None:
+    raw = "/" + "a" * 512
+    assert len(raw) == 513
+    assert safe_return_path(raw) is None
+
+
+def test_safe_return_path_rejects_control_character() -> None:
+    """Управляющий символ (не только пробел) тоже уводит в None."""
+    assert safe_return_path("/events\nabc") is None
+
+
+def test_safe_return_path_rejects_colon_in_first_segment_even_with_leading_slash() -> None:
+    """':' в первом сегменте похож на схему — небезопасно, даже если путь с '/'."""
+    assert safe_return_path("/evil:8080/x") is None
+
+
+def test_safe_return_path_allows_colon_after_first_segment() -> None:
+    """':' вне первого сегмента (например, в query) не запрещён."""
+    raw = "/events?x=http://evil.com"
+    assert safe_return_path(raw) == raw

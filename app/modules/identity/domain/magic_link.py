@@ -46,6 +46,35 @@ def hash_magic_link_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def safe_return_path(raw: str | None) -> str | None:
+    """Относительный путь внутри сайта или None.
+
+    Пропускает только строку, которая начинается с '/', но не с '//' и не с '/\\'
+    (браузер трактует их как абсолютный адрес), без схемы вида 'xxx:' в первом
+    сегменте, без пробелов и управляющих символов, длиной ≤ 512. Всё
+    остальное — None: ссылка не должна уводить с сайта.
+    """
+    if not raw or len(raw) > 512:
+        return None
+    if not raw.startswith("/") or raw.startswith(("//", "/\\")):
+        return None
+    if any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in raw):
+        return None
+
+    # Первый сегмент пути (до следующего '/', '?' или '#') не должен содержать
+    # ':' — иначе строка выглядит как 'схема:остальное' (RFC 3986 §4.2).
+    rest = raw[1:]
+    segment_end = len(rest)
+    for separator in ("/", "?", "#"):
+        idx = rest.find(separator)
+        if idx != -1:
+            segment_end = min(segment_end, idx)
+    if ":" in rest[:segment_end]:
+        return None
+
+    return raw
+
+
 def email_quota_key(email: str) -> str:
     """Ключ счётчика писем — sha256 адреса вместо самого адреса.
 

@@ -12,6 +12,7 @@ import secrets
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from app.modules.identity.application.dto import (
     AuthorizationRedirect,
@@ -43,6 +44,7 @@ from app.modules.identity.domain.magic_link import (
     email_quota_key,
     generate_magic_link_token,
     hash_magic_link_token,
+    safe_return_path,
 )
 from app.modules.identity.domain.policies import (
     ensure_account_can_authenticate,
@@ -280,11 +282,18 @@ class RequestEmailLogin:
         self._sender = sender
         self._link_base_url = link_base_url.rstrip("/")
 
-    async def execute(self, *, email: str) -> EmailMessage | None:
+    async def execute(
+        self, *, email: str, next_path: str | None = None
+    ) -> EmailMessage | None:
         """Учитывает лимит и выпускает ссылку; возвращает письмо к доставке.
 
         ``None`` — доставлять нечего (исчерпан лимит писем на адрес). Вызвать
         :meth:`deliver` для непустого результата — обязанность вызывающего.
+
+        ``next_path`` — куда вернуть после входа (см. ``safe_return_path``):
+        небезопасное значение молча отбрасывается, ссылка остаётся прежнего
+        вида (``...?token=...``). На самом токене ``next`` не хранится —
+        страница callback'а читает его из query-string своей же ссылки.
         """
         address = normalize_email(email)
         sent_in_window = await self._links.count_request(
@@ -305,9 +314,13 @@ class RequestEmailLogin:
         await self._links.save(
             hash_magic_link_token(token), address, MAGIC_LINK_TTL_SECONDS
         )
+        query = {"token": token}
+        safe_next = safe_return_path(next_path)
+        if safe_next is not None:
+            query["next"] = safe_next
         return build_magic_link_letter(
             to=address,
-            link=f"{self._link_base_url}/auth/email/callback?token={token}",
+            link=f"{self._link_base_url}/auth/email/callback?{urlencode(query)}",
             ttl_minutes=MAGIC_LINK_TTL_MINUTES,
         )
 

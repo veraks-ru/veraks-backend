@@ -279,8 +279,12 @@ async def request_email_login(
     В фон уходит только отправка письма — она не держит ни сессию БД, ни
     другие ресурсы запроса (``RequestEmailLogin`` работает с Redis и SMTP),
     поэтому переживает закрытие запроса без сюрпризов.
+
+    ``payload.next`` — куда вернуть после входа (гость хотел попасть в
+    ленту); небезопасное значение use-case молча отбрасывает
+    (``safe_return_path``), на ответе это никак не сказывается.
     """
-    letter = await uc.execute(email=str(payload.email))
+    letter = await uc.execute(email=str(payload.email), next_path=payload.next)
     if letter is not None:
         background.add_task(uc.deliver, letter)
     return Response(status_code=status.HTTP_202_ACCEPTED)

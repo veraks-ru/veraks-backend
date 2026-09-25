@@ -67,6 +67,11 @@ class EmailLoginRequest(BaseModel):
     """Тело ``POST /auth/email/request`` — запрос ссылки для входа."""
 
     email: EmailStr = Field(description="Адрес, на который отправить ссылку входа")
+    next: str | None = Field(
+        default=None,
+        max_length=512,
+        description="Куда вернуть после входа: относительный путь внутри сайта",
+    )
 
 
 class EmailCallbackRequest(BaseModel):

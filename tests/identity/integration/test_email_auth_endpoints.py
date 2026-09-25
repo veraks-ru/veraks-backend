@@ -229,6 +229,84 @@ def test_request_rejects_malformed_address(context) -> None:
     )
 
 
+# ── Возврат после входа (`next`) ─────────────────────────────────────────
+
+
+def test_request_with_next_embeds_it_in_the_link_and_callback_still_works(
+    context,
+) -> None:
+    """Безопасный `next` уходит в ссылку урл-кодированным; вход по ней не ломается."""
+    client, _, sender = context
+
+    resp = client.post(
+        "/auth/email/request",
+        json={"email": "user@example.com", "next": "/events/abc?x=1"},
+    )
+    assert resp.status_code == 202
+
+    link = sender.last_link()
+    assert "next=%2Fevents%2Fabc%3Fx%3D1" in link
+    assert sender.last_next() == "/events/abc?x=1"
+    # letters.py экранирует ссылку в HTML (`&` → `&amp;`), а в тексте письма
+    # остаётся как есть — оба варианта должны содержать параметр next.
+    letter = sender.sent[-1]
+    assert "&next=" in letter.text_body
+    assert "&amp;next=" in letter.html_body
+
+    callback = client.post(
+        "/auth/email/callback", json={"token": sender.last_token()}
+    )
+    assert callback.status_code == 201
+
+
+@pytest.mark.parametrize(
+    "unsafe_next",
+    [
+        "https://evil.example",
+        "//evil.example",
+        "/\\evil",
+        "javascript:alert(1)",
+        "events",
+        "/a b",
+    ],
+)
+def test_request_with_unsafe_next_omits_it_from_the_link(context, unsafe_next) -> None:
+    """Небезопасный `next` молча отбрасывается — ссылка без параметра, запрос 202."""
+    client, _, sender = context
+
+    resp = client.post(
+        "/auth/email/request",
+        json={"email": "user@example.com", "next": unsafe_next},
+    )
+
+    assert resp.status_code == 202
+    assert "next=" not in sender.last_link()
+    assert sender.last_next() is None
+
+
+def test_request_with_next_too_long_is_422(context) -> None:
+    client, _, _ = context
+
+    resp = client.post(
+        "/auth/email/request",
+        json={"email": "user@example.com", "next": "/" + "a" * 512},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_request_without_next_link_format_is_unchanged(context) -> None:
+    """Без `next` формат ссылки прежний: `...?token=<token>`, без `&`."""
+    client, _, sender = context
+
+    resp = client.post("/auth/email/request", json={"email": "user@example.com"})
+    assert resp.status_code == 202
+
+    link = sender.last_link()
+    assert link.endswith(f"/auth/email/callback?token={sender.last_token()}")
+    assert "&" not in link
+
+
 # ── Вход по ссылке ────────────────────────────────────────────────────────
 
 
