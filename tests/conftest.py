@@ -11,6 +11,19 @@ import os
 from cryptography.fernet import Fernet
 
 # ── Тестовое окружение (до импорта app.*) ─────────────────────────────────
+
+# Продуктовые настройки, которые тесты считают дефолтными (цены тарифов,
+# окно оспаривания). Локальный ``.env`` задаёт им другие значения, и если он
+# экспортирован в оболочку (``set -a && . ./.env`` — так запускают приложение),
+# девять интеграционных тестов падали бы на чужих числах. Тесты должны
+# проходить одинаково с экспортом и без него.
+for _key in (
+    "BILLING_MONTHLY_PRICE_KOPECKS",
+    "BILLING_ANNUAL_PRICE_KOPECKS",
+    "RESOLUTIONS_DISPUTE_WINDOW_HOURS",
+):
+    os.environ.pop(_key, None)
+
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 os.environ.setdefault("SECURITY_SNILS_HMAC_KEY", "test-snils-hmac-key-0123456789abcdef")
