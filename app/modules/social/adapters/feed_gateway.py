@@ -88,6 +88,10 @@ class SqlAlchemyFeedGateway:
             )
         ).all()
         for prediction, title, outcome, username, display_name in scored:
+            # Запрос отбирает только засчитанные прогнозы, но колонки nullable —
+            # сужаем явно, чтобы типизация это видела.
+            if prediction.scored_at is None or prediction.brier_score is None:
+                continue
             items.append(
                 FeedItem(
                     kind="score",
