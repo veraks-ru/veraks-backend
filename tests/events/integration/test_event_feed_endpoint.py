@@ -103,7 +103,7 @@ def test_feed_route_not_shadowed_by_event_ref(make_client) -> None:
     """Доказательство порядка роутов: `/events/feed` не улетает в GetEvent → 404."""
     client, _, _ = make_client()
     resp = client.get("/events/feed")
-    assert resp.status_code != 404
+    assert resp.status_code == 200
 
 
 @pytest.mark.parametrize("limit", [0, 51])
@@ -118,6 +118,22 @@ def test_garbage_cursor_is_400(make_client) -> None:
     resp = client.get("/events/feed", params={"cursor": "garbage"})
     assert resp.status_code == 400
     assert resp.json()["error"] == "InvalidFeedCursorError"
+
+
+def test_empty_cursor_is_treated_as_absent(make_client, category) -> None:
+    """Пустая строка в ``cursor`` — не мусор, а его отсутствие: та же первая страница."""
+    client, events, _ = make_client()
+    events.seed(
+        _open_event(
+            category.id,
+            opens_at=FIXED_NOW - timedelta(days=1),
+            closes_at=FIXED_NOW + timedelta(days=1),
+        )
+    )
+    resp_without_cursor = client.get("/events/feed")
+    resp_empty_cursor = client.get("/events/feed", params={"cursor": ""})
+    assert resp_empty_cursor.status_code == 200
+    assert resp_empty_cursor.json() == resp_without_cursor.json()
 
 
 def test_user_does_not_see_already_predicted_event(make_client, category) -> None:

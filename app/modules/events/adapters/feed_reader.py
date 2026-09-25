@@ -126,7 +126,9 @@ class SqlAlchemyEventFeedReader:
             event_id: dict.fromkeys(_ALL_GRADES, 0) for event_id in event_ids
         }
         for event_id, grade, count, total_probability in rows:
-            grade_value = grade.value if hasattr(grade, "value") else str(grade)
+            # ``confidence_grade`` — SAEnum с ``values_callable``: даже при
+            # колоночном select приходит член enum, а не сырая строка.
+            grade_value = grade.value
             n = int(count)
             distributions[event_id][grade_value] = n
             totals[event_id] += n

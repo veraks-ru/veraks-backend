@@ -288,6 +288,29 @@ async def test_next_cursor_none_when_fewer_than_limit(use_case, events, category
     assert page.next_cursor is None
 
 
+async def test_next_cursor_none_when_exactly_limit(use_case, events, category) -> None:
+    """Классический офф-бай-один: ровно ``limit`` подходящих событий — это ещё не «есть ещё».
+
+    Use-case запрашивает у ридера ``limit + 1``, чтобы отличить эту ситуацию
+    от «дальше есть что грузить»; здесь ридер отдаёт ровно ``limit`` строк, и
+    страница должна вернуть все их без намёка на следующую.
+    """
+    limit = 3
+    ids = [uuid.UUID(int=i) for i in range(1, limit + 1)]
+    for offset, event_id in enumerate(ids):
+        events.seed(
+            _event(
+                category.id,
+                opens_at=FIXED_NOW - timedelta(days=1),
+                closes_at=FIXED_NOW + timedelta(days=1, hours=offset),
+                event_id=event_id,
+            )
+        )
+    page = await use_case.execute(viewer=None, limit=limit, category_id=None, cursor=None)
+    assert [item.event.id for item in page.items] == ids
+    assert page.next_cursor is None
+
+
 async def test_second_page_continues_without_duplicates_on_tied_closes_at(
     use_case, events, category
 ) -> None:

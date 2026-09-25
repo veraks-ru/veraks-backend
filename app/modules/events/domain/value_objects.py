@@ -99,6 +99,11 @@ def validate_slug(raw: str) -> str:
     return slug
 
 
+# Единый текст ошибки для всех точек разбора в ``FeedCursor.decode`` — курсор
+# непрозрачен снаружи, клиенту всё равно, какая именно часть не разобралась.
+_BAD_CURSOR = "Курсор страницы повреждён"
+
+
 @dataclass(frozen=True, slots=True)
 class FeedCursor:
     """Keyset-курсор страницы ленты: последняя выданная пара ``(closes_at, id)``.
@@ -130,24 +135,24 @@ class FeedCursor:
         try:
             decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
         except ValueError as exc:
-            raise InvalidFeedCursorError("Курсор страницы повреждён") from exc
+            raise InvalidFeedCursorError(_BAD_CURSOR) from exc
 
         parts = decoded.split("|")
         if len(parts) != 2:
-            raise InvalidFeedCursorError("Курсор страницы повреждён")
+            raise InvalidFeedCursorError(_BAD_CURSOR)
         closes_at_raw, event_id_raw = parts
 
         try:
             closes_at = datetime.fromisoformat(closes_at_raw)
         except ValueError as exc:
-            raise InvalidFeedCursorError("Курсор страницы повреждён") from exc
+            raise InvalidFeedCursorError(_BAD_CURSOR) from exc
         if closes_at.tzinfo is None:
-            raise InvalidFeedCursorError("Курсор страницы повреждён")
+            raise InvalidFeedCursorError(_BAD_CURSOR)
 
         try:
             event_id = uuid.UUID(event_id_raw)
         except ValueError as exc:
-            raise InvalidFeedCursorError("Курсор страницы повреждён") from exc
+            raise InvalidFeedCursorError(_BAD_CURSOR) from exc
 
         return cls(closes_at=closes_at, event_id=event_id)
 

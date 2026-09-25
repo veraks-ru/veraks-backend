@@ -660,9 +660,11 @@ class ListEventFeed:
 
         Курсор декодируется здесь же: :class:`InvalidFeedCursorError` из
         :meth:`FeedCursor.decode` поднимается наружу и маппится в 400
-        централизованно в ``app/main.py``.
+        централизованно в ``app/main.py``. Пустая или состоящая из пробелов
+        строка — не мусор, а отсутствие курсора: как и ``cursor=None``, это
+        первая страница.
         """
-        after = FeedCursor.decode(cursor) if cursor is not None else None
+        after = FeedCursor.decode(cursor) if cursor is not None and cursor.strip() else None
         query = FeedQuery(
             now=self._clock.now(),
             limit=limit + 1,
