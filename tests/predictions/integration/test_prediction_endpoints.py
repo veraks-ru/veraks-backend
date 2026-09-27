@@ -28,6 +28,7 @@ from app.modules.predictions.api.dependencies import (
     get_clock,
     get_event_gateway,
     get_prediction_repository,
+    get_subscription_gate,
     get_user_directory,
 )
 from tests.identity.fakes import (
@@ -39,12 +40,13 @@ from tests.predictions.fakes import (
     FakeAuditRecorder,
     FakeClock,
     FakeEventGateway,
+    FakeSubscriptionGate,
     FakeUserDirectory,
     InMemoryPredictionRepository,
 )
 
 
-def _fake_user(*, onboarded: bool = True) -> User:
+def _fake_user(*, onboarded: bool = True, role: UserRole = UserRole.USER) -> User:
     """Минимальный аутентифицированный пользователь (роль user достаточно).
 
     По умолчанию — с пройденным онбордингом: ставить прогноз без акцепта
@@ -56,7 +58,7 @@ def _fake_user(*, onboarded: bool = True) -> User:
         username="predictor1",
         display_name="Предсказатель",
         real_name_enc=None,
-        role=UserRole.USER,
+        role=role,
         onboarded_at=FIXED_NOW if onboarded else None,
     )
 
@@ -75,10 +77,12 @@ def make_client(open_snapshot):
         authenticated: bool = True,
         gateway: FakeEventGateway | None = None,
         onboarded: bool = True,
+        subscribed: bool = True,
+        role: UserRole = UserRole.USER,
     ):
         repo = InMemoryPredictionRepository()
         event_gateway = gateway if gateway is not None else FakeEventGateway([open_snapshot])
-        user = _fake_user(onboarded=onboarded)
+        user = _fake_user(onboarded=onboarded, role=role)
         consents = (
             onboarded_consent_repository(user.id)
             if onboarded
@@ -90,6 +94,9 @@ def make_client(open_snapshot):
         app.dependency_overrides[get_event_gateway] = lambda: event_gateway
         app.dependency_overrides[get_clock] = lambda: FakeClock(FIXED_NOW)
         app.dependency_overrides[get_audit_recorder] = lambda: FakeAuditRecorder()
+        app.dependency_overrides[get_subscription_gate] = lambda: FakeSubscriptionGate(
+            active=subscribed
+        )
         app.dependency_overrides[get_user_directory] = lambda: FakeUserDirectory(
             {user.username: user.id}
         )
@@ -405,3 +412,36 @@ def test_default_clock_is_system_clock() -> None:
     from app.modules.predictions.adapters.clock import SystemClock
 
     assert isinstance(get_clock(), SystemClock)
+
+
+def await_none(repo, user_id, event_id) -> bool:
+    """Прогноза в фейковом репозитории нет (синхронно, репозиторий in-memory)."""
+    import asyncio
+
+    return asyncio.run(repo.get_for_user_event(user_id, event_id)) is None
+
+
+def test_put_prediction_without_access_402(make_client, open_snapshot):
+    """Обычный пользователь без подписки и приглашения получает 402, прогноз не записан."""
+    client, repo, _, user = make_client(subscribed=False)
+
+    resp = client.put(
+        f"/events/{open_snapshot.event_id}/prediction",
+        json={"confidence_grade": "definitely_yes"},
+    )
+
+    assert resp.status_code == 402, resp.text
+    assert resp.json()["error"] == "PredictionSubscriptionRequiredError"
+    assert await_none(repo, user.id, open_snapshot.event_id)
+
+
+def test_staff_puts_prediction_without_access(make_client, open_snapshot):
+    """Команда площадки (не user) голосует без подписки: гейт только для роли user."""
+    client, _, _, _ = make_client(subscribed=False, role=UserRole.ADMIN)
+
+    resp = client.put(
+        f"/events/{open_snapshot.event_id}/prediction",
+        json={"confidence_grade": "definitely_yes"},
+    )
+
+    assert resp.status_code == 200, resp.text

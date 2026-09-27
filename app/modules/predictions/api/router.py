@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.modules.identity.api.dependencies import CurrentUser, OnboardedUser
+from app.modules.identity.domain.entities import UserRole
 from app.modules.predictions.api.dependencies import (
     get_event_prediction_summary,
     get_event_top_predictions,
@@ -57,12 +58,15 @@ async def put_prediction(
     (дедлайн прошёл/событие не открыто) — доменная ошибка ``409``. Автор — не
     просто аутентифицированный, а прошедший онбординг пользователь
     (``OnboardedUser``): участие в конкурсе без акцепта оферты/ПДн запрещено
-    (PRD §7) — иначе ``403 ConsentRequiredError``.
+    (PRD §7) — иначе ``403 ConsentRequiredError``. Обычному пользователю нужна
+    активная подписка или доступ по приглашению — иначе ``402
+    PredictionSubscriptionRequiredError``; команда площадки голосует без гейта.
     """
     prediction = await uc.execute(
         user_id=current_user.id,
         event_id=event_id,
         grade=payload.confidence_grade,
+        requires_access=current_user.role is UserRole.USER,
     )
     return PredictionResponse.from_domain(prediction)
 

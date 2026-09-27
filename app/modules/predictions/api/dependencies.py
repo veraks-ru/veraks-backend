@@ -20,6 +20,9 @@ from app.modules.predictions.adapters.event_gateway import EventRepositoryGatewa
 from app.modules.predictions.adapters.repository import (
     SqlAlchemyPredictionRepository,
 )
+from app.modules.predictions.adapters.subscription_gate import (
+    SqlAlchemySubscriptionGate,
+)
 from app.modules.predictions.adapters.user_gateway import SqlAlchemyUserDirectory
 from app.modules.predictions.application.use_cases import (
     GetEventPredictionSummary,
@@ -34,6 +37,7 @@ from app.modules.predictions.ports.audit import AuditRecorder
 from app.modules.predictions.ports.clock import Clock
 from app.modules.predictions.ports.events import EventGateway
 from app.modules.predictions.ports.repositories import PredictionRepository
+from app.modules.predictions.ports.subscriptions import SubscriptionGate
 from app.modules.predictions.ports.users import UserDirectory
 from app.shared.audit.adapters.trail import SqlAlchemyAuditTrail
 
@@ -84,18 +88,28 @@ UserDirectoryDep = Annotated[UserDirectory, Depends(get_user_directory)]
 # ── Use-cases ─────────────────────────────────────────────────────────────
 
 
+def get_subscription_gate(session: SessionDep) -> SubscriptionGate:
+    """Право голосовать: активная подписка или доступ по приглашению (billing)."""
+    return SqlAlchemySubscriptionGate(session)
+
+
+SubscriptionGateDep = Annotated[SubscriptionGate, Depends(get_subscription_gate)]
+
+
 def get_place_prediction(
     predictions: PredictionRepoDep,
     events: EventGatewayDep,
     clock: ClockDep,
     audit: AuditDep,
+    subscriptions: SubscriptionGateDep,
 ) -> PlacePrediction:
-    """Use-case постановки/изменения прогноза (участие бесплатное — без гейта)."""
+    """Use-case постановки/изменения прогноза (гейт подписки/приглашения)."""
     return PlacePrediction(
         predictions=predictions,
         events=events,
         clock=clock,
         audit=audit,
+        subscriptions=subscriptions,
     )
 
 

@@ -26,6 +26,7 @@ from app.modules.predictions.domain.errors import (
     EventTopPredictionsUnavailableError,
     PredictionNotFoundError,
     PredictionsClosedError,
+    PredictionSubscriptionRequiredError,
     PredictionTargetEventNotFoundError,
     ProfileUserNotFoundError,
 )
@@ -34,6 +35,7 @@ from tests.predictions.fakes import (
     FakeAuditRecorder,
     FakeClock,
     FakeEventGateway,
+    FakeSubscriptionGate,
     FakeUserDirectory,
     InMemoryPredictionRepository,
 )
@@ -54,12 +56,13 @@ def audit() -> FakeAuditRecorder:
     return FakeAuditRecorder()
 
 
-def _place_uc(predictions, events, clock, audit) -> PlacePrediction:
+def _place_uc(predictions, events, clock, audit, *, active: bool = True) -> PlacePrediction:
     return PlacePrediction(
         predictions=predictions,
         events=events,
         clock=clock,
         audit=audit,
+        subscriptions=FakeSubscriptionGate(active=active),
     )
 
 
@@ -461,3 +464,49 @@ async def test_top_predictions_empty_when_nobody_scored(predictions, event_id) -
 
     entries = await _top_uc(predictions, events, users).execute(event_id=event_id)
     assert entries == []
+
+
+async def test_place_rejected_without_subscription_or_invite(
+    predictions, clock, audit, open_snapshot, user_id, event_id
+) -> None:
+    """Без активной подписки и приглашения прогноз не принимается (402)."""
+    events = FakeEventGateway([open_snapshot])
+    uc = _place_uc(predictions, events, clock, audit, active=False)
+
+    with pytest.raises(PredictionSubscriptionRequiredError):
+        await uc.execute(
+            user_id=user_id, event_id=event_id, grade=ConfidenceGrade.DEFINITELY_YES
+        )
+
+    assert await predictions.get_for_user_event(user_id, event_id) is None
+    assert audit.entries == []
+
+
+async def test_place_staff_bypasses_gate(
+    predictions, clock, audit, open_snapshot, user_id, event_id
+) -> None:
+    """Команда площадки (requires_access=False) голосует без подписки."""
+    events = FakeEventGateway([open_snapshot])
+    uc = _place_uc(predictions, events, clock, audit, active=False)
+
+    result = await uc.execute(
+        user_id=user_id,
+        event_id=event_id,
+        grade=ConfidenceGrade.DEFINITELY_YES,
+        requires_access=False,
+    )
+
+    assert result.probability == Decimal("0.90")
+
+
+async def test_gate_checked_after_event_checks(
+    predictions, clock, audit, closed_snapshot, user_id, event_id
+) -> None:
+    """Закрытое событие отвечает 409, а не счётом: гейт идёт после проверок события."""
+    events = FakeEventGateway([closed_snapshot])
+    uc = _place_uc(predictions, events, clock, audit, active=False)
+
+    with pytest.raises(PredictionsClosedError):
+        await uc.execute(
+            user_id=user_id, event_id=event_id, grade=ConfidenceGrade.DEFINITELY_YES
+        )
