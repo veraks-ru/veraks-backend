@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.events.adapters.orm import CategoryORM, EventORM
@@ -29,6 +29,7 @@ from app.modules.events.ports.feed import (
     FeedCategoryRef,
     FeedCrowd,
     FeedQuery,
+    FeedViewerAnswer,
 )
 from app.modules.predictions.adapters.orm import PredictionORM
 
@@ -52,8 +53,18 @@ class SqlAlchemyEventFeedReader:
 
     async def page(self, query: FeedQuery) -> list[EventFeedItem]:
         """Строит страницу карточек ленты (правила выборки — §3 спеки)."""
+        # Режим «мои ответы»: вместо анти-джойна — обычный JOIN с прогнозом
+        # зрителя, из него же берём его грейд и время последней правки.
+        mine = query.only_predicted_by is not None
+        answer_cols = (
+            [PredictionORM.confidence_grade, PredictionORM.updated_at]
+            if mine
+            else [literal(None), literal(None)]
+        )
         stmt = (
-            select(EventORM, CategoryORM.id, CategoryORM.slug, CategoryORM.title)
+            select(
+                EventORM, CategoryORM.id, CategoryORM.slug, CategoryORM.title, *answer_cols
+            )
             .join(CategoryORM, CategoryORM.id == EventORM.category_id)
             .where(
                 EventORM.status == EventStatus.OPEN,
@@ -63,6 +74,14 @@ class SqlAlchemyEventFeedReader:
         )
         if query.category_id is not None:
             stmt = stmt.where(EventORM.category_id == query.category_id)
+        if mine:
+            stmt = stmt.join(
+                PredictionORM,
+                and_(
+                    PredictionORM.event_id == EventORM.id,
+                    PredictionORM.user_id == query.only_predicted_by,
+                ),
+            )
         if query.exclude_predicted_by is not None:
             stmt = stmt.where(
                 ~select(PredictionORM.id)
@@ -99,8 +118,14 @@ class SqlAlchemyEventFeedReader:
                 event=event_orm.to_domain(),
                 category=FeedCategoryRef(id=cat_id, slug=cat_slug, title=cat_title),
                 crowd=crowd_by_event[event_orm.id],
+                viewer_answer=(
+                    # SAEnum с values_callable отдаёт член enum — берём значение.
+                    FeedViewerAnswer(confidence_grade=grade.value, updated_at=updated_at)
+                    if grade is not None
+                    else None
+                ),
             )
-            for event_orm, cat_id, cat_slug, cat_title in rows
+            for event_orm, cat_id, cat_slug, cat_title, grade, updated_at in rows
         ]
 
     async def _crowd_for(

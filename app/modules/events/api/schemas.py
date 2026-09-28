@@ -21,7 +21,12 @@ from app.modules.events.application.dto import (
     NewEventInput,
 )
 from app.modules.events.domain.entities import Category, Event, EventStatus
-from app.modules.events.ports.feed import EventFeedItem, FeedCategoryRef, FeedCrowd
+from app.modules.events.ports.feed import (
+    EventFeedItem,
+    FeedCategoryRef,
+    FeedCrowd,
+    FeedViewerAnswer,
+)
 
 
 class RejectEventRequest(BaseModel):
@@ -176,11 +181,28 @@ class FeedCrowdResponse(BaseModel):
         )
 
 
+class FeedViewerAnswerResponse(BaseModel):
+    """Ответ зрителя по событию (только в ленте «мои ответы», ``?answered=true``)."""
+
+    confidence_grade: str
+    updated_at: datetime
+
+    @classmethod
+    def from_domain(cls, answer: FeedViewerAnswer) -> FeedViewerAnswerResponse:
+        """Маппинг read-model ответа в ответ API."""
+        return cls(confidence_grade=answer.confidence_grade, updated_at=answer.updated_at)
+
+
 class FeedItemResponse(EventResponse):
-    """Карточка ленты: все поля события + категория + сводка толпы."""
+    """Карточка ленты: все поля события + категория + сводка толпы.
+
+    ``my_prediction`` — ответ самого зрителя; ``None`` в обычной ленте (там
+    таких событий нет по построению) и у гостя.
+    """
 
     category: FeedCategoryResponse
     crowd: FeedCrowdResponse
+    my_prediction: FeedViewerAnswerResponse | None = None
 
     @classmethod
     def from_feed_item(cls, item: EventFeedItem) -> FeedItemResponse:
@@ -190,6 +212,11 @@ class FeedItemResponse(EventResponse):
             **base.model_dump(),
             category=FeedCategoryResponse.from_domain(item.category),
             crowd=FeedCrowdResponse.from_domain(item.crowd),
+            my_prediction=(
+                FeedViewerAnswerResponse.from_domain(item.viewer_answer)
+                if item.viewer_answer is not None
+                else None
+            ),
         )
 
 

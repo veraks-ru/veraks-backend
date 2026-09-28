@@ -161,17 +161,27 @@ async def get_event_feed(
     category_id: uuid.UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
     cursor: Annotated[str | None, Query(max_length=128)] = None,
+    answered: Annotated[
+        bool,
+        Query(description="Режим «мои ответы»: только события с прогнозом зрителя, с его ответом"),
+    ] = False,
 ) -> FeedPageResponse:
     """Главный экран: карточки открытых событий для свайпа (дизайн-спека §3).
 
     Гость видит все события в окне приёма; у вошедшего исключены уже
-    предсказанные им. Объявлен ДО ``GET /events/{event_ref}`` намеренно: тот
+    предсказанные им. ``answered=true`` переворачивает правило: когда новые
+    карточки кончились, лента продолжается теми, где зритель уже высказался,
+    и в каждой лежит его ответ (``my_prediction``); гостю — пустая страница. Объявлен ДО ``GET /events/{event_ref}`` намеренно: тот
     принимает произвольную строку как публичный код события, и при обратном
     порядке маршрутов ``/events/feed`` перехватился бы им как
     ``event_ref="feed"`` (несуществующий код → 404) вместо ленты.
     """
     page = await uc.execute(
-        viewer=viewer, limit=limit, category_id=category_id, cursor=cursor
+        viewer=viewer,
+        limit=limit,
+        category_id=category_id,
+        cursor=cursor,
+        answered=answered,
     )
     return FeedPageResponse.from_page(page)
 

@@ -195,3 +195,56 @@ def test_empty_page_when_nothing_open(make_client) -> None:
     resp = client.get("/events/feed")
     assert resp.status_code == 200
     assert resp.json() == {"items": [], "next_cursor": None}
+
+
+def test_answered_mode_returns_my_prediction(make_client, category) -> None:
+    viewer = Actor(user_id=uuid.uuid4(), role=UserRole.USER)
+    client, events, predictions = make_client(viewer=viewer)
+    event = _open_event(
+        category.id,
+        opens_at=FIXED_NOW - timedelta(days=1),
+        closes_at=FIXED_NOW + timedelta(days=1),
+    )
+    events.seed(event)
+    predictions.seed(
+        Prediction.place(
+            user_id=viewer.user_id,
+            event_id=event.id,
+            grade=ConfidenceGrade.DEFINITELY_NO,
+            now=FIXED_NOW,
+        )
+    )
+    assert client.get("/events/feed").json()["items"] == []
+    resp = client.get("/events/feed", params={"answered": "true"})
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert [i["id"] for i in items] == [str(event.id)]
+    assert items[0]["my_prediction"]["confidence_grade"] == "definitely_no"
+    assert "updated_at" in items[0]["my_prediction"]
+
+
+def test_fresh_mode_my_prediction_is_null(make_client, category) -> None:
+    client, events, _ = make_client()
+    events.seed(
+        _open_event(
+            category.id,
+            opens_at=FIXED_NOW - timedelta(days=1),
+            closes_at=FIXED_NOW + timedelta(days=1),
+        )
+    )
+    item = client.get("/events/feed").json()["items"][0]
+    assert item["my_prediction"] is None
+
+
+def test_answered_mode_for_guest_is_empty(make_client, category) -> None:
+    client, events, _ = make_client()
+    events.seed(
+        _open_event(
+            category.id,
+            opens_at=FIXED_NOW - timedelta(days=1),
+            closes_at=FIXED_NOW + timedelta(days=1),
+        )
+    )
+    resp = client.get("/events/feed", params={"answered": "true"})
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [], "next_cursor": None}

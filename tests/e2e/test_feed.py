@@ -127,3 +127,49 @@ async def test_feed_excludes_event_not_yet_open(session: AsyncSession) -> None:
     reader = SqlAlchemyEventFeedReader(session)
     page = await reader.page(FeedQuery(now=OPENS_AT - timedelta(hours=1), limit=10))
     assert event.id not in {item.event.id for item in page}
+
+
+async def test_feed_answered_mode_joins_viewer_prediction(session: AsyncSession) -> None:
+    """Режим «мои ответы»: JOIN с прогнозом зрителя отдаёт только его события и сам грейд."""
+    category = await add_category(session)
+    user_a = await add_user(session, username="alice")
+    user_b = await add_user(session, username="bob")
+
+    answered = await add_open_event(
+        session, category_id=category.id, created_by=user_b.id, season_id=None
+    )
+    fresh = await add_open_event(
+        session, category_id=category.id, created_by=user_b.id, season_id=None
+    )
+
+    predictions = SqlAlchemyPredictionRepository(session)
+    await predictions.add(
+        Prediction.place(
+            user_id=user_a.id,
+            event_id=answered.id,
+            grade=ConfidenceGrade.DEFINITELY_NO,
+            now=OPENS_AT + timedelta(days=1),
+        )
+    )
+    await predictions.add(
+        Prediction.place(
+            user_id=user_b.id,
+            event_id=fresh.id,
+            grade=ConfidenceGrade.DEFINITELY_YES,
+            now=OPENS_AT + timedelta(days=1),
+        )
+    )
+    await session.commit()
+
+    reader = SqlAlchemyEventFeedReader(session)
+    now = OPENS_AT + timedelta(days=2)
+
+    mine = await reader.page(FeedQuery(now=now, limit=10, only_predicted_by=user_a.id))
+    assert [item.event.id for item in mine] == [answered.id]
+    assert mine[0].viewer_answer is not None
+    assert mine[0].viewer_answer.confidence_grade == "definitely_no"
+    assert mine[0].crowd.total_count == 1
+
+    fresh_page = await reader.page(FeedQuery(now=now, limit=10, exclude_predicted_by=user_a.id))
+    assert [item.event.id for item in fresh_page] == [fresh.id]
+    assert fresh_page[0].viewer_answer is None

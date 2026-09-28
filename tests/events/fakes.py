@@ -23,6 +23,7 @@ from app.modules.events.ports.feed import (
     FeedCategoryRef,
     FeedCrowd,
     FeedQuery,
+    FeedViewerAnswer,
 )
 from app.modules.events.ports.repositories import EventFilter
 from app.modules.predictions.domain.entities import ConfidenceGrade
@@ -219,6 +220,22 @@ class InMemoryEventFeedReader:
                     kept.append(event)
             candidates = kept
 
+        # Режим «мои ответы»: наоборот — только с прогнозом зрителя, и сам прогноз рядом.
+        answers: dict[uuid.UUID, FeedViewerAnswer] = {}
+        if query.only_predicted_by is not None:
+            kept = []
+            for event in candidates:
+                mine = await self._predictions.get_for_user_event(
+                    query.only_predicted_by, event.id
+                )
+                if mine is not None:
+                    kept.append(event)
+                    answers[event.id] = FeedViewerAnswer(
+                        confidence_grade=mine.confidence_grade.value,
+                        updated_at=mine.updated_at,
+                    )
+            candidates = kept
+
         candidates.sort(key=lambda e: (e.window.closes_at, e.id))
 
         if query.after is not None:
@@ -240,6 +257,7 @@ class InMemoryEventFeedReader:
                         id=category.id, slug=category.slug, title=category.title
                     ),
                     crowd=await self._crowd_for(event.id),
+                    viewer_answer=answers.get(event.id),
                 )
             )
         return items

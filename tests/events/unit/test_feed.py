@@ -336,3 +336,100 @@ async def test_second_page_continues_without_duplicates_on_tied_closes_at(
     )
     assert [item.event.id for item in second_page.items] == ids[2:]
     assert second_page.next_cursor is None
+
+
+# ── Режим «мои ответы» (answered) ───────────────────────────────────────
+
+
+async def test_answered_mode_returns_only_events_predicted_by_viewer(
+    use_case, events, predictions, category
+) -> None:
+    """Стопка кончилась — лента продолжается тем, где зритель уже высказался, с его ответом."""
+    viewer = Actor(user_id=uuid.uuid4(), role=UserRole.USER)
+    answered = _event(
+        category.id,
+        opens_at=FIXED_NOW - timedelta(days=1),
+        closes_at=FIXED_NOW + timedelta(days=1),
+    )
+    fresh = _event(
+        category.id,
+        opens_at=FIXED_NOW - timedelta(days=1),
+        closes_at=FIXED_NOW + timedelta(days=2),
+    )
+    events.seed(answered)
+    events.seed(fresh)
+    predictions.seed(
+        Prediction.place(
+            user_id=viewer.user_id,
+            event_id=answered.id,
+            grade=ConfidenceGrade.DEFINITELY_YES,
+            now=FIXED_NOW,
+        )
+    )
+    predictions.seed(
+        Prediction.place(
+            user_id=uuid.uuid4(),
+            event_id=fresh.id,
+            grade=ConfidenceGrade.PROBABLY_NO,
+            now=FIXED_NOW,
+        )
+    )
+    page = await use_case.execute(
+        viewer=viewer, limit=20, category_id=None, cursor=None, answered=True
+    )
+    assert [item.event.id for item in page.items] == [answered.id]
+    assert page.items[0].viewer_answer is not None
+    assert page.items[0].viewer_answer.confidence_grade == "definitely_yes"
+
+
+async def test_answered_mode_excludes_closed_events(
+    use_case, events, predictions, category
+) -> None:
+    """Только открытые: где ещё можно передумать. Закрытые живут в кабинете."""
+    viewer = Actor(user_id=uuid.uuid4(), role=UserRole.USER)
+    closed = _event(
+        category.id,
+        opens_at=FIXED_NOW - timedelta(days=2),
+        closes_at=FIXED_NOW - timedelta(hours=1),
+    )
+    events.seed(closed)
+    predictions.seed(
+        Prediction.place(
+            user_id=viewer.user_id,
+            event_id=closed.id,
+            grade=ConfidenceGrade.DEFINITELY_NO,
+            now=FIXED_NOW - timedelta(days=1),
+        )
+    )
+    page = await use_case.execute(
+        viewer=viewer, limit=20, category_id=None, cursor=None, answered=True
+    )
+    assert page.items == []
+
+
+async def test_answered_mode_for_guest_is_empty(use_case, events, category) -> None:
+    """У гостя ответов на сервере нет — пустая страница, а не вся лента."""
+    events.seed(
+        _event(
+            category.id,
+            opens_at=FIXED_NOW - timedelta(days=1),
+            closes_at=FIXED_NOW + timedelta(days=1),
+        )
+    )
+    page = await use_case.execute(
+        viewer=None, limit=20, category_id=None, cursor=None, answered=True
+    )
+    assert page.items == []
+    assert page.next_cursor is None
+
+
+async def test_fresh_mode_has_no_viewer_answer(use_case, events, category) -> None:
+    events.seed(
+        _event(
+            category.id,
+            opens_at=FIXED_NOW - timedelta(days=1),
+            closes_at=FIXED_NOW + timedelta(days=1),
+        )
+    )
+    page = await use_case.execute(viewer=None, limit=20, category_id=None, cursor=None)
+    assert page.items[0].viewer_answer is None

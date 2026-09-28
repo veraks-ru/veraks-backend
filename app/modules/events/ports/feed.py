@@ -44,12 +44,30 @@ class FeedCrowd:
 
 
 @dataclass(frozen=True, slots=True)
+class FeedViewerAnswer:
+    """Ответ самого зрителя по событию — только в режиме «мои ответы».
+
+    ``confidence_grade`` — строковое значение грейда (домен predictions сюда
+    не тянем, как и в :class:`FeedCrowd`).
+    """
+
+    confidence_grade: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class EventFeedItem:
-    """Одна карточка ленты: событие + его категория + сводка толпы."""
+    """Одна карточка ленты: событие + его категория + сводка толпы.
+
+    ``viewer_answer`` заполнен только в режиме «мои ответы»
+    (``FeedQuery.only_predicted_by``); в обычной ленте всегда ``None`` —
+    там по построению нет событий, где зритель уже высказался.
+    """
 
     event: Event
     category: FeedCategoryRef
     crowd: FeedCrowd
+    viewer_answer: FeedViewerAnswer | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +76,12 @@ class FeedQuery:
 
     ``exclude_predicted_by`` — id зрителя, чьи уже предсказанные события надо
     исключить анти-джойном; ``None`` у гостя — исключений нет.
+
+    ``only_predicted_by`` — обратный режим «мои ответы»: оставить ТОЛЬКО
+    события с прогнозом этого зрителя и приложить сам прогноз
+    (:attr:`EventFeedItem.viewer_answer`). Взаимоисключающе с
+    ``exclude_predicted_by``; окно приёма и порядок те же — лента просто
+    продолжается, когда новые карточки кончились.
     """
 
     now: datetime
@@ -65,6 +89,11 @@ class FeedQuery:
     category_id: uuid.UUID | None = None
     after: FeedCursor | None = None
     exclude_predicted_by: uuid.UUID | None = None
+    only_predicted_by: uuid.UUID | None = None
+
+    def __post_init__(self) -> None:
+        if self.exclude_predicted_by is not None and self.only_predicted_by is not None:
+            raise ValueError("exclude_predicted_by и only_predicted_by взаимоисключающи")
 
 
 @runtime_checkable

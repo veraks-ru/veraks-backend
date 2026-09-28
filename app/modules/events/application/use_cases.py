@@ -655,8 +655,14 @@ class ListEventFeed:
         limit: int,
         category_id: uuid.UUID | None,
         cursor: str | None,
+        answered: bool = False,
     ) -> FeedPage:
         """Запрашивает ``limit + 1``, чтобы узнать о следующей странице, и режет.
+
+        ``answered=True`` — режим «мои ответы»: вместо событий без прогноза
+        зрителя отдаются те, где он уже высказался, с его ответом в карточке.
+        Гостю в этом режиме отдаётся пустая страница — его ответы живут
+        только на его устройстве, серверу они неизвестны.
 
         Курсор декодируется здесь же: :class:`InvalidFeedCursorError` из
         :meth:`FeedCursor.decode` поднимается наружу и маппится в 400
@@ -665,12 +671,16 @@ class ListEventFeed:
         первая страница.
         """
         after = FeedCursor.decode(cursor) if cursor is not None and cursor.strip() else None
+        if answered and viewer is None:
+            return FeedPage(items=[], next_cursor=None)
+        viewer_id = viewer.user_id if viewer is not None else None
         query = FeedQuery(
             now=self._clock.now(),
             limit=limit + 1,
             category_id=category_id,
             after=after,
-            exclude_predicted_by=viewer.user_id if viewer is not None else None,
+            exclude_predicted_by=None if answered else viewer_id,
+            only_predicted_by=viewer_id if answered else None,
         )
         fetched = await self._feed.page(query)
 
